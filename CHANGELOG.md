@@ -112,6 +112,24 @@ Dates are UTC.
   record, which stays `/mcp disable`'s job.
 
 ### Fixed
+- **An MCP server's own error reaches you, on both transports** (gh #336). Per
+  JSON-RPC 2.0 a server that cannot parse the request id — or hits any
+  transport-level failure — answers with `"id": null`. The SSE selector was taught
+  that in an earlier cycle, but the **stdio** selector still classified such an
+  error as "an id that is not ours" and reported `answered without an id … the
+  stream is desynchronized`: LCA's guess, and a false one, with the server's
+  `"error"` payload dropped. That is where the issue was originally filed from.
+  Both selectors now classify a null-id error as a protocol-level answer and
+  surface the server's `message` and `code` verbatim, inside LCA's own context
+  rather than rewritten. Notifications (no `id` key) are still skipped, a foreign
+  id is still a desync, an error for *our* id is still an attributed answer, and a
+  reply we can attribute still wins over an unattributable error in the same
+  envelope. Side by side on the same mock server:
+
+  ```
+  before: MCP server answered without an id (wanted id 2); the stream is desynchronized
+  after:  MCP server errored: {"code":-32700,"message":"Parse error: could not read request id"}
+  ```
 - **A synchronous extension call no longer spawns a thread** (gh #286).
   `WasmExtension::blocking` ran `std::thread::spawn(..).join()` on every call, so
   each `render`/`on_event` — one per TUI frame — and each stream delta created and

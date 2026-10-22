@@ -43,6 +43,9 @@ pub fn select_response(
     messages: &[serde_json::Value],
     id: u64,
 ) -> Result<serde_json::Value, String> {
+    // gh #336: remembered rather than returned, so a reply we can attribute wins
+    // over an error we cannot.
+    let mut unattributed: Option<String> = None;
     for message in messages {
         match classify(message, id) {
             Classified::Notification => continue,
@@ -54,22 +57,22 @@ pub fn select_response(
                 let _ = other;
                 continue;
             }
+            // A null-id error is a *fallback* answer, not a competitor: if our
+            // own reply is in the same envelope, that reply is the answer and the
+            // unattributable error is somebody else's noise. Scanning for it
+            // after the loop (what the first #336 fix did) is what keeps this
+            // precedence; taking it inline would let a server's parse-error
+            // chatter shadow the result we actually asked for.
+            Classified::UnattributedError(error) => unattributed = Some(error),
             Classified::Answer(Reply::Result(result)) => return Ok(result),
             Classified::Answer(Reply::Error(error)) => return Err(error),
         }
     }
-    // gh #336: a JSON-RPC error carrying `"id": null` is the server's
-    // answer to *the* request it could not associate with an id -
-    // exactly this one, since the envelope holds only our round. Without
-    // this scan the server's own explanation ("Parse error", "Internal
-    // error", overloaded) was dropped and the call read as a vanished
-    // response, which is the least actionable thing to report.
-    if let Some(error) = messages
-        .iter()
-        .find(|message| message.get("id").is_some_and(serde_json::Value::is_null))
-        .and_then(|message| message.get("error"))
-    {
-        return Err(format!("MCP server errored: {error}"));
+    // gh #336: a null-id error *is* the answer when nothing attributable is in
+    // the envelope. It is the server telling us why it refused, and "answered
+    // without our response" would be a guess where the server had spoken.
+    if let Some(error) = unattributed {
+        return Err(error);
     }
     Err(format!(
         "MCP server answered without our response (id {id})"
@@ -89,6 +92,10 @@ enum Classified {
     Notification,
     /// An `id` that is not ours (or no usable `id` at all).
     Foreign(Option<u64>),
+    /// A JSON-RPC error carrying `"id": null`: the server's answer to a request
+    /// it could not identify (gh #336). Already formatted the way the host
+    /// reports it, with the server's own payload inside.
+    UnattributedError(String),
     /// Our reply.
     Answer(Reply),
 }
@@ -113,6 +120,25 @@ pub enum Reply {
 fn classify(message: &serde_json::Value, id: u64) -> Classified {
     if is_notification(message) {
         return Classified::Notification;
+    }
+    // gh #336: a JSON-RPC error the server could not attach to an id.
+    //
+    // Per JSON-RPC 2.0 a server that cannot parse the request id - or any
+    // transport-level failure (parse error, internal error, overloaded) -
+    // answers with `"id": null`. That is a *protocol-level answer to our
+    // request*, not a missing reply and not somebody else's: the server is
+    // telling us why it refused, and dropping it leaves the caller with LCA's
+    // guess instead of the server's diagnosis.
+    //
+    // It is also **unattributable**, which is why it is its own variant rather
+    // than folded into `Foreign`: the callers must fail the *current* wait with
+    // this text, never retry, and never match it to a different pending call.
+    // A message with a `method` and no `id` returned above as a Notification, so
+    // this arm only sees error/interstitial messages.
+    if message.get("id").is_some_and(serde_json::Value::is_null)
+        && let Some(error) = message.get("error")
+    {
+        return Classified::UnattributedError(format!("MCP server errored: {error}"));
     }
     let found = message.get("id").and_then(|found| found.as_u64());
     if found != Some(id) {
@@ -169,6 +195,10 @@ pub fn response_for(
                     ),
                 });
             }
+            // gh #336 on the stdio path: the server told us why it refused. Fail
+            // *this* wait with its words, rather than the desync text below,
+            // which would be a claim about the stream that is not true.
+            Classified::UnattributedError(error) => return Err(error),
             Classified::Answer(answer) => return Ok(answer),
         }
     }
@@ -288,5 +318,176 @@ mod tests {
         assert!(base64_decode("aGk").is_err());
         assert!(base64_decode("aGk*").is_err());
         assert!(base64_decode("====").is_err());
+    }
+}
+
+#[cfg(test)]
+mod null_id_error_tests {
+    //! gh #336 on **both** selectors, plus the neighbours the fix could swallow.
+    //!
+    //! The first #336 fix (`ba7f7fce`, Phase C) only taught the SSE selector,
+    //! `select_response`. The stdio selector, `response_for`, kept classifying a
+    //! null-id error as "an id that is not ours" and reported
+    //! `MCP server answered without an id ... the stream is desynchronized` -
+    //! a claim about the stream that was simply false, with the server's
+    //! `"message"` dropped on the floor. The stdio path is where the issue was
+    //! originally filed from, so the gap mattered more than the part that was
+    //! fixed.
+    //!
+    //! These rows drive `response_for` with a scripted line source, so they test
+    //! the semantics without a pipe.
+
+    use super::*;
+
+    /// A `response_for` line source over a fixed script.
+    fn lines(script: &[&str]) -> impl FnMut() -> Result<Option<String>, String> {
+        let mut index = 0;
+        let owned: Vec<String> = script.iter().map(|line| (*line).to_string()).collect();
+        move || {
+            if index < owned.len() {
+                index += 1;
+                Ok(Some(owned[index - 1].clone()))
+            } else {
+                Ok(None)
+            }
+        }
+    }
+
+    fn null_error() -> &'static str {
+        r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error"}}"#
+    }
+
+    // Verifies: gh #336 - the stdio path surfaces the server's own error instead
+    // of inventing a desync. This is the row that would have caught the gap the
+    // first fix left.
+    #[test]
+    fn the_stdio_path_surfaces_a_null_id_error_verbatim() {
+        let error = response_for(4, lines(&[null_error()])).expect_err("not our reply");
+        assert!(
+            error.contains("Parse error"),
+            "the server's message crosses intact: {error}"
+        );
+        assert!(error.contains("-32700"), "and so does its code: {error}");
+        assert!(
+            !error.contains("without an id"),
+            "the desync text must not be used for a server that answered: {error}"
+        );
+        assert!(
+            !error.contains("desynchronized"),
+            "and it must not claim the stream is broken when the server explained \
+             itself: {error}"
+        );
+    }
+
+    // Verifies: gh #336 design point 4 - the payload is verbatim, not
+    // reinterpreted (#159's precedent). A long, odd message and an unusual code
+    // both survive byte-for-byte inside LCA's context.
+    #[test]
+    fn the_error_payload_crosses_verbatim() {
+        let long = "a".repeat(600);
+        let script = format!(
+            r#"{{"jsonrpc":"2.0","id":null,"error":{{"code":-32099,"message":"{}"}}}}"#,
+            long
+        );
+        let error =
+            response_for(1, lines(&[script.as_str()])).expect_err("the error is the answer");
+        assert!(error.contains(&long), "a 600-byte message is not truncated");
+        assert!(error.contains("-32099"), "an unusual code is preserved");
+        // The server's JSON is not re-encoded or re-worded: the object arrives as
+        // it was sent.
+        assert!(
+            error.contains(r#""code":-32099"#) && error.contains(r#""message":"aaa"#),
+            "the payload is the server's own JSON, not a re-serialization: {error}"
+        );
+    }
+
+    // Verifies: gh #336 design point 3 - a notification is still not an error.
+    //
+    // The path `bug-ext-mcp-stdio-round-trip-desyncs-on-notifications` was about:
+    // a server interleaving a `method`-bearing message with no `id` must be
+    // skipped and the wait continued, not classified as an answer.
+    #[test]
+    fn a_notification_is_still_skipped() {
+        let reply = response_for(
+            7,
+            lines(&[
+                r#"{"jsonrpc":"2.0","method":"notifications/message","params":{}}"#,
+                r#"{"jsonrpc":"2.0","id":7,"result":{"ok":true}}"#,
+            ]),
+        )
+        .expect("the notification is skipped and our reply wins");
+        assert_eq!(reply, Reply::Result(serde_json::json!({"ok": true})));
+    }
+
+    // Verifies: gh #336 design point 3 - a response for a *different* id is still
+    // a desync on the stdio path, and still says so.
+    //
+    // A null-id error got its own variant; a foreign numeric id did not, and must
+    // not: one is the server answering us, the other is the server answering
+    // someone else while we wait. Collapsing them would hide a genuine desync.
+    #[test]
+    fn a_foreign_id_is_still_a_desync() {
+        let error = response_for(4, lines(&[r#"{"jsonrpc":"2.0","id":99,"result":{}}"#]))
+            .expect_err("a foreign id is desync");
+        assert!(
+            error.contains("another call") && error.contains("99"),
+            "it names the ids: {error}"
+        );
+        assert!(
+            !error.contains("errored"),
+            "and does not pretend it was an error payload: {error}"
+        );
+    }
+
+    // Verifies: gh #336 - a null-id error does not consume a *later* good reply,
+    // and our own reply in the same envelope still wins on the SSE selector.
+    //
+    // This is the precedence the first fix got right and my first attempt at the
+    // shared variant broke: taking the unattributed error inline let it shadow a
+    // result in the same envelope.
+    #[test]
+    fn our_own_reply_wins_over_a_null_id_error() {
+        let envelope = parse_sse_messages(
+            "data: {\"id\":null,\"error\":{\"code\":-32603,\"message\":\"Internal error\"}}\n\n\
+             data: {\"id\":5,\"result\":{\"ok\":true}}\n\n",
+        );
+        assert_eq!(
+            select_response(&envelope, 5).expect("our result wins"),
+            serde_json::json!({"ok": true})
+        );
+    }
+
+    // Verifies: gh #336 - the normal success path is untouched.
+    #[test]
+    fn the_success_path_is_unchanged() {
+        let reply = response_for(3, lines(&[r#"{"jsonrpc":"2.0","id":3,"result":{"v":1}}"#]))
+            .expect("a result");
+        assert_eq!(reply, Reply::Result(serde_json::json!({"v": 1})));
+        let envelope = parse_sse_messages("data: {\"id\":3,\"result\":{\"v\":1}}\n\n");
+        assert_eq!(
+            select_response(&envelope, 3).expect("a result"),
+            serde_json::json!({"v": 1})
+        );
+    }
+
+    // Verifies: gh #336 - an *error for our own id* is still its own answer, and
+    // is not confused with the unattributable kind. The two carry different text
+    // shapes and both must keep working (gh #291 draws this line).
+    #[test]
+    fn an_error_for_our_id_is_still_attributed() {
+        let reply = response_for(
+            2,
+            lines(&[
+                r#"{"jsonrpc":"2.0","id":2,"error":{"code":-32601,"message":"no such method"}}"#,
+            ]),
+        )
+        .expect("our error is an answer, not a transport failure");
+        match reply {
+            Reply::Error(text) => {
+                assert!(text.contains("no such method"), "{text}");
+                assert!(text.contains("-32601"), "{text}");
+            }
+            other => panic!("expected an attributed error, got {other:?}"),
+        }
     }
 }
