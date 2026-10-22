@@ -32,12 +32,13 @@
 pub mod cli;
 pub mod config;
 pub mod manager;
+mod manager_signin;
 pub mod native;
 pub mod oauth;
 pub mod remote;
 pub mod resources;
 pub mod wire;
-pub use manager::McpManager;
+pub use manager::{McpManager, ModalServerDetail, ModalServerRow, ModalSnapshot, ModalToolRow};
 pub use native::{McpBridge, ServerStateKind, ServerStatus, manifest_grants};
 pub use oauth::{refresh, sign_in, via_copy};
 pub use remote::TokenStore;

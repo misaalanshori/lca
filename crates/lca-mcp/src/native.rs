@@ -905,6 +905,21 @@ impl McpBridge {
             .collect()
     }
 
+    /// One server's tools, in the order it listed them, with each tool's
+    /// **effective** exposure (gh #418 Phase G's inspector).
+    ///
+    /// Empty for an unknown or unconnected server, which is the honest answer:
+    /// a server with no live session has no tools to show, and inventing a row
+    /// from its configured exposure would tell a user something untrue.
+    pub fn server_tools(&self, server: &str) -> Vec<lca_protocol::ToolSpec> {
+        self.locked()
+            .iter()
+            .find(|row| row.entry.name == server)
+            .and_then(|row| row.live.as_ref())
+            .map(|live| live.specs().to_vec())
+            .unwrap_or_default()
+    }
+
     /// Every bridged tool, sorted (the registry's stable order):
     /// server tools plus the resource trio when a connected server
     /// offers resources, at the widest such server's exposure.

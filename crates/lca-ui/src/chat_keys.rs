@@ -23,6 +23,7 @@ impl Chat {
             || self.scoped_models_picker.is_some()
             || self.extension_hub.is_some()
             || self.extension_manager.is_some()
+            || self.mcp_manager.is_some()
             || self.install_consent.is_some()
             // Gh #165: the settings selector is a keyboard-owning
             // overlay like the rest (it draws through the same
@@ -603,6 +604,10 @@ impl Chat {
         }
 
         if let Some(action) = self.handle_extension_manager_key(data, key) {
+            return Some(action);
+        }
+
+        if let Some(action) = self.handle_mcp_manager_key(data, key) {
             return Some(action);
         }
 

@@ -219,6 +219,8 @@ pub struct Chat {
     pub extension_hub: Option<crate::chat_hub::ExtensionHub>,
     /// The open `/ext` manager, when it owns the keyboard (gh #3).
     pub extension_manager: Option<crate::chat_extman::ExtensionManager>,
+    /// The open `/mcp` manager, when it owns the keyboard (gh #418 Phase G).
+    pub mcp_manager: Option<crate::chat_mcp::McpManager>,
     /// A pending install-consent step (#227): the hub stays behind it.
     pub install_consent: Option<crate::chat_hub::InstallConsent>,
     /// The open `/grants` view, when any (S8).
@@ -383,6 +385,7 @@ impl Chat {
             model_picker: None,
             extension_hub: None,
             extension_manager: None,
+            mcp_manager: None,
             install_consent: None,
             grants_picker: None,
             tree_picker: None,

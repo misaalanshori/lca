@@ -538,6 +538,44 @@ impl Ui {
                 let mcp = self.mcp.clone();
                 Some(Arc::new(move || current_manager(&mcp).poll()) as lca_ui::McpPoll)
             },
+            // Gh #418 Phase G: the `/mcp` modal reads data rows and notices,
+            // never widgets - `lca-mcp` composes no display (ADR-0047), so the
+            // conversion to the UI's own types happens here, in the host.
+            mcp_list: {
+                let mcp = self.mcp.clone();
+                let warnings = self.mcp_warnings.clone();
+                Some(Arc::new(move || {
+                    let snapshot = current_manager(&mcp).modal_rows(&warnings);
+                    lca_ui::McpSnapshot {
+                        rows: snapshot.rows.into_iter().map(to_ui_row).collect(),
+                        warnings: snapshot.warnings,
+                    }
+                }) as lca_ui::McpList)
+            },
+            mcp_detail: {
+                let mcp = self.mcp.clone();
+                Some(Arc::new(move |server: &str| {
+                    current_manager(&mcp).modal_detail(server).map(to_ui_detail)
+                }) as lca_ui::McpDetail)
+            },
+            mcp_begin_sign_in: {
+                let mcp = self.mcp.clone();
+                Some(Arc::new(move |server: &str| {
+                    current_manager(&mcp).begin_interactive_sign_in(server)
+                }) as lca_ui::McpBeginSignIn)
+            },
+            mcp_submit_redirect: {
+                let mcp = self.mcp.clone();
+                Some(Arc::new(move |server: &str, redirect: &str| {
+                    current_manager(&mcp).submit_redirect(server, redirect)
+                }) as lca_ui::McpSubmitRedirect)
+            },
+            mcp_cancel_sign_in: {
+                let mcp = self.mcp.clone();
+                Some(Arc::new(move |server: &str| {
+                    current_manager(&mcp).cancel_sign_in(server);
+                }) as lca_ui::McpCancelSignIn)
+            },
             // gh #3: the `/ext` manager reads local state (registry +
             // grant store + config), so every hook is synchronous.
             // Built beside the row assembly; assigned here.
@@ -1082,4 +1120,50 @@ fn offered_levels_prefer_config_then_extras_then_all() {
         "advertised empty means no reasoning"
     );
     assert_eq!(offered_levels(None, None).len(), 7, "unknown offers all");
+}
+
+/// One manager row as the modal's own type (gh #418 Phase G).
+///
+/// The conversion lives in the host, not in `lca-mcp` and not in `lca-ui`: the
+/// subsystem answers with data (ADR-0047 forbids it rendering), and the interface
+/// cannot name the subsystem's types (the architecture test forbids that edge).
+/// The host is the only crate that may know both.
+fn to_ui_row(row: lca_mcp::ModalServerRow) -> lca_ui::McpServerRow {
+    lca_ui::McpServerRow {
+        scope: row.scope.to_string(),
+        name: row.name,
+        state: row.state,
+        detail: row.detail,
+        effective_exposure: row.effective_exposure,
+        project_override: row.project_override,
+    }
+}
+
+/// One server's detail as the modal's own type.
+fn to_ui_detail(detail: lca_mcp::ModalServerDetail) -> lca_ui::McpServerDetail {
+    lca_ui::McpServerDetail {
+        tools: detail
+            .tools
+            .into_iter()
+            .map(|tool| lca_ui::McpToolRow {
+                name: tool.name,
+                exposure: tool.exposure,
+                description: tool.description,
+            })
+            .collect(),
+        name: detail.name,
+        state: detail.state,
+        detail: detail.detail,
+        target: detail.target,
+        source_path: detail.source_path,
+        override_path: detail.override_path,
+        effective_exposure: detail.effective_exposure,
+        configured_exposure: detail.configured_exposure,
+        enabled: detail.enabled,
+        project_override: detail.project_override,
+        project_toggle_available: detail.project_toggle_available,
+        needs_sign_in: detail.needs_sign_in,
+        has_oauth: detail.has_oauth,
+        stderr_tail: detail.stderr_tail,
+    }
 }

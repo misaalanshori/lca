@@ -260,6 +260,11 @@ pub(crate) struct Ui {
     /// The MCP session manager (gh #53): files, bridge, and actions.
     /// The cell swaps on `/reload`; the bridge rebuilds in place.
     mcp: Arc<Mutex<Arc<lca_mcp::manager::McpManager>>>,
+    /// The MCP load warnings, kept for the `/mcp` modal (gh #418 Phase G): a
+    /// config error explains a server that is missing from the list, and the
+    /// modal shows them above the rows. The startup head showed them once; a
+    /// user opening `/mcp` later still needs them.
+    mcp_warnings: Arc<Vec<String>>,
 }
 
 /// Enter the interactive interface for `cwd`, optionally resuming `resume`.
@@ -732,8 +737,8 @@ impl Ui {
         );
         // gh #53: MCP load warnings ride the startup head with the
         // rest (invalid entries never block the valid ones).
-        for warning in mcp_warnings {
-            initial_head.push(warning);
+        for warning in &mcp_warnings {
+            initial_head.push(warning.clone());
         }
         // gh #67: the run's tool selection, warned into the startup head.
         for warning in crate::invoke::apply_tool_selection(&registry, flags) {
@@ -990,6 +995,7 @@ impl Ui {
             login_wait_since: Arc::new(Mutex::new(None)),
             login_cancelled: Arc::new(Mutex::new(false)),
             mcp: Arc::new(Mutex::new(mcp_manager)),
+            mcp_warnings: Arc::new(mcp_warnings),
         })
     }
 }
