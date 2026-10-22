@@ -513,9 +513,10 @@ impl Chat {
         // centered, its right edge stopping before the scrollbar, and
         // naming the key that returns to the live bottom.
         if from_bottom > 0 && window > 0 {
+            // Gh #410: the live manager, so a rebind reaches the jump pill.
             let label = format!(
                 " ↓ Jump to latest message · {} ",
-                lca_tui::engine::keybindings::key_text("tui.altScreen.bottom")
+                self.keybindings.display_keys("tui.altScreen.bottom")
             );
             let avail = (width as usize).saturating_sub(u16::from(geometry.is_some()) as usize);
             let label = truncate_to_width(&label, avail, "", false);

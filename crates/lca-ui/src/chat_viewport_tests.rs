@@ -179,7 +179,10 @@ fn the_jump_indicator_shows_while_scrolled_and_names_its_key() {
         text.contains("Jump to latest message"),
         "the indicator appears while scrolled up:\n{text}"
     );
-    let key = lca_tui::engine::keybindings::key_text("tui.altScreen.bottom");
+    // gh #410: this row pins the **default** key, so it names the default
+    // explicitly rather than through a helper that no longer exists.
+    let key = lca_tui::engine::keybindings::KeybindingsManager::new()
+        .display_keys("tui.altScreen.bottom");
     assert!(text.contains(&key), "and names the key {key}: {text}");
 }
 

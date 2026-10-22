@@ -752,6 +752,11 @@ mod description_matches_code;
 #[path = "261-deny-rule-actually-matches.rs"]
 mod deny_rule_actually_matches;
 
+// Gh #410: a key hint resolves from the live keybinding manager, so a rebind
+// reaches every label - and the lying `key_text` free function is gone for good.
+#[path = "410-key-hints-resolve-live.rs"]
+mod key_hints_resolve_live;
+
 // Gh #447: the real-terminal harness's readiness primitives exist in one place,
 // the class they close is routed through them, and their negative behaviour (a
 // pane that never settles must fail, not hang) is still pinned.
