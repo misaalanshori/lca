@@ -722,3 +722,13 @@ mod type_while_loading;
 // probed background (not copied from it), and COLORFGBG 7/8 classifies like pi.
 #[path = "387-system-panels-and-scheme.rs"]
 mod system_panels_and_scheme;
+// GitHub #449: two `conformance_diff` rows compiled the WASM fixture more than
+// once, so they sat at ~1.6x nextest's default cap and timed out on a loaded
+// runner. The measurement put the cost in `wasmtime::component::Component::new`
+// (~6 s a compile in a test build), on a fresh *or* reused engine alike, and
+// nextest forks a process per row - so the only reducible part was the
+// redundant loads inside the two rows, and sharing them removed the need for
+// any budget raise at all. The guard pins the compile count per row (a
+// structural property, not a stopwatch, which would re-create the fragility).
+#[path = "449-conformance-rows-compile-once.rs"]
+mod conformance_rows_compile_once;
