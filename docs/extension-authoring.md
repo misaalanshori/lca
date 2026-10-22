@@ -248,6 +248,10 @@ failures all arrive as error results.
 > third-party service. The `tool-catalog` world exports no `net`, `oauth`, or
 > `credentials`, which is why every transport past stdio had to be native and
 > why the extension boundary eventually had to go.
+>
+> If you want to **use** MCP rather than understand why it stopped being an
+> extension, the guide is [`docs/mcp.md`](mcp.md): `mcp.json`, both transports,
+> OAuth, exposures, the `/mcp` manager, and the `lca mcp` verbs.
 
 The shape, as it was built: spawn the server through `process`, speak
 newline-delimited JSON-RPC over its pipes (`initialize`, the

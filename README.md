@@ -397,6 +397,7 @@ document and the index for everything else. From there:
 | [`docs/adr/`](docs/adr/README.md) | 42 decision records, 0001–0043 (0020 unused): why, what was rejected, when to revisit |
 | [`docs/capabilities.md`](docs/capabilities.md) | every capability an extension can hold, normatively |
 | [`docs/extension-authoring.md`](docs/extension-authoring.md) | writing and publishing an extension |
+| [`docs/mcp.md`](docs/mcp.md) | MCP servers: `mcp.json`, stdio and HTTP transports, OAuth, tool exposures, the `/mcp` manager |
 | [`docs/installation.md`](docs/installation.md) | the installers, manual install, security stance |
 | [`docs/testing-plan.md`](docs/testing-plan.md) | how this is built test-first, and how CI runs it |
 | [`docs/platform-notes.md`](docs/platform-notes.md) | the easy-to-get-wrong behavior per OS |

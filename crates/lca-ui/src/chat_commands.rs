@@ -112,19 +112,17 @@ impl Chat {
             // addition, not a replacement - `/mcp login echo` and friends are
             // the scriptable form and must keep answering with a notice, which
             // is what `mcp_verbs_route_through_the_hooks` still pins.
-            // Bare `/mcp` opens the modal. No match guard here on purpose: the
-            // `/help` guard reads arms textually, and a guard's own string
-            // literal would be read as a command name. `/mcp list` is handled
-            // by the same arm below, which is where a verb's answer already
-            // belongs.
+            //
+            // No match guard on the arm: the `/help` guard reads arms textually,
+            // and a guard's own string literal would be read as a command name.
+            // `/mcp list` is handled inside the verb arm below.
             "mcp" if argument.trim().is_empty() => {
                 return self.open_mcp_manager();
             }
             "mcp" => {
                 // `/mcp list` is the same screen as bare `/mcp`: a user who
-                // reached for a verb name gets the manager rather than a
-                // "unknown verb" refusal, and the direct verbs below keep their
-                // own route untouched.
+                // reached for a verb name gets the manager rather than an
+                // "unknown verb" refusal, and the direct verbs keep their route.
                 if argument.trim() == "list" {
                     return self.open_mcp_manager();
                 }
@@ -978,9 +976,7 @@ pub(crate) fn command_help(command: &str) -> &'static str {
         "/trust" => "trust the project folder (auto-approve in-workspace commands)",
         "/permissions" => "manage allow/deny rules (session, project, global)",
         "/grants" => "review this project's grants and rules",
-        "/mcp" => {
-            "manage MCP servers: open the manager, or run a verb (login, reconnect, enable, exposure)"
-        }
+        "/mcp" => "manage MCP servers: open the manager, or run a verb (login, reconnect, enable, exposure)",
         "/settings" => "show the merged configuration and where each value came from",
         "/session" => "show this session's tokens, cache, and cost",
         _ => "",

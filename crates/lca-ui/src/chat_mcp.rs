@@ -326,7 +326,7 @@ pub fn detail_actions(detail: &McpServerDetail) -> Vec<McpActionRow> {
     actions
 }
 
-/// The stderr tail, bounded to [`STDERR_VIEW_ROWS`] rows and unwrapped.
+/// The stderr tail, bounded to `STDERR_VIEW_ROWS` rows and unwrapped.
 ///
 /// The manager joins a traceback to one line (` | `-separated) so a status row
 /// stays one row. Here it is split back out, because a traceback the user cannot
