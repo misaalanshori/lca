@@ -34,6 +34,16 @@ pub struct Manifest {
     pub net_local: Vec<lca_permissions::LocalPattern>,
     /// The loopback OAuth flow settings, when declared.
     pub oauth: Option<OAuthSettings>,
+    /// The `env` capability (gh #170): exact host-variable names this
+    /// extension may read, forwarded into its `WasiCtx` at instantiation.
+    ///
+    /// Exact names only - a wildcard is refused at parse, because the names
+    /// are the whole consent gate (the same reasoning `net`'s bare `*` got).
+    /// `env_declared` keeps "declared with no names" distinguishable from
+    /// "never declared", mirroring `net_declared` (gh #302).
+    pub env: Vec<String>,
+    /// The `env` capability was declared at all.
+    pub env_declared: bool,
     /// The credential namespace, when declared; must equal `name`
     /// (FR-PERM-6, no cross-namespace read at any level, FR-PERM-7).
     pub credentials: bool,
@@ -201,6 +211,8 @@ impl Manifest {
         let mut parsed_net_local: Vec<lca_permissions::LocalPattern> = Vec::new();
         let mut net_declared = false;
         let mut parsed_oauth: Option<OAuthSettings> = None;
+        let mut parsed_env: Vec<String> = Vec::new();
+        let mut env_declared = false;
         let mut parsed_credentials = false;
         let mut parsed_completion = false;
         let mut tools = false;
@@ -212,7 +224,7 @@ impl Manifest {
             for key in table.keys() {
                 match key.as_str() {
                     "fs" | "process" | "pty" | "net" | "net-local" | "oauth" | "credentials"
-                    | "completion" | "ui" | "tools" => {}
+                    | "completion" | "ui" | "tools" | "env" => {}
                     other => {
                         return Err(LoadError::InvalidManifest(format!(
                             "unknown capability `{other}`"
@@ -242,6 +254,41 @@ impl Manifest {
                     return Err(LoadError::InvalidManifest(
                         "`capabilities.fs` must grant at least one scope".into(),
                     ));
+                }
+            }
+            // Gh #170: the `env` grant. Exact names only; `keys = []` is a
+            // declaration that grants nothing (the gh #302 precedent).
+            env_declared = table.contains_key("env");
+            if let Some(cap) = table.get("env") {
+                let keys = cap.get("keys").and_then(|v| v.as_array()).ok_or_else(|| {
+                    LoadError::InvalidManifest("`capabilities.env.keys` must be a list".into())
+                })?;
+                for key in keys {
+                    let key = key
+                        .as_str()
+                        .ok_or_else(|| LoadError::InvalidManifest("env keys are strings".into()))?;
+                    let key = key.trim();
+                    if key.is_empty() {
+                        return Err(LoadError::InvalidManifest(
+                            "an env key must not be empty".into(),
+                        ));
+                    }
+                    // A wildcard makes the consent screen say nothing: the
+                    // names ARE the gate. Same rejection `net`'s bare `*` got.
+                    if key.contains('*') || key.contains('?') {
+                        return Err(LoadError::InvalidManifest(format!(
+                            "env key `{key}` uses a wildcard; exact names only, because \
+                             the names are what the user approves"
+                        )));
+                    }
+                    // `NAME=value` in a grant would be a value nobody approved.
+                    if key.contains('=') {
+                        return Err(LoadError::InvalidManifest(format!(
+                            "env key `{key}` carries a value; a grant names variables, \
+                             never their contents"
+                        )));
+                    }
+                    parsed_env.push(key.to_string());
                 }
             }
             if let Some(cap) = table.get("process") {
@@ -413,6 +460,8 @@ impl Manifest {
             net_declared,
             net: parsed_net,
             net_local: parsed_net_local,
+            env: parsed_env,
+            env_declared,
             oauth: parsed_oauth,
             credentials: parsed_credentials,
             completion: parsed_completion,

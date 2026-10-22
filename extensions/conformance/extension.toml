@@ -24,6 +24,15 @@ hosts = ["conformance.example.com"]
 redirect_path = "/callback"
 timeout_seconds = 30
 
+# Gh #170: the `env` grant. Two names so the probe can compare all three
+# answers: granted-and-set (`LCA_CONFORMANCE_ENV`), declared-but-unset
+# (`LCA_CONFORMANCE_UNSET`, which must read absent rather than empty), and
+# undeclared (`LCA_CONFORMANCE_UNDECLARED`, which the host may have set and the
+# component must still not see).
+[capabilities.env]
+keys = ["LCA_CONFORMANCE_ENV", "LCA_CONFORMANCE_UNSET"]
+reason = "Reads the probe variables that demonstrate the environment grant."
+
 [capabilities.credentials]
 namespace = "conformance"
 

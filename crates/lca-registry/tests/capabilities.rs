@@ -99,3 +99,34 @@ reason = "Chains a second opinion."
         "Chains a second opinion. This lets it list, activate, and call other tools in the session."
     );
 }
+
+// Verifies: gh #170 - the `env` consent line names every key, because an
+// environment variable is often a secret and the list is the whole gate. A line
+// that said "read some variables" would be a consent screen that says nothing,
+// the same reasoning that refuses a wildcard grant.
+#[test]
+fn the_env_consent_line_names_every_key() {
+    let manifest = "name = \"p\"\nversion = \"1.0.0\"\nabi = \"0.6\"\nworlds = [\"tool\"]\ndescription = \"x\"\n\n[capabilities.env]\nkeys = [\"ZEBRA_KEY\", \"ALPHA_KEY\"]\nreason = \"Reads the keys its documentation names.\"\n";
+    let lines = lca_registry::consent_lines(manifest).expect("a consent line exists");
+    let env_line = lines
+        .iter()
+        .find(|line| line.contains("environment"))
+        .expect("the env capability has a line");
+    for key in ["ZEBRA_KEY", "ALPHA_KEY"] {
+        assert!(
+            env_line.contains(key),
+            "the consent line must name `{key}`, since the names are what the user \
+             is approving: {env_line}"
+        );
+    }
+    // An empty grant is a declaration that grants nothing (the gh #302
+    // `hosts = []` precedent), and must not claim otherwise.
+    let empty = "name = \"p\"\nversion = \"1.0.0\"\nabi = \"0.6\"\nworlds = [\"tool\"]\ndescription = \"x\"\n\n[capabilities.env]\nkeys = []\nreason = \"Nothing yet.\"\n";
+    let lines = lca_registry::consent_lines(empty).expect("parses");
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("environment") && line.contains("none")),
+        "an empty declaration grants nothing and says so: {lines:?}"
+    );
+}

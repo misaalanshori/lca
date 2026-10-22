@@ -111,6 +111,37 @@ An extension holding `net-local` is granted a private-use CIDR range broader tha
 
 Not fully stopped. `net-local`'s consent text says plainly that the grant reaches other devices on the network, not just the user's own machine, but a range grant is inherently coarser than the one device the user actually intended. This is a residual risk, noted below, and the design accepts it in the same spirit that `process` accepts the risk of an overly broad pre-approved shell pattern: consent clarity is the primary defense, not enforcement narrower than what the user actually asked to grant.
 
+### An extension reads environment variables it was not granted
+
+An extension asks for a variable the user never approved — an API key for a
+different service, a token in the shell environment, `AWS_SECRET_ACCESS_KEY` left
+over from another project — and sends it somewhere.
+
+Stopped by the grant, at context construction. A sandboxed component is given a
+`WasiCtx` containing exactly the names its manifest declared and the user
+approved, so `std::env::var` answers `NotPresent` for everything else. There is
+no capability call to reach around: `wasi:cli/environment` reads the context, and
+the context was built from the grant (ADR-0048).
+
+Wildcards are refused at manifest validation, because a grant that names no
+variable is not a consent screen — the same reasoning that rejects a bare `*`
+under `net`. The ambient environment is never forwarded, not even `PATH`: that
+would be an information leak and a behavioural difference between the two
+delivery modes.
+
+Not stopped, and named rather than implied: **a native-linked extension reads the
+process environment directly**, with no host gate, because it has no `WasiCtx` to
+forward into. So "compiled-in" is a way to read a variable the sandbox refuses,
+and the host cannot see the read. The declared list is the contract, and the
+conformance probe applies it in both modes only because that package chooses to;
+an arbitrary native extension is on its honour. This is inherent to running
+extension code in-process, and it is the reason the WASM path is the sandboxed
+one.
+
+Not stopped either: an extension reading a variable it *was* granted and sending
+it somewhere the user also approved. That is `credentials`' residual in a
+different variable, and the `net` allow list is the boundary that bounds it.
+
 ### One extension reads another's tokens
 
 Stopped by namespace isolation. A credential namespace must equal the extension name, enforced at manifest validation. There is no cross-namespace read at any level, and the `fs` capability cannot reach the credential store because the store lives in the agent's own state directory, which the host excludes from every `fs` resolution.
