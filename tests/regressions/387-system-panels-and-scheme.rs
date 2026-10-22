@@ -155,3 +155,91 @@ fn both_reports_shapes_are_handled() {
         "a literal `default` is rejected rather than read as 0"
     );
 }
+
+// Verifies: gh #387 gap 4 - the thinking border is a *ramp*, and its ordering
+// is a property of the code rather than an accident of seven literals.
+//
+// A row that pinned the seven hex values would pass while the ramp is
+// perceptually wrong, which is the trap this gap is about; so the guard checks
+// the mechanism that makes the ordering hold:
+//
+//  - the seven levels are authored in OKLCH (`RAMPS` of hue+chroma plus a
+//    per-scheme lightness ladder), not as seven hex strings;
+//  - both `dark()` and `light()` fill their thinking roles *from* the ladder
+//    (`apply_thinking`), so neither palette can quietly keep a stale table;
+//  - the `system` palette re-derives from the probed background;
+//  - `max` is not pi's error hue, which is the one place the ramp departs from
+//    pi's table on purpose.
+//
+// The ordering maths itself lives in `theme::thinking`'s own rows; this is the
+// NFR-24 guard that the wiring which produces it stays in place.
+#[test]
+fn the_thinking_border_is_a_ramp() {
+    let module = read("crates/lca-ui/src/theme/thinking.rs");
+    // Authored in OKLCH: seven `(hue, chroma)` pairs, not seven `#rrggbb`.
+    assert!(
+        module.contains("const RAMPS: [(f64, f64); 7]"),
+        "the ramp is seven (hue, chroma) pairs in OKLCH - a literal hex table \
+         is the defect this gap filed"
+    );
+    assert!(
+        module.contains("const DARK_LIGHTNESS: [f64; 7]")
+            && module.contains("const LIGHT_LIGHTNESS: [f64; 7]"),
+        "each scheme owns a lightness ladder, so the light ramp steps down"
+    );
+    // The light scheme's chroma is a separate ladder: light surfaces sit at the
+    // top of the gamut where less chroma is available, and reusing the dark
+    // ladder clips every bright level.
+    assert!(
+        module.contains("const LIGHT_CHROMA: [f64; 7]"),
+        "the light scheme's chroma is fitted to the gamut, not copied"
+    );
+    // The far end is flame, not the error hue.
+    assert!(
+        module.contains("(45.00, 0.185)"),
+        "`max` ends at flame 45 degrees: pi's 20-degree `thinkingRed` is the \
+         error red's own hue, so a border and an error would look identical"
+    );
+    // No leftover hex table for the thinking roles.
+    assert!(
+        !module.contains("\"#b294bb\"") && !module.contains("\"#ff5fff\""),
+        "the hand-picked thinking hex table is gone from the ramp"
+    );
+
+    // Both named palettes fill from the ladder.
+    let palette = read("crates/lca-ui/src/theme/palette.rs");
+    let dark_calls = palette.matches("apply_thinking(None,").count();
+    assert_eq!(
+        dark_calls, 2,
+        "`dark()` and `light()` each fill their thinking roles from the ramp \
+         (found {dark_calls} calls)"
+    );
+    assert!(
+        palette.contains("apply_thinking(background, scheme)"),
+        "the `system` palette re-derives the ramp from the probed background"
+    );
+    // No `(Role::Thinking*, "#...")` pair survives. Matched as a pair rather
+    // than as a bare hex: `#81a2be` is *also* the dark markdown-link colour, and
+    // a substring scan for it would fail on a file that is entirely correct.
+    for role in [
+        "ThinkingOff",
+        "ThinkingMinimal",
+        "ThinkingLow",
+        "ThinkingMedium",
+        "ThinkingHigh",
+        "ThinkingXhigh",
+        "ThinkingMax",
+    ] {
+        assert!(
+            !palette.contains(&format!("(Role::{role}, \"#")),
+            "{role} still has a hand-picked hex value in `palette.rs`"
+        );
+    }
+
+    // The border resolves the level through its role, so the ramp is painted.
+    let separator = read("crates/lca-ui/src/separator.rs");
+    assert!(
+        separator.contains("Some(\"max\") => Role::ThinkingMax"),
+        "the separator maps every level to its own role"
+    );
+}

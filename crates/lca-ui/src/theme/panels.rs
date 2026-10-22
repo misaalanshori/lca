@@ -84,13 +84,12 @@ pub(crate) struct PanelFamily {
 
 /// OKLab lightness of a colour (0 = black, 1 = white).
 ///
+/// Public because the thinking ramp steps away from the same measurement, and
+/// testing it separately would let the two drift.
+///
 /// OKLab rather than HSL luminance: the step has to be *perceptually* even, or
 /// a panel on a dark background would be a barely-visible nudge and the same
 /// step on a light one a stark box.
-// Reached only from tests (`panels_tests`, and `run_tests`'s OSC 11 row): the
-// derivation itself uses the full OKLab triple, and a production caller would
-// want the run to publish it rather than a private helper.
-#[cfg(test)]
 pub(crate) fn oklab_lightness(color: RgbColor) -> f64 {
     let (l, _, _) = rgb_to_oklab(color);
     l
@@ -117,6 +116,29 @@ fn rgb_to_oklab(color: RgbColor) -> (f64, f64, f64) {
         1.977_998_5 * l_ - 2.428_592_2 * m_ + 0.450_593_7 * s_,
         0.025_904_037 * l_ + 0.782_771_77 * m_ - 0.808_675_77 * s_,
     )
+}
+
+/// `RgbColor` lightness, the form `thinking::levels` takes its background in.
+pub(crate) fn oklab_lightness_of(color: RgbColor) -> f64 {
+    oklab_lightness(color)
+}
+
+/// Build a colour from OKLCH (lightness, chroma, hue in degrees).
+///
+/// The thinking ramp authors its ladder in OKLCH — that is the space its
+/// ordering is *defined* in — so the conversion lives here beside the
+/// OKLab↔sRGB pair rather than being written twice.
+pub(crate) fn from_oklch(lightness: f64, chroma: f64, hue: f64) -> RgbColor {
+    let radians = hue.to_radians();
+    oklab_to_rgb(lightness, chroma * radians.cos(), chroma * radians.sin())
+}
+
+/// Measure a colour's OKLCH, for the ordering rows and the report.
+pub(crate) fn oklch_of(color: RgbColor) -> (f64, f64, f64) {
+    let (l, a, b) = rgb_to_oklab(color);
+    let chroma = a.hypot(b);
+    let hue = b.atan2(a).to_degrees().rem_euclid(360.0);
+    (l, chroma, hue)
 }
 
 /// OKLab → sRGB, clamped into gamut. The inverse of [`rgb_to_oklab`].
