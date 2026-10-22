@@ -12,8 +12,19 @@ use lca_ui::{ShellEvent, ShellHandle, UiHooks};
 /// directory exists and holds at least one entry, so there is
 /// something for the trust prompt to gate. Empty or absent costs a
 /// stat, never a prompt.
-fn project_extensions_wait(cwd: &std::path::Path) -> bool {
-    std::fs::read_dir(cwd.join(".lca").join("extensions"))
+///
+/// gh #463: from `$HOME`, `cwd/.lca/extensions` **is** `~/.lca/extensions`,
+/// where installed extensions live. Counting those as "waiting" offered a
+/// "Trust this project folder?" prompt for the user's own data home - the same
+/// root confusion as the false `skipping project extension` warning, reached
+/// through a second path. A directory that is the data home has nothing
+/// project-local in it, so it does not wait.
+fn project_extensions_wait(cwd: &std::path::Path, data_dir: &std::path::Path) -> bool {
+    let dir = cwd.join(".lca").join("extensions");
+    if crate::project_ext::same_directory(&dir, &data_dir.join("extensions")) {
+        return false;
+    }
+    std::fs::read_dir(dir)
         .map(|entries| entries.take(1).any(|entry| entry.is_ok()))
         .unwrap_or(false)
 }
@@ -445,9 +456,16 @@ impl Ui {
                         .lock()
                         .unwrap_or_else(|p| p.into_inner())
                         .is_trusted_here(&cwd);
+                    // gh #463: the same `cwd == data_dir` check the extension
+                    // scan makes, because a project config file is also the
+                    // user's own when the project root is the data home.
+                    let data_dir = crate::data_dir();
+                    let project_config_is_the_user_file =
+                        crate::project_ext::same_directory(&cwd.join(".lca"), &data_dir);
                     !trusted
+                        && !project_config_is_the_user_file
                         && (cwd.join(".lca").join("config.toml").is_file()
-                            || project_extensions_wait(&cwd))
+                            || project_extensions_wait(&cwd, &data_dir))
                 }))
             },
             stage_bug: {

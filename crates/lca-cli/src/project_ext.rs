@@ -15,16 +15,49 @@ struct ProjectExtension {
     wasm: Vec<u8>,
 }
 
+/// Whether two paths name the same directory, resolving symlinks and casing.
+///
+/// `symlink_metadata` first: a path that does not exist is not the same as one
+/// that does, and calling `canonicalize` on a missing path would fall back to a
+/// lexical compare - which is exactly the string comparison that has twice
+/// passed here and failed elsewhere (gh #436, gh #389). Comparing the parent plus
+/// the final component keeps the deleted-directory case honest.
+pub(crate) fn same_directory(left: &std::path::Path, right: &std::path::Path) -> bool {
+    match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        // Either path is absent, so they cannot be the same existing directory;
+        // a lexical spelling of an absent path proves nothing either way.
+        _ => false,
+    }
+}
+
 /// Scan `<project>/.lca/extensions/` for project-local extensions (gh
 /// #138): each subdirectory with an `extension.toml` and a
 /// `component.wasm` is one candidate. Returns the valid ones plus one
 /// warning per skipped directory (a broken repo file warns, never
 /// loads). No trust check here: the loader gates on trust, so the
 /// scan stays a pure, testable directory read.
-fn scan_project_extensions(cwd: &std::path::Path) -> (Vec<ProjectExtension>, Vec<String>) {
+fn scan_project_extensions(
+    cwd: &std::path::Path,
+    data_dir: &std::path::Path,
+) -> (Vec<ProjectExtension>, Vec<String>) {
     let mut found = Vec::new();
     let mut warnings = Vec::new();
     let dir = cwd.join(".lca").join("extensions");
+    // gh #463: when the project root *is* the data home, this directory is
+    // `~/.lca/extensions` - where installed extensions live. They hold
+    // `sha256-<digest>.wasm`, never `component.wasm`, so every one of them
+    // produced "skipping project extension `x`: no component.wasm" and then
+    // loaded anyway. Wrong twice, and the blame landed on the user.
+    //
+    // There is nothing project-local to find in that case, so the scan does not
+    // run. Compared canonically: a `$HOME` that is a symlink, macOS's
+    // `/var` -> `/private/var`, and Windows's `\\?\` verbatim prefix all make a
+    // string comparison agree on one platform and not another (the #436 and
+    // #389 lesson).
+    if same_directory(&dir, &data_dir.join("extensions")) {
+        return (found, warnings);
+    }
     let entries = match std::fs::read_dir(&dir) {
         Ok(entries) => entries,
         Err(_) => return (found, warnings),
@@ -73,12 +106,13 @@ fn scan_project_extensions(cwd: &std::path::Path) -> (Vec<ProjectExtension>, Vec
 pub fn load_project_local(
     registry: &mut lca_core::ExtensionRegistry,
     cwd: &std::path::Path,
+    data_dir: &std::path::Path,
     log_limit_bytes: usize,
     prompt: lca_permissions::SharedPrompt,
     dialogs: lca_permissions::SharedDialogs,
     grants: &std::sync::Arc<std::sync::Mutex<lca_permissions::GrantStore>>,
 ) {
-    let (found, warnings) = scan_project_extensions(cwd);
+    let (found, warnings) = scan_project_extensions(cwd, data_dir);
     if found.is_empty() && warnings.is_empty() {
         return;
     }
@@ -159,7 +193,7 @@ mod tests {
         )
         .expect("manifest");
 
-        let (found, warnings) = super::scan_project_extensions(&project);
+        let (found, warnings) = super::scan_project_extensions(&project, &root.join("data"));
         assert_eq!(found.len(), 1, "only the valid dir: {found:?}");
         assert_eq!(found[0].name, "good-tool");
         assert_eq!(found[0].wasm, b"wasm-bytes");
@@ -167,6 +201,110 @@ mod tests {
             warnings.len(),
             2,
             "bad manifest + missing component warn: {warnings:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // Verifies: gh #463 - **the defect.** Launching from the data home made the
+    // project-extension scan read `~/.lca/extensions`, which is where installed
+    // extensions live. They hold `sha256-<digest>.wasm`, not `component.wasm`, so
+    // every one produced
+    //
+    //   warning: skipping project extension `antigravity`: no component.wasm
+    //
+    // - wrong twice: not a project extension, and not skipped (it loaded right
+    // after). The scan must not run at all when the two directories are the same.
+    #[test]
+    fn no_project_scan_when_cwd_is_the_data_home() {
+        let root = lca_testkit::scratch_path("lca-gh463-home-cwd");
+        let _ = std::fs::remove_dir_all(&root);
+        let data = root.join(".lca");
+        // The shape an installed extension really has: a digest-named component.
+        let installed = data.join("extensions").join("antigravity");
+        std::fs::create_dir_all(&installed).expect("mkdir");
+        std::fs::write(
+            installed.join("extension.toml"),
+            "name = \"antigravity\"\nversion = \"1.0.0\"\nabi = \"0.6\"\nworlds = [\"tool\"]\n",
+        )
+        .expect("manifest");
+        std::fs::write(
+            installed.join(
+                "sha256-a6bfef821d98f57e474f538e534f385f17ae658890cb795701672230353203a4.wasm",
+            ),
+            b"wasm-bytes",
+        )
+        .expect("component");
+
+        // cwd == the data home: nothing project-local exists to find.
+        let (found, warnings) = super::scan_project_extensions(&root, &data);
+        assert!(found.is_empty(), "nothing is loaded twice: {found:?}");
+        assert!(
+            warnings.is_empty(),
+            "a scan of the data home must say nothing, not something false: {warnings:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // Verifies: gh #463 design point 3 - **the diagnostic survives.** A real
+    // project directory whose `.lca/extensions/<name>/` lacks its component still
+    // warns, so this fix cannot quietly disable the warning it is about.
+    #[test]
+    fn a_real_broken_project_extension_still_warns() {
+        let root = lca_testkit::scratch_path("lca-gh463-real-broken");
+        let _ = std::fs::remove_dir_all(&root);
+        let data = root.join("data");
+        std::fs::create_dir_all(&data).expect("mkdir");
+        let project = root.join("project");
+        let broken = project.join(".lca").join("extensions").join("foo");
+        std::fs::create_dir_all(&broken).expect("mkdir");
+        std::fs::write(
+            broken.join("extension.toml"),
+            "name = \"foo\"\nversion = \"1.0.0\"\nabi = \"0.6\"\nworlds = [\"tool\"]\n",
+        )
+        .expect("manifest");
+        // No component.wasm: the genuine broken case.
+        let (found, warnings) = super::scan_project_extensions(&project, &data);
+        assert!(found.is_empty());
+        assert_eq!(warnings.len(), 1, "the diagnostic fires: {warnings:?}");
+        assert!(
+            warnings[0].contains("no component.wasm") && warnings[0].contains("foo"),
+            "and names the extension and the reason: {:?}",
+            warnings[0]
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // Verifies: gh #463 design point 1 - the comparison is **canonical**, so a
+    // `$HOME` that is itself a symlink does not collide silently.
+    //
+    // This is the third cycle in a row where a raw path comparison passed on
+    // Linux and failed elsewhere (#436's registry keys, #389's git fixtures), so
+    // the row is written to fail if anyone reintroduces a string compare.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_data_home_is_still_recognised() {
+        let root = lca_testkit::scratch_path("lca-gh463-symlink");
+        let _ = std::fs::remove_dir_all(&root);
+        let real = root.join("real-home");
+        let installed = real.join(".lca").join("extensions").join("tool");
+        std::fs::create_dir_all(&installed).expect("mkdir");
+        std::fs::write(
+            installed.join("extension.toml"),
+            "name = \"tool\"\nversion = \"1.0.0\"\nabi = \"0.6\"\nworlds = [\"tool\"]\n",
+        )
+        .expect("manifest");
+        std::fs::write(installed.join("sha256-abc.wasm"), b"wasm").expect("component");
+        // The home is reached through a symlink; the data dir is spelled via the
+        // link while the cwd is the real path (the macOS `/var` -> `/private/var`
+        // shape, in miniature).
+        let link = root.join("linked-home");
+        std::os::unix::fs::symlink(&real, &link).expect("symlink");
+
+        let (found, warnings) = super::scan_project_extensions(&real, &link.join(".lca"));
+        assert!(found.is_empty());
+        assert!(
+            warnings.is_empty(),
+            "a symlinked spelling of the same directory must not warn: {warnings:?}"
         );
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -179,7 +317,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         let project = root.join("project");
         std::fs::create_dir_all(&project).expect("mkdir");
-        let (found, warnings) = super::scan_project_extensions(&project);
+        let (found, warnings) = super::scan_project_extensions(&project, &root.join("data"));
         assert!(found.is_empty() && warnings.is_empty());
     }
 }
