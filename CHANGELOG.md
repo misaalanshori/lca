@@ -127,6 +127,24 @@ Dates are UTC.
   record, which stays `/mcp disable`'s job.
 
 ### Fixed
+- **The Antigravity extension no longer advertises image generation it does not
+  do** (gh #279). Its manifest description — the text you read before installing —
+  and its catalog row both said *"Google Antigravity models, including image
+  generation, via subscription login"*, while `is_selectable` refused every model
+  whose id contains `image`. It now reads "Google Antigravity's Gemini and Claude
+  models, via subscription login", which is what the code offers. The description
+  was the side that moved, deliberately: the provider stream has no event an image
+  *result* could arrive in (`StreamEvent` carries text, reasoning, tool calls,
+  usage, errors and vendor events — and the extension's only vendor event is the
+  thinking signature), so enabling image models would be a feature with no path,
+  not a fix. `ContentBlock::Image` is the request side — an attached image becomes
+  Gemini's `inlineData` part — which is image input, not generation. The provider
+  reference (`pi-antigravity`) *does* generate images, through a separate direct
+  image endpoint and a `generate_image` tool, neither of which LCA has; that is why
+  the claim looked plausible and why the honest fix is to stop making it. The
+  provider doc's `vendor-event` section, which claimed the channel exists to carry
+  image results, now says what is actually emitted, and a drift guard keeps the
+  manifest, the catalog row, the doc and the filter from disagreeing again.
 - **An MCP server's own error reaches you, on both transports** (gh #336). Per
   JSON-RPC 2.0 a server that cannot parse the request id — or hits any
   transport-level failure — answers with `"id": null`. The SSE selector was taught

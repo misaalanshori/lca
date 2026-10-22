@@ -740,6 +740,12 @@ mod no_thread_spawn_per_call;
 // unchanged.
 #[path = "336-null-id-error-surface.rs"]
 mod null_id_error_surface;
+
+// Gh #279: the antigravity extension's advertised description agrees with what its
+// code offers - the manifest, the catalog row, and the provider doc all say the
+// same thing as `is_selectable`.
+#[path = "279-description-matches-code.rs"]
+mod description_matches_code;
 // GitHub #449: two `conformance_diff` rows compiled the WASM fixture more than
 // once, so they sat at ~1.6x nextest's default cap and timed out on a loaded
 // runner. The measurement put the cost in `wasmtime::component::Component::new`
