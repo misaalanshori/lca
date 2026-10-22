@@ -77,7 +77,8 @@ everyday set:
 - `/compact` — shrink the history the model sees.
 - `/tree`, `/fork`, `/clone` — explore without losing the thread.
 - `/resume`, `/name`, `/session` — find and title sessions.
-- `/trust`, `/grants`, `/permissions` — what the project may do.
+- `/trust`, `/grants`, `/permissions` — what the project may do (see
+  [below](#permission-rules) for how a rule is written and what it matches).
 - `/reload` — re-read settings, extensions, themes, keys (restart for
   a changed `tui.editor.*` or `tui.input.*` binding; see
   [Configuration](configuration.md#key-bindings)).
@@ -132,6 +133,46 @@ their own `/`-commands to the same menu.
 | `/name <name>` | rename this session (`/rename` is the same) |
 | `/paste` | paste the clipboard image to the next message |
 | `/permissions` | manage allow/deny rules (session, project, global) |
+
+### Permission rules
+
+`/permissions deny read muffin-recipe.txt` refuses any read of that file, and
+`/permissions allow write out/*.txt` allows writes under `out/`. The shape is:
+
+```text
+/permissions                            list the rules
+/permissions [session|project|global] allow|deny <rule>
+/permissions clear                      drop this session's rules
+```
+
+The scope defaults to **project**; `global` is your default across every
+project, `session` vanishes when the interface exits.
+
+A rule is either **verb-qualified** — `read <path>` or `write <path>` — or a
+**bare glob** for anything else (`git push*` for shell commands, `example.com`
+for a host). The verb decides which kind of action the rule can match, and the
+confirmation line always states the pattern that will actually be compared, plus
+what you typed when the two differ:
+
+```text
+deny rule `*muffin-recipe.txt` for read actions (from `read muffin-recipe.txt`)
+```
+
+A relative path compiles to a pattern that spans directories (`*` + the path you
+gave), because actions carry absolute paths. That means a rule written as
+`read muffin-recipe.txt` keeps working from a subdirectory and after the checkout
+moves; it also means it matches that same path tail anywhere on disk, so prefer an
+absolute path when you mean exactly one file. A bare glob is stored exactly as
+typed, so `*muffin-recipe.txt` keeps its meaning if you already learned it.
+
+Two things are refused rather than stored, because a rule that cannot match
+anything is worse than no rule — the whole reason this is documented:
+
+- a word one keystroke from a verb (`raed secrets.txt` — did you mean `read`?),
+  rather than silently becoming a bare glob that matches no read;
+- a path of only wildcards (`read *`), which would be every file on the machine.
+
+Deny beats allow at any scope, and a deny never prompts.
 | `/reload` | re-run discovery without restarting |
 | `/rename <name>` | rename this session (`/name` is pi's spelling) |
 | `/resume` | search and reopen a session |

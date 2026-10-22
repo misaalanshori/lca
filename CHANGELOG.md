@@ -127,6 +127,25 @@ Dates are UTC.
   record, which stays `/mcp disable`'s job.
 
 ### Fixed
+- **`/permissions deny read <file>` now actually refuses the read** (gh #261).
+  The command accepted it, confirmed `deny rule read muffin-recipe.txt`, and then
+  did nothing — because rule matching compares the glob against the action's
+  *absolute path*, so the `read ` verb became part of the pattern and matched
+  nothing; and even without the verb a bare relative filename is an exact
+  comparison against `/home/you/proj/muffin-recipe.txt`, so it missed too. The only
+  thing that worked was `*muffin-recipe.txt`. A rule is now **compiled** when it is
+  entered: `read <path>` and `write <path>` name the action kind and the path is
+  turned into a pattern the matcher can compare (a relative path spans directories;
+  an absolute path or an existing glob passes through untouched). The confirmation
+  line states the pattern that will actually be matched, and what you typed when
+  the two differ:
+  `deny rule `*muffin-recipe.txt` for read actions (from `read muffin-recipe.txt`)`.
+  Existing `*muffin-recipe.txt` rules keep working. Deny still beats allow at any
+  scope, and a deny still never prompts. Two shapes are refused at entry instead of
+  being stored as dead rules: a word one keystroke from a verb (`raed secrets.txt`
+  — did you mean `read`?) and a path of only wildcards (`read *`). A deny rule that
+  silently does nothing is worse than no rule at all, because the user stops
+  watching.
 - **The Antigravity extension no longer advertises image generation it does not
   do** (gh #279). Its manifest description — the text you read before installing —
   and its catalog row both said *"Google Antigravity models, including image

@@ -746,6 +746,11 @@ mod null_id_error_surface;
 // same thing as `is_selectable`.
 #[path = "279-description-matches-code.rs"]
 mod description_matches_code;
+
+// Gh #261: `/permissions deny read <literal>` compiles into a pattern the matcher
+// can compare, so the read it names is actually refused.
+#[path = "261-deny-rule-actually-matches.rs"]
+mod deny_rule_actually_matches;
 // GitHub #449: two `conformance_diff` rows compiled the WASM fixture more than
 // once, so they sat at ~1.6x nextest's default cap and timed out on a loaded
 // runner. The measurement put the cost in `wasmtime::component::Component::new`

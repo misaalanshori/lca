@@ -74,7 +74,11 @@ impl Action {
     }
 
     /// The value approvals match against.
-    pub(super) fn match_value(&self) -> String {
+    ///
+    /// `pub(crate)` rather than `pub(super)`: `rule_entry`'s own tests (gh #261)
+    /// assert that a compiled pattern matches the value an action really carries,
+    /// and they sit two modules below.
+    pub(crate) fn match_value(&self) -> String {
         match self {
             Action::Shell { command, .. } => command.clone(),
             Action::WritePath { path } => path.display().to_string(),
