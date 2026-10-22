@@ -7,6 +7,17 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Added
+- **The conformance suite compiles its fixture once per row, not three times**
+  (gh #449). Two `lca-ext-host` rows sat at ~1.6x the test harness's ceiling and
+  timed out on a loaded runner: they were compiling the same WASM component two
+  and three times inside a single row, for things the first compile already
+  answered — the guest's schema, and a second scripted dialog verdict. Each
+  compile costs about six seconds in a test build, and it cannot be shared
+  across rows because the harness runs every test in its own process. Removing
+  the redundant loads took the two rows from 73–77 s to 26–27 s and the whole
+  file from 110 s to 66 s, so no timeout override was needed. A regression test
+  now pins the compile count per row, because the durable invariant is how many
+  times a row compiles the fixture, not how many seconds it takes.
 - **`webfetch` works in the sandbox** (gh #302). The `tool` world imported
   every capability a tool might need except the network, so a tool-world guest
   could not fetch at all: `webfetch`'s tool existed only on the native path and
