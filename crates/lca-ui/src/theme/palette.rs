@@ -145,13 +145,27 @@ impl Palette {
         Palette { colors }
     }
 
-    /// The color for a role; a missing role falls back to `Text`.
+    /// The color for a role.
+    ///
+    /// A named role is its own value. A role the palette does not hold walks its
+    /// declared chain (gh #387 gap 5) instead of guessing `Text`: `mdLink` finds
+    /// `accent`, `syntaxType` finds `mdCode` and then `accent`, and a role whose
+    /// whole chain is absent - or that has no entry in the table at all - comes
+    /// back as [`Color::Default`], the terminal's own value. Before this, every
+    /// missing role was `Text`, so a background role could be painted with a
+    /// foreground colour.
     pub fn get(&self, role: Role) -> Color {
-        self.colors
-            .get(&role)
-            .copied()
-            .or_else(|| self.colors.get(&Role::Text).copied())
-            .unwrap_or(Color::Default)
+        super::tokens::resolve_chain(role, &|role| self.colors.get(&role).copied())
+    }
+
+    /// Whether the palette names `role` itself, rather than resolving it.
+    ///
+    /// The distinction matters at load: [`Palette::overlay`] must not treat a
+    /// *resolved* value as though the theme file had set it, or `setting a
+    /// parent carries its children` would collapse into `setting anything sets
+    /// everything`.
+    fn names(&self, role: Role) -> Option<Color> {
+        self.colors.get(&role).copied()
     }
 
     /// Set one role's color (gh #10: the `system` theme tracks the
@@ -248,24 +262,50 @@ impl Palette {
             .and_then(|v| v.as_table())
             .cloned()
             .unwrap_or_default();
-        let mut palette = self.clone();
-        let mut applied = 0usize;
+        // Gh #387 gap 5: the table has to be sound before we resolve anything
+        // through it, or a bad entry would show up as a wrong colour on screen
+        // instead of an error at load. A malformed table is a programming error,
+        // so this fails loudly and names the role.
+        super::tokens::validate()?;
+        // What the *file* said, kept separate from what the palette underneath
+        // said: a child must follow a parent the **user** set, and must keep its
+        // own base value when the user set neither.
+        let mut named: BTreeMap<Role, Color> = BTreeMap::new();
         for (key, entry) in table {
             if key == "vars" || key == "name" {
                 continue;
             }
+            // An unknown role stays an error with the same message it has
+            // always had; this cycle adds fallbacks, not a second vocabulary.
             let Some(role) = Role::parse(key) else {
                 continue;
             };
             let Some(raw) = entry.as_str() else {
                 return Err(format!("role `{key}` is not a string"));
             };
-            let resolved = vars.get(raw).and_then(|v| v.as_str()).unwrap_or(raw);
-            let Some(color) = parse_color(resolved) else {
+            let reference = vars.get(raw).and_then(|v| v.as_str()).unwrap_or(raw);
+            let Some(color) = parse_color(reference) else {
                 return Err(format!("role `{key}` has an invalid color `{raw}`"));
             };
-            palette.colors.insert(role, color);
-            applied += 1;
+            named.insert(role, color);
+        }
+        let applied = named.len();
+        // Resolve **now**, at load, so the render path reads one map value.
+        //
+        // Precedence per role: what the file said; else the nearest ancestor the
+        // file said (this is what makes a parent override carry its children);
+        // else this palette's own value for that role (a complete base always
+        // has one, so a built-in palette keeps its distinct per-role colours
+        // instead of collapsing onto `accent`); else the terminal default.
+        let mut palette = self.clone();
+        for role in Role::ALL {
+            let color = named
+                .get(role)
+                .copied()
+                .or_else(|| super::tokens::nearest_named(*role, &|role| named.get(&role).copied()))
+                .or_else(|| self.names(*role))
+                .unwrap_or(Color::Default);
+            palette.colors.insert(*role, color);
         }
         Ok((palette, applied))
     }

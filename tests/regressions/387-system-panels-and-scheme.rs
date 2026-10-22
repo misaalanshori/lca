@@ -243,3 +243,89 @@ fn the_thinking_border_is_a_ramp() {
         "the separator maps every level to its own role"
     );
 }
+
+// Verifies: gh #387 gap 5 - a theme's missing role resolves through a declared,
+// same-slot parent rather than the ad-hoc `Text` guess, and the table that
+// declares it is sound.
+//
+// The guard inspects the *mechanism*, because the property it protects is
+// structural: a fallback must be semantically related and stay in its colour
+// slot. `theme/tokens_tests.rs` owns the resolution maths (19 rows, five of
+// which fail against the old `or_else(Text)`); this is the NFR-24 pin that the
+// mechanism stays where it is.
+#[test]
+fn theme_roles_fall_back_through_declared_chains() {
+    use lca_ui::theme::Role;
+    use lca_ui::theme::tokens::{self, Slot};
+
+    // One table, not a match arm per role scattered through the renderers - and
+    // asked of the code, so `cargo fmt` reflowing a declaration cannot turn this
+    // red for nothing.
+    assert_eq!(
+        tokens::TOKENS.len(),
+        Role::ALL.len(),
+        "the role->parent table is one const covering the whole vocabulary"
+    );
+    // Both halves of a declaration are present, so a role cannot be added with a
+    // colour and no place in the chain: every role has a slot, and every role
+    // that is not a slot root has a parent.
+    for entry in tokens::TOKENS {
+        for slot in [Slot::Foreground, Slot::Background] {
+            if entry.slot == slot && entry.fallback.is_none() {
+                assert_eq!(
+                    tokens::root_of(slot),
+                    Some(entry.role),
+                    "the only parentless entry in {slot:?} is its root"
+                );
+            }
+        }
+    }
+    let tokens_src = read("crates/lca-ui/src/theme/tokens.rs");
+    // The same-slot invariant is enforced, not merely intended.
+    assert!(
+        tokens_src.contains("in a different slot"),
+        "a fallback that crosses foreground/background is refused, the way pi \
+         refuses it (`has fallback X in a different color slot`)"
+    );
+    // Cycles are refused with the loop named.
+    assert!(
+        tokens_src.contains("fallback cycle:"),
+        "a declared cycle fails load naming the cycle"
+    );
+    // The slot roots are the two a theme is built up from. Asked of the code,
+    // not of a line: `cargo fmt` reflows a struct literal across lines, and a
+    // substring match on the unformatted form goes red for no reason (the same
+    // trap that bit the gh #389 and gh #400 guards).
+    assert_eq!(
+        tokens::root_of(Slot::Foreground),
+        Some(lca_ui::theme::Role::Text),
+        "`text` is the foreground root"
+    );
+    assert_eq!(
+        tokens::root_of(Slot::Background),
+        Some(lca_ui::theme::Role::SelectedBg),
+        "`selectedBg` is the background root"
+    );
+
+    // The palette resolves through the table instead of guessing `Text`, and
+    // does so at load so the render path reads one value.
+    let palette = read("crates/lca-ui/src/theme/palette.rs");
+    assert!(
+        palette.contains("tokens::resolve_chain(role,"),
+        "`Palette::get` walks the declared chain, not `or_else(Text)`"
+    );
+    assert!(
+        !palette.contains("or_else(|| self.colors.get(&Role::Text).copied())"),
+        "the ad-hoc `Text` fallback is gone"
+    );
+    assert!(
+        palette.contains("tokens::nearest_named("),
+        "`overlay` resolves each role through the file's own declarations, which \
+         is what makes a parent override carry its children"
+    );
+    // And the table is validated before it is trusted.
+    assert!(
+        palette.contains("tokens::validate()?"),
+        "a malformed table fails load instead of painting a wrong colour"
+    );
+}
