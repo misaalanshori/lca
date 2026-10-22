@@ -523,10 +523,11 @@ impl Chat {
                 // gh #404 gap 1: the parent link rides along so an orphaned
                 // child (a parent card that is not on screen) still renders as a
                 // top-level card instead of vanishing.
-                self.transcript.start_tool_with_parent(
+                self.transcript.start_tool_with_id(
                     call.name,
                     call.arguments,
                     call.parent_call_id,
+                    Some(call.call_id),
                 );
             }
             TurnEvent::ToolFinished(result) => {
@@ -543,6 +544,9 @@ impl Chat {
                 // a checklist. `ToolResult.nested` is the only place they exist -
                 // a nested call is never its own record - so this is the one
                 // wiring point that closes the flood.
+                // gh #404 gap 1: the children arrive by two paths (the live
+                // start/finish pairs, and the bounded record on the parent's
+                // result). `finish_tool_with_id` keeps whichever came first.
                 let children: Vec<crate::transcript::ChildCall> = result
                     .nested
                     .iter()
@@ -552,12 +556,13 @@ impl Chat {
                         head: nested.content_head.clone(),
                     })
                     .collect();
-                self.transcript.finish_tool_with_children(
+                self.transcript.finish_tool_with_id(
                     status,
                     Some(result.content.clone()),
                     result.extras.get("diff").cloned(),
                     result.duration_ms,
                     children,
+                    Some(result.call_id.clone()),
                 );
                 // R5: a tool that read an image shows it through the ladder.
                 for image in &result.images {

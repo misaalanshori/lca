@@ -411,3 +411,173 @@ fn a_replayed_parent_renders_the_same_checklist() {
     assert!(joined.contains("grep-b"), "{out:?}");
     assert!(joined.contains('✓') && joined.contains('✗'), "{out:?}");
 }
+
+// Verifies: gh #404 gap 1 - the **live event pair**. The turn emits a
+// `ToolStarted` *and* a `ToolFinished` for a nested call (so a headless observer
+// sees the pair), which means the child reaches the transcript as ordinary
+// events. Found in a live pane: with only the card-side checklist wired, the
+// child still got its own top-level card, because nothing suppressed its start.
+//
+// This is the row that would have caught that, and it asserts the whole pair:
+// the start becomes a checklist row, and the finish settles *that row* rather
+// than creating or amending a card.
+#[test]
+fn a_nested_start_and_finish_pair_becomes_one_checklist_row() {
+    let mut transcript = Transcript::new();
+    // The parent starts, as the model asked for it.
+    transcript.start_tool_with_id("codemode", "{}", None, Some("call-1".to_string()));
+    // A nested child's *own* events - this is what the turn really emits.
+    transcript.start_tool_with_id(
+        "grep",
+        r#"{"pattern":"x"}"#,
+        Some("call-1".to_string()),
+        Some("call-1/1".to_string()),
+    );
+    transcript.finish_tool_with_id(
+        ToolStatus::Ok,
+        Some("hit".to_string()),
+        None,
+        Some(7),
+        Vec::new(),
+        Some("call-1/1".to_string()),
+    );
+    // The parent settles, carrying the persisted record too. It must not
+    // duplicate the row the live pair already added.
+    transcript.finish_tool_with_children(
+        ToolStatus::Ok,
+        Some("done".to_string()),
+        None,
+        Some(900),
+        Vec::new(),
+    );
+    let out = strip(&transcript.render(100, &plain()));
+    assert_eq!(
+        out.iter().filter(|row| row.contains("> codemode")).count(),
+        1,
+        "one parent card: {out:?}"
+    );
+    assert!(
+        !out.iter().any(|row| row.contains("> grep")),
+        "the child never became a card: {out:?}"
+    );
+    let child_rows = out.iter().filter(|row| row.contains("grep")).count();
+    assert_eq!(child_rows, 1, "the child is one checklist row: {out:?}");
+    // And its live finish settled it: the row is a tick, not a spinner.
+    let child_row = out
+        .iter()
+        .find(|row| row.contains("grep"))
+        .expect("the row exists");
+    assert!(
+        child_row.contains('✓'),
+        "the finish settled the row: {child_row:?}"
+    );
+}
+
+// Verifies: gh #404 gap 1 - a **failed** live child settles to its failure glyph
+// and keeps its head, so the expanded card can show the error.
+#[test]
+fn a_failed_live_child_settles_to_its_failure_state() {
+    let mut transcript = Transcript::new();
+    transcript.start_tool_with_id("codemode", "{}", None, Some("call-1".to_string()));
+    transcript.start_tool_with_id(
+        "grep",
+        "{}",
+        Some("call-1".to_string()),
+        Some("call-1/1".to_string()),
+    );
+    transcript.finish_tool_with_id(
+        ToolStatus::Error,
+        Some("KeyError: 'TOKEN'".to_string()),
+        None,
+        None,
+        Vec::new(),
+        Some("call-1/1".to_string()),
+    );
+    transcript.toggle_tools_expanded();
+    let out = strip(&transcript.render(100, &plain()));
+    let joined = out.join("\n");
+    assert!(
+        out.iter().any(|row| row.contains('✗')),
+        "the failed child shows its failure glyph: {out:?}"
+    );
+    assert!(
+        joined.contains("KeyError"),
+        "and its error is visible when expanded: {out:?}"
+    );
+}
+
+// Verifies: gh #404 gap 1 - the **two-path dedup**. Found in a live pane: the
+// turn emits a start/finish pair for each nested call *and* files a bounded
+// record under the parent's result, so the same child reached the card twice and
+// drew two identical rows. The live pair is richer (it carries the child's own
+// output), so it wins; the persisted set only fills a card that has none.
+#[test]
+fn a_child_arriving_by_both_paths_is_one_row() {
+    let mut transcript = Transcript::new();
+    transcript.start_tool_with_id("codemode", "{}", None, Some("call-1".to_string()));
+    // Path 1: the live pair.
+    transcript.start_tool_with_id(
+        "grep",
+        "{}",
+        Some("call-1".to_string()),
+        Some("call-1/1".to_string()),
+    );
+    transcript.finish_tool_with_id(
+        ToolStatus::Ok,
+        Some("hit".to_string()),
+        None,
+        None,
+        Vec::new(),
+        Some("call-1/1".to_string()),
+    );
+    // Path 2: the parent's persisted record for the same child.
+    transcript.finish_tool_with_children(
+        ToolStatus::Ok,
+        Some("done".to_string()),
+        None,
+        None,
+        vec![ChildCall {
+            name: "grep".to_string(),
+            status: ChildStatus::Ok,
+            head: "hit".to_string(),
+        }],
+    );
+    let out = strip(&transcript.render(100, &plain()));
+    assert_eq!(
+        out.iter().filter(|row| row.contains("grep")).count(),
+        1,
+        "the child is one row, not two: {out:?}"
+    );
+}
+
+// Verifies: gh #404 gap 1 - the persisted set still fills a card that got no live
+// events, which is the replay path and the case where a sink dropped them.
+#[test]
+fn the_persisted_children_fill_a_card_with_no_live_rows() {
+    let mut transcript = Transcript::new();
+    transcript.start_tool_with_id("codemode", "{}", None, Some("call-1".to_string()));
+    transcript.finish_tool_with_children(
+        ToolStatus::Ok,
+        Some("done".to_string()),
+        None,
+        None,
+        vec![
+            ChildCall {
+                name: "from-record-a".to_string(),
+                status: ChildStatus::Ok,
+                head: "x".to_string(),
+            },
+            ChildCall {
+                name: "from-record-b".to_string(),
+                status: ChildStatus::Error,
+                head: "y".to_string(),
+            },
+        ],
+    );
+    let out = strip(&transcript.render(100, &plain()));
+    assert!(
+        out.iter().any(|row| row.contains("from-record-a"))
+            && out.iter().any(|row| row.contains("from-record-b")),
+        "both persisted children show: {out:?}"
+    );
+}
