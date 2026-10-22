@@ -186,7 +186,10 @@ The four fields:
   real persona. Omitted leaves the loadout alone.
 - **instructions** - a prologue injected as a **conversational** message,
   attributed to the persona. Never a `System` message: a trailing `System` message
-  mutates the root prompt and busts the prompt cache (gh #299).
+  mutates the root prompt and busts the prompt cache (gh #299). They land **once, at
+  apply time** - they are not re-sent every turn, so a persona's framing does not
+  quietly outlive the persona or pay a cache cost for the session. A lasting
+  standing instruction belongs in `AGENTS.md`, which is read as project context.
 
 `/persona` with no argument lists every persona with what it carries, because a
 bundle whose contents you cannot see is a bundle you cannot trust. `/persona
