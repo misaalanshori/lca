@@ -50,7 +50,6 @@ mod state_persona;
 mod status;
 pub mod theme;
 pub mod transcript;
-mod turn_metrics;
 pub mod ui_state;
 
 pub use chat::{Chat, PendingMessage};

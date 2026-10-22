@@ -883,3 +883,14 @@ mod mcp_manager_modal;
 // state has a glyph as well as a colour (NFR-28).
 #[path = "404-nested-call-flood.rs"]
 mod nested_call_flood;
+// GitHub #464: the footer's `tok/s` cell reported 5,263,158 on a live session.
+// The meter opened its window in the interface thread, which drains a bounded
+// channel in a burst, so a finished response's deltas all landed within
+// microseconds of each other; hidden reasoning tokens were in the numerator
+// while their time was not. The authoritative span is now stamped where the
+// stream is consumed, carried on the call's own `Usage` extras, and the
+// interface divides provider tokens by it. The rendering rows (impossible
+// number, zero span, the stale reading) live beside the code in
+// `lca-ui/src/footer/meter.rs`.
+#[path = "464-tokens-per-second-plausible.rs"]
+mod tokens_per_second_plausible;

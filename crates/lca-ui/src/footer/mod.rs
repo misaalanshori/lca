@@ -10,6 +10,7 @@
 
 pub mod cache;
 pub mod git;
+pub(crate) mod meter;
 
 use std::path::Path;
 

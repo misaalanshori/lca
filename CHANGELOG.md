@@ -41,6 +41,21 @@ Dates are UTC.
   because it will close its pipe), so a dying server's last stderr write is no
   longer lost to the race between the write and the read (measured through
   `lca mcp list`: 2 of 5 runs lost it before, 8 of 8 keep it after).
+- **The footer's `tok/s` reading is a measurement again, not a report on the
+  interface thread's scheduling** (gh #464). A live Antigravity session printed
+  `5263158 tok/s`: `↓30` output tokens over a span of 5.7 microseconds. The meter
+  opened its `Instant` window in `Chat::on_turn_event` — the interface thread — and
+  that thread drains a bounded channel in a burst, so a finished response's deltas
+  all arrived within microseconds of each other. Meanwhile hidden reasoning tokens
+  were counted in the numerator and their generation time was not in the
+  denominator. Both are fixed at the root: `lca-core` stamps each provider call's
+  generation span (first delta to last, text *and* reasoning, tool runs excluded by
+  construction because a tool runs between calls) where the stream is consumed, and
+  carries it on that call's `Usage` as `extras["generation_us"]`; the interface sums
+  the stamps and divides, holding no clock of its own. A physically impossible
+  reading now renders **nothing** rather than a wrong number — clamping to a
+  believable ceiling would still be a lie — while a turn that measured nothing
+  leaves the previous reading standing. Token counting is untouched.
 
 ### Added
 - **`/persona` sets a model, thinking level, tool loadout, and instructions in one
