@@ -76,6 +76,28 @@ impl super::Capabilities {
         Ok(crate::process::read_up_to(reader, max)?)
     }
 
+    /// Whether the child has exited, without reaping it.
+    ///
+    /// The tail reader needs this to choose its read: a live child may never close
+    /// its pipe, so only what is buffered *now* is available; a child that has
+    /// **exited** will close it, so draining to EOF is safe and complete. Without
+    /// the distinction, a dying server's last write can be missed simply because the
+    /// read ran before the kernel delivered it (measured: 2 of 5 runs through
+    /// `lca mcp list`).
+    pub fn process_has_exited(&self, handle: u32) -> Result<bool, CapabilityError> {
+        let mut table = lock(&self.handles);
+        let entry = table
+            .entries
+            .get_mut(&handle)
+            .ok_or_else(|| CapabilityError::NotFound(format!("unknown handle {handle}")))?;
+        let HandleEntry::Process { child, .. } = entry else {
+            return Err(CapabilityError::Invalid(format!(
+                "handle {handle} is not a process"
+            )));
+        };
+        Ok(child.try_wait()?.is_some())
+    }
+
     /// Read whatever the child has **already** written to stderr, without waiting
     /// (gh #459).
     ///

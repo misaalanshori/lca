@@ -23,7 +23,10 @@ Dates are UTC.
   not a quiet change under the first. A row still `connecting` after the budget now
   says so ("did not answer within Ns") instead of leaving a bare label that can
   outlive every deadline. The chatty-crash case is unchanged and still reports its
-  tail.
+  tail - and now reliably: a child that has **exited** is drained to EOF (safe,
+  because it will close its pipe), so a dying server's last stderr write is no
+  longer lost to the race between the write and the read (measured through
+  `lca mcp list`: 2 of 5 runs lost it before, 8 of 8 keep it after).
 
 ### Added
 - **`/persona` sets a model, thinking level, tool loadout, and instructions in one

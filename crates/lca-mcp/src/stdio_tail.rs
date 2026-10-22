@@ -55,9 +55,22 @@ const STDERR_TAIL_BYTES: usize = 2000;
 ///
 /// Never called on success, so it cannot steal a live server's stderr.
 pub(crate) fn read_stderr_tail(caps: &Arc<lca_tools::Capabilities>, handle: u32) -> String {
+    // Gh #459: a child that has **exited** will close its pipe, so draining to EOF
+    // collects everything it wrote - no lost last words, which a purely-buffered read
+    // missed whenever it ran before the kernel delivered the write (measured: 2 of 5
+    // runs). A live child may never close its pipe, so that case stays bounded and
+    // takes only what is already there.
+    let exited = caps.process_has_exited(handle).unwrap_or(false);
     let mut collected = Vec::new();
     loop {
-        match caps.process_read_stderr_buffered(handle, STDERR_TAIL_BYTES) {
+        let chunk = if exited {
+            // EOF is guaranteed: the child is gone, so this returns rather than
+            // waiting for a write that will never come.
+            caps.process_read_stderr(handle, STDERR_TAIL_BYTES)
+        } else {
+            caps.process_read_stderr_buffered(handle, STDERR_TAIL_BYTES)
+        };
+        match chunk {
             Ok(Some(chunk)) if !chunk.is_empty() => {
                 collected.extend_from_slice(&chunk);
                 // Keep only the tail, so a chatty server cannot grow this.

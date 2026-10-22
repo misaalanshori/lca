@@ -122,25 +122,52 @@ fn the_abi_read_stderr_is_still_blocking() {
     );
 }
 
-// Verifies: gh #459 design point 2 - the tail read uses the bounded path.
+// Verifies: gh #459 design point 2 - the tail read is bounded **for a live child**.
 //
 // This is the one-line regression that would bring the hang back: reaching for the
-// blocking read because it "returns more output".
+// blocking read unconditionally because it "returns more output".
+//
+// The rule is not "never block", though - it is "only block when EOF is guaranteed".
+// A child that has **exited** will close its pipe, so draining it blocking is both
+// safe and complete; a live one may never close it, so only what is already
+// buffered is available. Both halves are pinned below, because either one alone is
+// a bug in the other direction (a hang, or lost last words).
 #[test]
-fn the_stderr_tail_read_never_blocks() {
+fn the_stderr_tail_read_blocks_only_when_eof_is_guaranteed() {
     let native = read("crates/lca-mcp/src/stdio_tail.rs");
     let tail = native
         .split("fn read_stderr_tail(")
         .nth(1)
         .expect("the tail reader exists");
     let tail = tail.split("\n}\n").next().unwrap_or(tail);
+
+    // The exited check gates the choice.
+    assert!(
+        tail.contains("process_has_exited"),
+        "the reader asks whether EOF is guaranteed: {tail}"
+    );
+    // A live child takes the bounded path.
     assert!(
         tail.contains("process_read_stderr_buffered"),
-        "the tail read is bounded: {tail}"
+        "a live child's read is bounded, which is the fix"
     );
+    // A dead one may drain blocking, and that branch must be the *exited* one.
+    let exited_branch_starts = tail
+        .find("if exited")
+        .expect("the choice is made on `exited`");
+    let blocking_at = tail
+        .find("process_read_stderr(")
+        .expect("the dead-child branch drains to EOF");
     assert!(
-        !tail.contains("process_read_stderr("),
-        "and never calls the blocking ABI read, which is the hang"
+        exited_branch_starts < blocking_at,
+        "the blocking read sits inside the `if exited` branch, where EOF is \
+         guaranteed - not on the live path"
+    );
+    // And the reason is recorded, because "why is a blocking read allowed here" is
+    // the question the next reader will have.
+    assert!(
+        tail.contains("EOF is guaranteed"),
+        "the branch says why blocking is safe there"
     );
 }
 
