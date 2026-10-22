@@ -35,10 +35,17 @@ impl Span {
         self.last = Some(at);
     }
 
-    /// The span in microseconds, or `None` when nothing was generated.
+    /// The span in microseconds, or `None` when it measures no duration.
+    ///
+    /// One delta means `first == last`: a single point is not a span, and
+    /// stamping `0` would make "measured, and it took no time" indistinguishable
+    /// from "not measured" on the record. Absence is the honest report.
     fn micros(&self) -> Option<u64> {
         let (first, last) = (self.first?, self.last?);
-        Some(last.duration_since(first).as_micros() as u64)
+        match last.duration_since(first).as_micros() as u64 {
+            0 => None,
+            micros => Some(micros),
+        }
     }
 }
 
@@ -318,6 +325,13 @@ impl Agent<'_> {
         // unchanged. A call that generated nothing (a tool call only, an
         // empty answer) stamps nothing: absence is "not measured", and the
         // footer already knows not to invent a reading for it.
+        //
+        // The host owns this key: a provider's own extras merge in earlier via
+        // `absorb`, so a guest that set `generation_us` itself is overwritten
+        // when the host measured, and removed when it did not. Otherwise a
+        // guest could hand the footer a span the host never observed - which
+        // is the same class of unmeasured number this issue is about.
+        usage.extras.remove(GENERATION_US_EXTRA);
         if let Some(micros) = span.micros() {
             usage
                 .extras

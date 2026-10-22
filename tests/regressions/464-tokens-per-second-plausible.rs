@@ -315,3 +315,40 @@ async fn tool_execution_time_stays_out_of_every_span() {
         "the shell run's wall clock is not in any span: {spans:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 4. The key belongs to the host, not to the guest.
+// ---------------------------------------------------------------------------
+
+// Verifies: gh #464 - a provider that sets `generation_us` itself cannot hand
+// the footer a span the host never observed. The host stamps the key when it
+// measured and removes it when it did not, so the reading is always the
+// consumer's own measurement. Without the removal, a guest could reintroduce
+// exactly the unmeasured-number class this issue is about.
+#[tokio::test]
+async fn a_guest_supplied_span_never_reaches_the_footer() {
+    let mut spoofed = lca_testkit::fake_usage(1_300, 30, 0, 0);
+    spoofed.extras.insert(
+        GENERATION_US_EXTRA.to_string(),
+        // The receipt's number: 30 tokens over 6 us.
+        "6".to_string(),
+    );
+    let provider = FakeProvider::builder()
+        .turn(|t| t.text("one answer, one delta").usage(spoofed))
+        .build();
+    let (mut h, _root) = harness("464-spoofed", provider);
+    let mut sink = CollectingSink::default();
+
+    let outcome = run(&mut h, "hi", &mut sink).await;
+    assert_eq!(outcome.status, lca_core::TurnStatus::Ok);
+
+    let usage = sink.usages().into_iter().last().expect("usage event");
+    // A single delta stamps a zero-length span, so the host measured nothing
+    // and the key must be gone - not left holding the guest's 6 us.
+    assert_eq!(
+        stamped_ms(&usage),
+        None,
+        "the host owns the key: {:?}",
+        usage.extras
+    );
+}
