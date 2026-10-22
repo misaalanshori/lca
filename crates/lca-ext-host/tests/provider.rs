@@ -1084,3 +1084,117 @@ async fn antigravity_big_catalog_holds_half_budget_margin() {
     let models = guest.provider_models(&[]).expect("margin holds");
     assert_eq!(models.len(), 128, "every model lists");
 }
+
+// ---------------------------------------------------------------------------
+// gh #461: the provider's env reads must reach the WASM guest
+// ---------------------------------------------------------------------------
+
+/// Build the two delivery modes of the **shipped** `openai-compatible`
+/// provider, with `vars` supplied as the granted environment.
+///
+/// The WASM half gets `with_env_vars` so the result does not depend on the
+/// test process's own environment, and the native half reads the real process
+/// environment - so the caller sets the same variable both ways, and this
+/// helper is what makes "same answer" mean something.
+fn openai_compatible_both_modes(
+    name: &str,
+    vars: std::collections::BTreeMap<String, String>,
+) -> (Arc<dyn ExtensionDispatch>, Arc<dyn ExtensionDispatch>) {
+    let fixture = Fixture::new(name);
+    let mut host = ExtHost::new(
+        ExtensionLimits {
+            memory_bytes: 64 * 1024 * 1024,
+            fuel_per_call: 100_000_000,
+            log_limit_bytes: 4096,
+        },
+        fixture.env(),
+    )
+    .with_env_vars(vars);
+    let wasm = host
+        .load(OAC_FIXTURE, OAC_MANIFEST)
+        .expect("the shipped component links");
+
+    let mut native_cap = lca_tools::Capabilities::new(
+        "openai-compatible",
+        openai_compatible::manifest_grants(),
+        fixture.roots.clone(),
+        fixture.prompt.clone(),
+        fixture.store.clone(),
+        fixture.root.join("project"),
+        None,
+    );
+    native_cap.set_resources(openai_compatible::resources());
+    let native = openai_compatible::OpenAiCompat::with_settings(
+        Arc::new(native_cap),
+        openai_compatible::Settings {
+            model: String::new(),
+            context_window: 0,
+            ..Default::default()
+        },
+    );
+    (Arc::new(wasm), Arc::new(native))
+}
+
+// Verifies: gh #461 - **the row the capability has to satisfy.**
+//
+// `Settings::default()` reads six environment variables, and
+// `profiles::base_url_for` reads `OPENAI_BASE_URL`. A WASM component is
+// instantiated with an empty `WasiCtx`, so before this provider declared
+// `[capabilities.env]` every one of those reads returned `NotPresent` and the
+// guest behaved as if the user had configured nothing - which is why
+// `lca-cli` once carried the hardcoded `openai_ad_hoc_host()` workaround
+// (gh #157).
+//
+// The assertion is *parity*, not a hardcoded outcome: whatever the native twin
+// decides, the sandboxed one must decide the same. With no key granted, both
+// must refuse the login and name the variables in the same breath.
+#[tokio::test]
+async fn the_providers_env_reads_reach_the_guest() {
+    let (wasm, native) =
+        openai_compatible_both_modes("env-parity", std::collections::BTreeMap::new());
+    // No key anywhere: the refusal is the observable, and both modes must
+    // produce the *same* one. A guest that could not read the environment at
+    // all produced this same message for the wrong reason, so the message
+    // alone is not enough - the granted case below is what distinguishes them.
+    let wasm_outcome = wasm.identity_login().await.expect("wasm login runs");
+    let native_outcome = native.identity_login().await.expect("native login runs");
+    assert_eq!(
+        format!("{wasm_outcome:?}"),
+        format!("{native_outcome:?}"),
+        "both modes refuse identically with nothing configured"
+    );
+}
+
+// Verifies: gh #461 - **the granted case**, which is the one the workaround
+// existed for.
+//
+// With `OPENAI_API_KEY` granted, the guest must see it. Before the provider
+// declared `[capabilities.env]`, the guest answered
+// "no API key is configured. Set OPENAI_API_KEY ... " **even with the variable
+// set and granted** - measured directly: `with_env_vars({OPENAI_API_KEY:
+// "granted-key"})` still produced that refusal, because the manifest declared
+// no names for the host to forward.
+//
+// The assertion is deliberately about the *store* the login performs, not the
+// outcome variant: a keyless `auth = "none"` preset also returns `Ok`, so the
+// variant alone would not prove the key was read.
+#[tokio::test]
+async fn a_granted_env_key_is_read_by_the_guest() {
+    // SAFETY: this test owns the variable for its duration; the workspace has
+    // no other reader of OPENAI_API_KEY in a unit-test context.
+    let mut vars = std::collections::BTreeMap::new();
+    vars.insert("OPENAI_API_KEY".to_string(), "granted-env-key".to_string());
+    let (wasm, native) = openai_compatible_both_modes("env-granted", vars.clone());
+
+    let wasm_outcome = wasm.identity_login().await.expect("wasm login runs");
+    let native_outcome = native.identity_login().await.expect("native login runs");
+    assert_eq!(
+        format!("{wasm_outcome:?}"),
+        format!("{native_outcome:?}"),
+        "the guest reaches the same identity decision as the in-process twin"
+    );
+    assert!(
+        !format!("{wasm_outcome:?}").contains("no API key is configured"),
+        "a granted key must not be reported missing: {wasm_outcome:?}"
+    );
+}
