@@ -181,7 +181,7 @@ Every key is optional:
 |---|---|
 | `client_name` | Name sent when registering dynamically. Default `lca`. |
 | `scope` | Space-separated scopes to request. A 401's own `scope` merges in (step-up adds, never drops). |
-| `auth_server_metadata_url` (also `authServerMetadataUrl`) | Skips discovery and reads this metadata document. |
+| `auth_server_metadata_url` (also `authServerMetadataUrl`) | Reads this metadata document first, ahead of the challenge pointer and the origin fallback. |
 | `client_id` / `client_secret` | A pre-registered client; skips dynamic registration. |
 
 ### The flow
@@ -190,8 +190,15 @@ Every key is optional:
    `needs-auth` and captures the `WWW-Authenticate` challenge — including
    `resource_metadata`, `scope`, and `error`. The challenge is what points at an
    authorization server that is **not** the MCP server's own host.
-2. On sign-in, LCA discovers the authorization server (from the challenge, the
-   configured metadata URL, or RFC 8414 well-known paths), registers a client
+2. On sign-in, LCA discovers the authorization server, in this order:
+   1. the configured `authServerMetadataUrl`, when you set one;
+   2. the challenge's `resource_metadata` pointer (RFC 9728), when the server
+      supplied one;
+   3. otherwise the MCP server's **own origin** as its own issuer, asking it for
+      `/.well-known/oauth-authorization-server` (RFC 8414).
+
+   The third step is the last resort, and it is what a server with no RFC 9728
+   document and no configuration falls back to. It then registers a client
    (RFC 7591) unless one is configured, and opens the authorization URL in your
    browser.
 3. It waits on a loopback listener for the redirect. **On a remote machine the
