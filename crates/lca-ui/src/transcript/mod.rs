@@ -98,6 +98,14 @@ pub enum Entry {
     Error(String),
     /// A pre-rendered line from a resumed session (displayed verbatim).
     Raw(String),
+    /// The startup key-hint line (gh #23), rendered from the **live**
+    /// keybindings each frame so a rebind reaches it (gh #410).
+    ///
+    /// It was a `Raw` string and therefore baked: `/reload` rebound the keys and
+    /// the first line a user reads kept naming the old ones. Keeping the *shape*
+    /// as an entry rather than a string is the whole fix - the keys are resolved
+    /// at render time, like every other hint.
+    StartupHint,
     /// An image the terminal renders through the graphics ladder, or as a
     /// placeholder when it has no graphics support (FR-UI-13, R5).
     Image {
@@ -607,6 +615,13 @@ impl Transcript {
     /// Append a pre-rendered resume line, displayed verbatim.
     pub fn push_raw(&mut self, text: impl Into<String>) {
         self.entries.push(Entry::Raw(text.into()));
+    }
+
+    /// Append the startup key-hint line (gh #23). Its keys resolve at render time,
+    /// so a `/reload` rebind reaches it (gh #410).
+    pub fn push_startup_hint(&mut self) {
+        self.entries.push(Entry::StartupHint);
+        self.invalidate_cache();
     }
 
     /// Drop every entry (R3's session switch): the new session starts its

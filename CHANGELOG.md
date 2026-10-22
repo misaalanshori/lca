@@ -6,6 +6,27 @@ Dates are UTC.
 
 ## [Unreleased]
 
+### Fixed
+- **Key hints name the key you actually bound** (gh #410). `key_text(action)` was
+  documented as producing hints that "cannot lie when the interface is rebound" and
+  built a fresh **default** keybinding manager on every call. All fourteen hint
+  sites used it, so rebinding `app.tools.expand` to `ctrl+e` left every truncation
+  hint, the jump pill, the reasoning readout, the startup line and the mouse
+  tooltips printing `ctrl+o` — while the key itself no longer worked: the label lied
+  in exactly the situation the comment promised it could not. Hints now resolve from
+  the interface's **live** manager, which is threaded to each site rather than
+  rebuilt per frame (no new I/O; the #389 lesson). The free helper is gone, not
+  deprecated: `default_key_text` is named for what it is and nothing in the UI uses
+  it, and the one hint formatter *requires* a manager so the 15th call site cannot
+  quietly reintroduce the shape. Formatting follows pi: the key in `dim`, the
+  description in `muted`, multiple bindings `/`-joined, a chord keeping its `+`
+  parts, and `option` for `alt` on macOS. An action the user unbound renders **no**
+  hint rather than a blank key press. `/reload` repaints every hint on the next
+  frame — including the startup line, which was previously baked as pre-rendered
+  text and needed to become a live entry to follow a rebind. The transcript's render
+  cache key was the width alone, which was unsound once a hint's text depended on
+  the binding, so cached frames now carry an epoch bumped on rebind.
+
 ### Added
 - **The real-terminal harness can wait for readiness instead of guessing at it**
   (gh #447). `main` had been red on most pushes since batch-13, and the shape was

@@ -49,6 +49,20 @@ fn markdown_options(
     }
 }
 
+/// The startup key-hint line (gh #23): pi prints
+/// `escape interrupt · ctrl+c/ctrl+d clear/exit · / commands` at startup; this is
+/// our wording on pi's shape, resolved from the **live** keybindings so a rebind
+/// reaches it (gh #410).
+pub(crate) fn startup_hint(
+    keybindings: &lca_tui::engine::keybindings::KeybindingsManager,
+) -> String {
+    format!(
+        "{} interrupt · {} clear/exit · / commands",
+        keybindings.display_keys("app.interrupt"),
+        keybindings.display_keys("app.clear"),
+    )
+}
+
 /// A key hint in the theme's own roles: the key **dim**, the description
 /// **muted** (gh #410, pi's `keyHint`).
 ///
@@ -156,6 +170,14 @@ pub(super) fn render_entry(
         }
         Entry::Error(text) => {
             out.extend(wrap_text_with_ansi(&(theme.error)(text), width as usize));
+            0
+        }
+        Entry::StartupHint => {
+            // pi's startup shape, our wording; the keys come from the live
+            // manager so a rebind reaches the first line a user reads (gh #410).
+            // Dim, as the line was before it became a live entry - the first
+            // version of this dropped the styling, which a real pane caught.
+            out.push((theme.role(Role::Dim))(&startup_hint(keybindings)));
             0
         }
         Entry::Raw(text) => {
