@@ -161,6 +161,23 @@ impl Ui {
             external_editor: Some(Arc::new(external_editor)),
             persist_screen_mode: Some(Arc::new(persist_screen_mode)),
             persist_setting: Some(persist_setting),
+            // Gh #397: the project layer's own writer, and the trust bit that
+            // says whether a write there can take effect. Both are honest about
+            // failure: a picker that cannot write says so instead of showing a
+            // state it did not reach.
+            persist_project_setting: {
+                let cwd = self.cwd.clone();
+                Some(Arc::new(move |key: &str, value: Option<String>| {
+                    crate::persist_project_setting(&cwd, key, value.as_deref())
+                        .map_err(|err| err.to_string())
+                }) as lca_ui::ProjectSettingPersist)
+            },
+            project_layer_trusted: {
+                let grants = self.grants.clone();
+                let cwd = self.cwd.clone();
+                Some(Arc::new(move || crate::lock(&grants).is_trusted_here(&cwd))
+                    as Arc<dyn Fn() -> bool + Send + Sync>)
+            },
             settings_rows: super::display::settings_rows(self, self.data.clone()),
             cycle_model: {
                 let ui = self.clone();

@@ -697,3 +697,8 @@ mod editor_trailing_newline;
 // shape, costs no I/O per frame, and stops printing zeroes.
 #[path = "389-footer-git-truth.rs"]
 mod footer_git_truth;
+
+// Gh #397 (tri-state slice): a project override can be seen and cleared -
+// `inherit` is the key's absence, and trust still gates it.
+#[path = "397-tri-state-project-override.rs"]
+mod tri_state_project_override;

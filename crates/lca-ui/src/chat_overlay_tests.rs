@@ -1105,6 +1105,7 @@ fn settings_dividers_are_chrome() {
                 masked: false,
                 section: "One".to_string(),
                 values: vec![],
+                project: None,
             },
             crate::state::SettingRow {
                 key: "b".to_string(),
@@ -1115,6 +1116,7 @@ fn settings_dividers_are_chrome() {
                 masked: false,
                 section: "Two".to_string(),
                 values: vec![],
+                project: None,
             },
         ],
         selected: 0,

@@ -19,6 +19,7 @@ mod chat_mouse;
 mod chat_overlays;
 mod chat_pickers;
 mod chat_poll;
+mod chat_project_override;
 mod chat_queue;
 mod chat_render;
 mod chat_search;
@@ -63,10 +64,10 @@ pub use separator::{CompactionReason, Separator, SeparatorState};
 pub use state::{
     Action, CacheMissNotice, CommandInvoker, DialogExchange, DialogModal, LabelRecord, LoginCancel,
     LoginComplete, LoginConfirm, LoginNext, LoginPick, LoginPoll, LoginRequest, McpAction, McpPoll,
-    ModelRow, PickerOption, PromptRequest, RegionInteractor, RegionRenderer, SettingRow,
-    SettingsRows, ShellEvent, ShellHandle, ShellRunner, SwitchConfirm, TreeFilterMode, TreeRow,
-    TreeRowKind, TurnChannels, TurnRunner, UiHooks, UiOptions, UiState, display_path,
-    sanitize_block, sanitize_text,
+    ModelRow, PickerOption, ProjectOverride, ProjectSettingPersist, PromptRequest,
+    RegionInteractor, RegionRenderer, SettingRow, SettingsRows, ShellEvent, ShellHandle,
+    ShellRunner, SwitchConfirm, TreeFilterMode, TreeRow, TreeRowKind, TurnChannels, TurnRunner,
+    UiHooks, UiOptions, UiState, display_path, sanitize_block, sanitize_text,
 };
 pub use state::{CompactPoll, CompactState};
 pub use theme::Theme;

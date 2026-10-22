@@ -521,6 +521,22 @@ impl Chat {
                     picker.clamp_selection();
                     self.settings_picker = Some(picker);
                 }
+                // Gh #397: `Tab` cycles the **project override**, the
+                // three-state control (`inherit → on → off → inherit`) that a
+                // session cycle cannot express. A separate key on purpose: the
+                // environment cycle writes the user file and is what `Enter`
+                // has always done, while `Tab` states something about *this
+                // project* - a different file with different consequences.
+                Some("tab") => {
+                    let row = picker.selected_row().cloned();
+                    if row.as_ref().is_some_and(|row| row.project.is_none()) {
+                        self.settings_picker = Some(picker);
+                        return Some(Action::Continue);
+                    }
+                    let notice = self.cycle_project_override(&mut picker, true);
+                    self.say(crate::state::sanitize_block(&notice));
+                    self.settings_picker = Some(picker);
+                }
                 Some("enter") | Some("right") | Some("left") => {
                     let forward = key != Some("left");
                     // The key is cloned out before the match so the row

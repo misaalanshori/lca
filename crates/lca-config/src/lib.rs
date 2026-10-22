@@ -13,6 +13,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 mod keys;
+pub mod layers;
 pub mod substitute;
 mod toml_layer;
 mod values;

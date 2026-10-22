@@ -27,6 +27,7 @@ fn picker(rows: &[(&str, &str, &str)]) -> crate::chat_pickers::SettingsPicker {
                 source: "default".to_string(),
                 masked: false,
                 values: Vec::new(),
+                project: None,
             })
             .collect(),
         selected: 0,

@@ -464,6 +464,21 @@ pub(super) fn settings_rows(
                 .resolved()
                 .map(|(key, value, source)| (key.to_string(), (value, source)))
                 .collect();
+        // Gh #397: the project layer on its own, so a row can say whether this
+        // project inherits the key, turns it on, or turns it off. Merged
+        // configuration cannot answer that - it only says what won - and
+        // without it a hand-written project key is a one-way door: the picker
+        // can write one but cannot see that it is there.
+        //
+        // Read only while the project is trusted, because FR-PERM-9 says an
+        // untrusted file is inert. So an untrusted project's key never shows
+        // as an override the picker offers to change; it shows in the source
+        // column as whatever actually won, which is the truth.
+        let project_layer = crate::lock(&ui.grants)
+            .is_trusted_here(&ui.cwd)
+            .then(|| lca_config::layers::read_layer(&ui.cwd.join(".lca").join("config.toml")))
+            .flatten()
+            .unwrap_or_default();
         let row = |section: &str, key: &str, values: &[&str]| {
             let (value, source) = match key {
                 // The one setting with two homes (gh #112):
@@ -487,6 +502,20 @@ pub(super) fn settings_rows(
                     .unwrap_or_else(|| ("<unset>".to_string(), "default".to_string())),
             };
             let (label, description) = setting_meta(key);
+            // Gh #397: only a two-valued on/off row has a tri-state to show;
+            // an enum or free-text key has no "off" for a project to mean.
+            let project = {
+                let on = values.iter().copied().find(|value| *value == "true");
+                let off = values.iter().copied().find(|value| *value == "false");
+                match (on, off) {
+                    (Some(on), Some(off)) => Some(lca_ui::ProjectOverride::from_value(
+                        project_layer.get(key).map(String::as_str),
+                        on,
+                        off,
+                    )),
+                    _ => None,
+                }
+            };
             SettingRow {
                 section: section.to_string(),
                 key: key.to_string(),
@@ -497,6 +526,7 @@ pub(super) fn settings_rows(
                 masked: config.substituted(key),
                 source,
                 values: values.iter().map(|value| value.to_string()).collect(),
+                project,
             }
         };
         // The categorized inventory (gh #174): every scalar

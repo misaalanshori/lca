@@ -51,7 +51,9 @@ pub(crate) mod prompt;
 pub(crate) mod provider_needs;
 mod rpc;
 
-pub use persist::{persist_setting, persist_setting_list};
+pub use persist::{
+    persist_project_setting, persist_setting, persist_setting_list, project_config_file,
+};
 mod registry;
 mod session_cmds;
 mod session_maint;
