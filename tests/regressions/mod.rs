@@ -757,6 +757,11 @@ mod deny_rule_actually_matches;
 #[path = "459-stderr-tail-never-blocks.rs"]
 mod stderr_tail_never_blocks;
 
+// Gh #461: the provider declares the environment it reads, so the WASM guest sees
+// it - and the hardcoded workaround that existed without it stays gone.
+#[path = "461-workaround-deleted-capability-took-over.rs"]
+mod workaround_deleted_capability_took_over;
+
 // Gh #463: from `$HOME` the project-extension directory is the data home, so the
 // scan read the install tree and wrongly warned for every installed extension.
 #[path = "463-data-home-is-not-a-project.rs"]

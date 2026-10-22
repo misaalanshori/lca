@@ -28,7 +28,39 @@ hosts = ["api.openai.com"]
 
 [capabilities.credentials]
 namespace = "openai-compatible"
+
+[capabilities.env]
+keys = [
+    "OPENAI_BASE_URL",
+    "OPENAI_API_KEY",
+    "OPENCODE_API_KEY",
+    "OPENAI_MODEL",
+    "LCA_MODEL",
+    "OPENAI_CONTEXT_WINDOW",
+    "OPENAI_PROMPT_CACHE_KEY",
+    "OPENAI_SUPPORTS_REASONING",
+]
 ```
+
+`[capabilities.env]` is what makes the environment work at all in the sandbox (gh
+#461, gh #170). A WASM component is instantiated with an empty `WasiCtx`, so
+`std::env::var` inside it answers `NotPresent` unless the manifest declares the name
+and the host forwards the value at load. Without this block the sandboxed provider
+behaved as if nothing were configured, while the compiled-in one read the host
+environment directly — which is why this provider's endpoint discovery once needed a
+hardcoded special case in `lca-cli` (`openai_ad_hoc_host`, gh #157) instead of reading
+its own variable. The list is the literals this crate reads, and the install consent
+names every one of them.
+
+**One limitation, stated rather than discovered: a named profile's key resolves from
+its stored credential under the sandbox.** The per-preset key names (`GROQ_API_KEY`,
+`OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`, and the rest of the table's `env` column)
+come from the `provider-presets.toml` resource at run time, so the manifest cannot
+enumerate them: a fixed list would go stale the moment a preset is added, and a broad
+grant is the disclosure the capability model exists to prevent. The native build still
+reads them from the process environment. A sandboxed user who wants a preset's key
+should store it through `/login` — which is what the provider's own documented
+precedence already prefers for a named profile.
 
 The static `net` grant covers the sensible default, OpenAI's own API, since that's the common case and a manifest declaring nothing at all would leave even the default configuration unable to connect. A user pointing this provider at a different OpenAI-compatible endpoint, which is the entire reason this provider exists, adds that host as an ad hoc grant through the same modal that asks for the base URL, per the ad hoc mechanism described in the capability catalog's `net` section. This is different from Antigravity or Codex, both of which talk to exactly one vendor and can name their full host set in the manifest up front; a manifest cannot declare "any host the user later types in," and a bare wildcard is rejected at install time for exactly that reason, so the ad hoc path is the correct mechanism here, not a workaround for one.
 
