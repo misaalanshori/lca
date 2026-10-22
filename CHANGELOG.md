@@ -7,6 +7,19 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Added
+- **Sandboxed extensions can read the environment variables they declare**
+  (gh #170). A WASM extension started with an empty environment, so an extension
+  that fell back to an API-key variable worked when compiled in and broke as a
+  `.wasm` — which is why one provider needed a hardcoded workaround. A manifest
+  can now declare `[capabilities.env] keys = ["SOME_KEY"]`, and the host puts
+  exactly those variables into the extension's sandbox when it starts it. Exact
+  names only: a wildcard would make the install screen say nothing, and the names
+  are the whole point of the approval. A declared variable the host does not have
+  is absent rather than empty (an empty key that looks present is how a provider
+  sends a blank credential), a declared name the user did not approve is absent
+  too, and the ambient environment is never forwarded — not even `PATH`. The
+  value is a secret the extension was given, so it never reaches the session log,
+  an export, or `ext info`; only the names do.
 - **A trusted folder no longer auto-approves inline program text** (gh #365). A
   trusted folder means trusting the code *in* it, so a command that runs a
   program string typed on the command line should ask — an earlier fix closed

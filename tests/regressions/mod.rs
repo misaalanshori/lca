@@ -791,3 +791,17 @@ mod preset_env_and_local_discovery;
 // unclassified argument.
 #[path = "365-inline-program-text.rs"]
 mod inline_program_text;
+// GitHub #170: a sandboxed WASM extension got an empty `WasiCtx`, so
+// `std::env::var` always answered `NotPresent` inside a component while a
+// native-linked extension read the host environment directly - the same
+// provider worked compiled-in and broke as a `.wasm`. The fix is a real
+// capability (#170 is a p2 capability addition, so it carries the catalog's
+// seven obligations: ADR, catalog entry, schema section, consent text, denial
+// behaviour, conformance entry, threat-model row). The model is *declared exact
+// names forwarded at instantiation*, enforced by context construction rather
+// than by a check, needing no new WIT import because `wasi:cli/environment`
+// already exists. Wildcards are refused for the same reason `net`'s bare `*`
+// was; an unset key is absent rather than `Some("")`; declared is not granted;
+// and the ambient environment is never forwarded, not even `PATH`.
+#[path = "170-env-capability.rs"]
+mod env_capability;

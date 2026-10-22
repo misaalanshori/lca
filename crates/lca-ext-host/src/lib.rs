@@ -41,6 +41,7 @@ use lca_protocol::{
     IdentityOutcome, ModelInfo, PostToolObservation, ToolCall, ToolResultStatus, ToolSpec, Usage,
 };
 use lca_tools::{Capabilities, CapabilityGrants, Denial, ResourceSource};
+use std::collections::BTreeMap;
 use wasmtime::component::{HasSelf, Linker, ResourceTable};
 use wasmtime::{Engine, Store, StoreLimits, StoreLimitsBuilder};
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
@@ -58,6 +59,10 @@ mod ui;
 pub use driver::{driver_exits, driver_spawns};
 use instance_cache::InstanceCache;
 pub use manifest::{LoadError, Manifest};
+
+#[path = "env_grant.rs"]
+mod env_grant;
+pub use env_grant::{declared_env, declared_env_approved, declared_env_from_process};
 use provider::{
     IdentityOp, identity_simple_work, identity_usage_work, login_options_work, login_submit_work,
     provider_models_work, provider_stream_work,
@@ -212,12 +217,31 @@ fn build_engine() -> Engine {
 pub struct ExtHost {
     limits: ExtensionLimits,
     env: Arc<HostEnvironment>,
+    /// The host environment the `env` capability resolves against (gh #170).
+    /// `None` means the real process environment, which is what a running
+    /// host uses; a test supplies a map so a grant can be exercised without
+    /// mutating the process-wide environment (which is unsafe across parallel
+    /// tests and would make every row depend on every other row).
+    env_vars: Option<BTreeMap<String, String>>,
 }
 
 impl ExtHost {
     /// Build the host with its resource limits and environment.
     pub fn new(limits: ExtensionLimits, env: Arc<HostEnvironment>) -> ExtHost {
-        ExtHost { limits, env }
+        ExtHost {
+            limits,
+            env,
+            env_vars: None,
+        }
+    }
+
+    /// Resolve the `env` capability against a supplied map instead of the
+    /// process environment (gh #170). Tests use this so a grant is exercised
+    /// by the row that cares about it, rather than by a process-wide variable
+    /// every parallel row would also see.
+    pub fn with_env_vars(mut self, vars: BTreeMap<String, String>) -> ExtHost {
+        self.env_vars = Some(vars);
+        self
     }
 
     /// The resolved limits new stores get.
@@ -317,6 +341,14 @@ impl ExtHost {
                 log_limit_bytes: self.limits.log_limit_bytes,
             },
             None => self.limits.clone(),
+        };
+        // Gh #170: resolve the declared `env` grant now, at load, so a bad
+        // manifest fails before the first call and the values are a
+        // load-time fact rather than something a guest can widen later.
+        // A manifest with no `env` capability resolves to an empty map.
+        let granted_env = match &self.env_vars {
+            Some(vars) => env_grant::declared_env(manifest_text, vars)?,
+            None => env_grant::declared_env_from_process(manifest_text)?,
         };
         let engine = build_engine();
         let component = wasmtime::component::Component::new(&engine, wasm)
@@ -468,6 +500,7 @@ impl ExtHost {
                 ui,
                 ui_regions: manifest.ui_regions.clone(),
                 manifest_text: manifest_text.to_string(),
+                granted_env,
                 limits: effective_limits,
                 enabled: Arc::new(AtomicBool::new(true)),
                 in_flight: AtomicU64::new(0),
@@ -499,6 +532,13 @@ struct Inner {
     engine: Engine,
     name: String,
     worlds: Vec<String>,
+    /// The `env` grant resolved at load (gh #170): the manifest's declared
+    /// names, intersected with what the host actually has. Applied to every
+    /// store this extension builds, so the enforcement is context
+    /// construction rather than a check the guest could reach around. Empty
+    /// for a manifest that declares no `env`, which is the pre-#170
+    /// behaviour exactly.
+    granted_env: BTreeMap<String, String>,
     tool: Option<ToolPre<HostState>>,
     /// The multi-tool suite (gh #77): instantiated when the manifest
     /// declares `tool-catalog`. A guest declaring both worlds serves
@@ -605,7 +645,15 @@ impl Inner {
         if !self.enabled.load(Ordering::SeqCst) {
             return Err(CallError::Disabled);
         }
-        let wasi = wasmtime_wasi::WasiCtx::builder().build();
+        // Gh #170: the only variables this component can see are the ones the
+        // manifest declared and the host has. Never the ambient environment -
+        // not even `PATH` - because a forwarded `PATH` is both an information
+        // leak and a native/WASM mode difference nobody would expect.
+        let mut wasi_builder = wasmtime_wasi::WasiCtx::builder();
+        for (name, value) in &self.granted_env {
+            wasi_builder.env(name, value);
+        }
+        let wasi = wasi_builder.build();
         let mut store = Store::new(
             &self.engine,
             HostState {
