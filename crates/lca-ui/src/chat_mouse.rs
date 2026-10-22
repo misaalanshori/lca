@@ -13,7 +13,6 @@ use super::ext_widgets::{ButtonHit, widget_render};
 use super::render::{TOOLTIP_MAX_WIDTH, paint_tooltip, tooltip_lines, tooltip_place};
 use crate::transcript::EntryHit;
 use lca_tui::engine::core::{OverlayOptions, Rect, SizeValue, resolve_overlay_layout};
-use lca_tui::engine::keybindings::key_text;
 use lca_tui::engine::text::visible_width;
 use std::time::Instant;
 
@@ -768,11 +767,14 @@ impl Chat {
             if row == 0 {
                 return Some(format!(
                     "Previous prompt · {}",
-                    key_text("app.prompt.previous")
+                    self.keybindings.display_keys("app.prompt.previous")
                 ));
             }
             if row + 1 >= geometry.rows {
-                return Some(format!("Next prompt · {}", key_text("app.prompt.next")));
+                return Some(format!(
+                    "Next prompt · {}",
+                    self.keybindings.display_keys("app.prompt.next")
+                ));
             }
             return None;
         }
@@ -800,7 +802,7 @@ impl Chat {
         {
             return Some(format!(
                 "Back to latest · {}",
-                key_text("tui.altScreen.bottom")
+                self.keybindings.display_keys("tui.altScreen.bottom")
             ));
         }
         // The same window math `click_at` hit-tests by (gh #35).
@@ -812,7 +814,7 @@ impl Chat {
         {
             Some(EntryHit::Thinking(_)) => Some(format!(
                 "Cycle thinking · {}",
-                key_text("app.thinking.toggle")
+                self.keybindings.display_keys("app.thinking.toggle")
             )),
             Some(EntryHit::ToolHeader(index) | EntryHit::ToolBody(index)) => {
                 match self.transcript.tool_card_expanded(index) {

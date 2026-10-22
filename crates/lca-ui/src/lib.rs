@@ -16,6 +16,7 @@ mod chat_keys;
 mod chat_modals;
 mod chat_models;
 mod chat_mouse;
+mod chat_notices;
 mod chat_overlays;
 mod chat_pickers;
 mod chat_poll;

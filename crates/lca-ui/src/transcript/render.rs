@@ -49,6 +49,70 @@ fn markdown_options(
     }
 }
 
+/// The startup key-hint line (gh #23): pi prints
+/// `escape interrupt · ctrl+c/ctrl+d clear/exit · / commands` at startup; this is
+/// our wording on pi's shape, resolved from the **live** keybindings so a rebind
+/// reaches it (gh #410).
+pub(crate) fn startup_hint(
+    keybindings: &lca_tui::engine::keybindings::KeybindingsManager,
+) -> String {
+    format!(
+        "{} interrupt · {} clear/exit · / commands",
+        keybindings.display_keys("app.interrupt"),
+        keybindings.display_keys("app.clear"),
+    )
+}
+
+/// A key hint in the theme's own roles: the key **dim**, the description
+/// **muted** (gh #410, pi's `keyHint`).
+///
+/// There is deliberately **one** form and it always takes the live manager. An
+/// overload that skipped the manager and used the default table would be exactly
+/// the shape this cycle removes: a helper whose name promises a live label and
+/// hands back a default. A caller with no interface around it passes
+/// `&KeybindingsManager::new()` and gets the shipped defaults, explicitly.
+///
+/// Returns **empty** when the action is unbound, so a caller can omit the hint
+/// rather than render a blank key press. `description` is optional because some
+/// hints are just the key.
+pub(crate) fn render_key_hint(
+    theme: &Theme,
+    keybindings: &lca_tui::engine::keybindings::KeybindingsManager,
+    action: &str,
+    description: Option<&str>,
+) -> String {
+    let keys = keybindings.display_keys(action);
+    if keys.is_empty() {
+        return String::new();
+    }
+    let mut hint = (theme.role(Role::Dim))(&keys);
+    if let Some(description) = description {
+        hint.push_str(&(theme.role(Role::Muted))(&format!(" {description}")));
+    }
+    hint
+}
+
+/// [`render_key_hint`] in the parenthesised form these sentences use:
+/// `" (ctrl+o to expand)"`, or **nothing at all** when the action is unbound.
+///
+/// The empty form is the point (gh #410 design point 5): a user who unbinds
+/// `app.tools.expand` gets `… +12 lines`, not `… +12 lines ()` and not a blank
+/// key press. The parentheses live here, so a caller cannot accidentally leave
+/// half a clause behind.
+fn paren_hint(
+    theme: &Theme,
+    keybindings: &lca_tui::engine::keybindings::KeybindingsManager,
+    action: &str,
+    description: &str,
+) -> String {
+    let hint = render_key_hint(theme, keybindings, action, Some(description));
+    if hint.is_empty() {
+        String::new()
+    } else {
+        format!(" ({hint})")
+    }
+}
+
 // Eight rendering inputs plus the sink; like `render_assistant` below,
 // a context struct is the upgrade if a ninth arrives.
 #[allow(clippy::too_many_arguments)]
@@ -61,6 +125,7 @@ pub(super) fn render_entry(
     codeblock_border: CodeBlockBorder,
     transformers: &[MarkdownTransformer],
     tuning: &crate::state::DisplayTuning,
+    keybindings: &lca_tui::engine::keybindings::KeybindingsManager,
     out: &mut Vec<String>,
 ) -> usize {
     match entry {
@@ -92,10 +157,11 @@ pub(super) fn render_entry(
             codeblock_border,
             transformers,
             tuning,
+            keybindings,
             out,
         ),
         Entry::Tool { .. } => {
-            render_tool(entry, tools_expanded, width, theme, out);
+            render_tool(entry, tools_expanded, width, theme, keybindings, out);
             0
         }
         Entry::Notice(text) => {
@@ -104,6 +170,14 @@ pub(super) fn render_entry(
         }
         Entry::Error(text) => {
             out.extend(wrap_text_with_ansi(&(theme.error)(text), width as usize));
+            0
+        }
+        Entry::StartupHint => {
+            // pi's startup shape, our wording; the keys come from the live
+            // manager so a rebind reaches the first line a user reads (gh #410).
+            // Dim, as the line was before it became a live entry - the first
+            // version of this dropped the styling, which a real pane caught.
+            out.push((theme.role(Role::Dim))(&startup_hint(keybindings)));
             0
         }
         Entry::Raw(text) => {
@@ -234,6 +308,7 @@ fn render_assistant(
     codeblock_border: CodeBlockBorder,
     transformers: &[MarkdownTransformer],
     tuning: &crate::state::DisplayTuning,
+    keybindings: &lca_tui::engine::keybindings::KeybindingsManager,
     out: &mut Vec<String>,
 ) -> usize {
     let start = out.len();
@@ -286,12 +361,9 @@ fn render_assistant(
                     }
                     if lines.len() > SNIPPET_LINES {
                         out.push(format!(
-                            "  {}",
-                            (theme.reasoning)(&format!(
-                                "… +{} lines ({} to expand)",
-                                lines.len() - SNIPPET_LINES,
-                                lca_tui::engine::keybindings::key_text("app.thinking.toggle")
-                            ))
+                            "  {}{}",
+                            (theme.reasoning)(&format!("… +{} lines", lines.len() - SNIPPET_LINES)),
+                            paren_hint(theme, keybindings, "app.thinking.toggle", "to expand")
                         ));
                     }
                 }
@@ -299,11 +371,9 @@ fn render_assistant(
             ThinkingVisibility::Hidden => {
                 // pi's original: one dim line (`messages.md` §3).
                 out.push(format!(
-                    "  {}",
-                    (theme.reasoning)(&format!(
-                        "Thinking… ({} to expand)",
-                        lca_tui::engine::keybindings::key_text("app.thinking.toggle")
-                    ))
+                    "  {}{}",
+                    (theme.reasoning)("Thinking…"),
+                    paren_hint(theme, keybindings, "app.thinking.toggle", "to expand")
                 ));
             }
         }
@@ -383,7 +453,14 @@ fn json_string_field(args: &str, key: &str) -> Option<String> {
     None
 }
 
-fn render_tool(entry: &Entry, expanded: bool, width: u16, theme: &Theme, out: &mut Vec<String>) {
+fn render_tool(
+    entry: &Entry,
+    expanded: bool,
+    width: u16,
+    theme: &Theme,
+    keybindings: &lca_tui::engine::keybindings::KeybindingsManager,
+    out: &mut Vec<String>,
+) {
     let Entry::Tool {
         name,
         args,
@@ -495,14 +572,13 @@ fn render_tool(entry: &Entry, expanded: bool, width: u16, theme: &Theme, out: &m
             rows.push(format!("  {}", (theme.role(diff_role(line)))(&clipped)));
         }
         if lines.len() > preview {
-            rows.push(format!(
-                "  {}",
-                (theme.role(Role::Muted))(&format!(
-                    "… ({} more lines, {} to expand)",
-                    lines.len() - preview,
-                    lca_tui::engine::keybindings::key_text("app.tools.expand")
-                ))
-            ));
+            let key = render_key_hint(theme, keybindings, "app.tools.expand", None);
+            let shape = if key.is_empty() {
+                format!("… ({} more lines)", lines.len() - preview)
+            } else {
+                format!("… ({} more lines, {key} to expand)", lines.len() - preview)
+            };
+            rows.push(format!("  {}", (theme.role(Role::Muted))(&shape)));
         }
     }
     // pi shows a bounded preview of command output (`bash.ts`
@@ -529,13 +605,13 @@ fn render_tool(entry: &Entry, expanded: bool, width: u16, theme: &Theme, out: &m
             // tail for shells - `preview.rs` carries the why.
             let built = super::preview::build_preview(name, body, inner.saturating_sub(2));
             let marker = |omitted: usize| {
-                format!(
-                    "  {}",
-                    (theme.role(Role::Muted))(&format!(
-                        "… ({omitted} earlier lines, {} to expand)",
-                        lca_tui::engine::keybindings::key_text("app.tools.expand")
-                    ))
-                )
+                let key = render_key_hint(theme, keybindings, "app.tools.expand", None);
+                let shape = if key.is_empty() {
+                    format!("… ({omitted} earlier lines)")
+                } else {
+                    format!("… ({omitted} earlier lines, {key} to expand)")
+                };
+                format!("  {}", (theme.role(Role::Muted))(&shape))
             };
             // The omission marker names what precedes a tail, so it sits
             // above it; a head preview names what follows, so below.
@@ -550,11 +626,9 @@ fn render_tool(entry: &Entry, expanded: bool, width: u16, theme: &Theme, out: &m
             }
         } else if total > 1 {
             rows.push(format!(
-                "  {}",
-                (theme.role(Role::Muted))(&format!(
-                    "… ({} to expand)",
-                    lca_tui::engine::keybindings::key_text("app.tools.expand")
-                ))
+                "  {}{}",
+                (theme.role(Role::Muted))("…"),
+                paren_hint(theme, keybindings, "app.tools.expand", "to expand")
             ));
         }
     }
