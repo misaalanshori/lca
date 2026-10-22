@@ -900,3 +900,19 @@ mod nested_call_flood;
 // `lca-ui/src/footer/meter.rs`.
 #[path = "464-tokens-per-second-plausible.rs"]
 mod tokens_per_second_plausible;
+
+// GitHub #462: the tab-switch refusal defeated the primary reason tabs exist.
+// #209 specified that switching tabs while an agent generates in Tab 1 does not
+// cancel Tab 1's turn - it keeps streaming in the background, its item pulses,
+// and an unread badge appears when it settles. The shipped implementation
+// refused `open_tab`, `select_tab`, and `close_tab` mid-turn instead, and
+// `chat_tab_tests::tab_moves_refuse_mid_turn` pinned that refusal as expected
+// behaviour (sanctioned to change by this cycle's brief).
+//
+// The turn now belongs to the tab: `begin_turn` pins the owner, every event is
+// routed by it, a background tab carries its own transcript and session totals,
+// and `Ctrl+C` cancels only what the reader can see. The behaviour rows live
+// beside the code (`chat::tests::tab_tests`); this file guards the wiring at
+// the seams - the key handler, the tab bar, and the per-session accounting.
+#[path = "462-background-turns-across-tabs.rs"]
+mod background_turns_across_tabs;
