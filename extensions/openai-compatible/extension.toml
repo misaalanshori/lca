@@ -8,6 +8,17 @@ resources = ["provider-presets.toml", "context-windows.toml", "image-limits.toml
 [capabilities.net]
 hosts = ["api.openai.com"]
 
+# Gh #294: the `ollama` and `lmstudio` presets point at
+# `http://localhost:<port>/v1`, so model discovery there is refused by the
+# `net` rules above (which reach only `api.openai.com`, and never a loopback
+# address at all - FR-PERM-13's rebinding rule). The minimum that makes those
+# two presets work: the literal loopback names they actually use. No CIDR
+# block and no `*.local`, because a preset for "a server on this machine"
+# never needs a LAN device, and a broad grant to fix a loopback problem is
+# the failure mode the capability model exists to prevent (ADR-0011).
+[capabilities.net-local]
+addresses = ["localhost", "127.0.0.1"]
+
 [capabilities.credentials]
 namespace = "openai-compatible"
 

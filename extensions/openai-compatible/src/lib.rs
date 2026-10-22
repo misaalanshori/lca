@@ -46,6 +46,15 @@ pub fn manifest_grants() -> lca_tools::CapabilityGrants {
             lca_permissions::parse_net_pattern("api.openai.com")
                 .expect("the manifest's own host pattern parses"),
         ],
+        // Gh #294: the `ollama`/`lmstudio` presets reach a loopback server,
+        // which `net` refuses by design (FR-PERM-13). Declared at the minimum
+        // the two presets actually use - no CIDR, no `*.local` (ADR-0011).
+        net_local: vec![
+            lca_permissions::parse_local_pattern("localhost")
+                .expect("the literal loopback name parses"),
+            lca_permissions::parse_local_pattern("127.0.0.1")
+                .expect("the literal loopback address parses"),
+        ],
         credentials: true,
         ..Default::default()
     }
@@ -208,8 +217,14 @@ impl<'a, C: ProviderCap + ?Sized> StreamDriver<'a, C> {
         // `reasoning-effort`; map it to the endpoint's reasoning parameter
         // when the endpoint has one, and ignore it otherwise (a hint,
         // honored where meaningful, never an error).
+        // R1: the *preset* decides, because the preset is the endpoint's own
+        // row (`opencode-go` declares `supports_reasoning`); the global
+        // setting covers only the endpoint-read-from-environment path where no
+        // preset names it. Consulted per request, off the profile this
+        // request routes to - a static `Settings` flag set at construction
+        // cannot know which profile the model selected (gh #294).
         if let Some(effort) = request.extras.get("reasoning-effort")
-            && settings.supports_reasoning
+            && profiles::supports_reasoning_for(cap, settings, &profile)
         {
             body["reasoning_effort"] = serde_json::Value::String(effort.clone());
         }
@@ -777,8 +792,10 @@ pub fn login_options(cap: &dyn ProviderCap) -> Vec<lca_protocol::LoginOption> {
         .collect()
 }
 
-/// The host portion of a base URL (for the ad hoc `net` consent).
-pub(crate) fn host_of(base_url: &str) -> String {
+/// The host portion of a base URL (for the ad hoc `net` consent, and for the
+/// guard that checks every preset's host against the declared grants -
+/// gh #294).
+pub fn host_of(base_url: &str) -> String {
     let without_scheme = base_url.split("://").nth(1).unwrap_or(base_url);
     without_scheme
         .split('/')
@@ -796,7 +813,10 @@ pub(crate) fn host_of(base_url: &str) -> String {
 /// hoc grant is offered *after* submit, so a first login often cannot
 /// reach the network here) - and the caller falls back to the preset's
 /// curated short list.
-pub(crate) fn discover_models(
+/// Public because gh #294's guard drives the real discovery path against a
+/// loopback mock to prove the manifest's own grant is enough - a row that built
+/// its own request would not have caught the defect.
+pub fn discover_models(
     cap: &dyn ProviderCap,
     base_url: &str,
     key: Option<&str>,

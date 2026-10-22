@@ -733,3 +733,65 @@ fn the_environment_derived_settings_key_never_reaches_a_named_profile() {
         );
     });
 }
+
+// Verifies: gh #294 - the *active preset* decides whether the endpoint
+// honors a reasoning parameter, and a profile whose id is not in the table
+// falls back to the ambient setting (the endpoint-read-from-environment path).
+//
+// The defect: `StreamDriver::open` resolves a `profile` per request, but the
+// reasoning gate read `Settings.supports_reasoning` - a flag fixed at
+// construction from `OPENAI_SUPPORTS_REASONING`. So `opencode-go` declared
+// `supports_reasoning = true` and the declaration was inert, while an
+// undeclared preset inherited whatever the environment happened to say.
+#[test]
+fn the_active_preset_decides_reasoning_support() {
+    let cap = cap();
+    let ambient = |flag: bool| Settings {
+        supports_reasoning: flag,
+        ..settings_for("https://example.test/v1", None)
+    };
+
+    // A named profile whose id IS a declaring preset: on, whatever the ambient
+    // setting says.
+    for ambient_flag in [false, true] {
+        let profile = Some("opencode-go".to_string());
+        assert!(
+            profiles::supports_reasoning_for(&cap, &ambient(ambient_flag), &profile),
+            "the `opencode-go` preset declares reasoning support (ambient={ambient_flag})"
+        );
+    }
+    // A named profile whose preset does not declare it: off, even with the
+    // ambient setting on. This is the half a static flag cannot get right.
+    for id in ["deepseek", "groq", "ollama"] {
+        let profile = Some(id.to_string());
+        assert!(
+            !profiles::supports_reasoning_for(&cap, &ambient(true), &profile),
+            "`{id}` does not declare reasoning support, so it must not inherit \
+             the ambient setting"
+        );
+    }
+    // The default profile reads the endpoint's remembered preset, so the same
+    // rule applies without a profile id.
+    cap.credentials_set("preset", "opencode-go").expect("seed");
+    assert!(
+        profiles::supports_reasoning_for(&cap, &ambient(false), &None),
+        "the default profile follows its remembered preset"
+    );
+    cap.credentials_set("preset", "deepseek").expect("seed");
+    assert!(
+        !profiles::supports_reasoning_for(&cap, &ambient(true), &None),
+        "a remembered preset that does not declare it stays off"
+    );
+    // A profile with no preset row at all (a bare endpoint from the
+    // environment) keeps the ambient answer - that path has no declaration to
+    // read, and dropping it would break `OPENAI_SUPPORTS_REASONING`.
+    let orphan = Some("no-such-preset".to_string());
+    assert!(
+        profiles::supports_reasoning_for(&cap, &ambient(true), &orphan),
+        "no preset row means the ambient setting still applies"
+    );
+    assert!(
+        !profiles::supports_reasoning_for(&cap, &ambient(false), &orphan),
+        "and its off answer is honoured too"
+    );
+}

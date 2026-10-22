@@ -749,3 +749,14 @@ mod conformance_rows_compile_once;
 // still relying on the default.
 #[path = "303-shared-prompt-forwards-annotations.rs"]
 mod shared_prompt_forwards_annotations;
+// GitHub #294: a preset's declared `env` names were parsed and never read
+// (fixed in e51dcab5, gh #292), its `supports_reasoning` declaration was inert
+// because the reasoning gate read a static environment-derived setting instead
+// of the resolved profile's preset, and the `ollama`/`lmstudio` presets could
+// not discover models because the manifest declared `net` for one internet host
+// and `net` refuses a loopback address by design (FR-PERM-13). The manifest now
+// carries `net-local` for exactly `localhost` and `127.0.0.1` - not a CIDR, not
+// `*.local` - and the guard asserts the declared set, because a too-broad grant
+// would pass a behaviour-only row.
+#[path = "294-preset-env-and-local-discovery.rs"]
+mod preset_env_and_local_discovery;

@@ -7,6 +7,19 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Added
+- **Preset declarations are load-bearing** (gh #294). Two provider presets
+  pointed at a local server and could not list their models: the manifest
+  reached only the internet host, and a loopback address is refused outright
+  rather than consented to later, so choosing `Ollama` or `LM Studio` failed
+  before it started. The manifest now carries the narrowest possible local
+  grant — `localhost` and `127.0.0.1`, no address block and no network
+  wildcard. Separately, a preset's `supports_reasoning` declaration was parsed
+  and ignored: the request consulted a single setting fixed at startup rather
+  than the preset the chosen model routes to, so the one preset that declares
+  reasoning support never used it and every other preset silently inherited
+  whatever the environment said. The preset now decides, and a preset that
+  declares nothing stays off. Discovery failing still lets a user sign in and
+  fall back to the preset's curated model list, never a blocked login.
 - **Approval prompts name a tool's own hints** (gh #303). A tool can declare
   what it does — `read-only`, `destructive`, `open-world` — and the permission
   modal now shows them where the decision is made: a `shell` call's prompt reads

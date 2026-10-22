@@ -35,7 +35,10 @@ accepted), `OPENAI_MODEL` (`LCA_MODEL` also accepted),
 `OPENAI_CONTEXT_WINDOW`, `OPENAI_PROMPT_CACHE_KEY=0` to stop sending
 the cache-affinity key, `OPENAI_SUPPORTS_REASONING=0` to stop sending
 `reasoning_effort`. The last two exist for strict proxies that
-reject unknown body fields. Other provider extensions define their
+reject unknown body fields. `OPENAI_SUPPORTS_REASONING` applies only
+where no preset names the endpoint: when the active preset declares
+`supports_reasoning` its own declaration decides (gh #294), and a preset
+that does not declare it stays off rather than inheriting this variable. Other provider extensions define their
 own variables; check their pages under
 [providers](providers/openai-compatible.md).
 

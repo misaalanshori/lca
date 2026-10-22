@@ -160,12 +160,16 @@ fn login_without_a_key_says_what_to_do_and_usage_is_not_supported() {
 // no socket is ever opened.
 #[test]
 fn transport_refuses_without_a_grant_and_records_the_denial() {
-    // No ad hoc grant: nothing in the manifest covers the loopback test
-    // server, exactly as an unconsented host would be uncovered.
+    // Gh #294: the manifest now declares `net-local` for `localhost` and
+    // `127.0.0.1` (the two `ollama`/`lmstudio` presets need it), so a
+    // loopback target is *granted* now - this row used to reach an ungranted
+    // host through 127.0.0.1, and that premise is deliberately gone. The
+    // property under test is unchanged, so the target is now a host no grant
+    // covers: an ordinary internet name the manifest never declared.
     let cap = sandbox("denied", false);
     let handle = openai_compatible::OpenAiCompat::with_settings(
         cap.clone(),
-        settings_for("http://127.0.0.1:9", None),
+        settings_for("http://ungranted.example.com/v1", None),
     );
     let sink = Collect::default();
     let outcome = run_stream(&handle, &sink);
@@ -175,8 +179,17 @@ fn transport_refuses_without_a_grant_and_records_the_denial() {
         "the engine refused it: {err}"
     );
     assert_eq!(cap.denials().len(), 1, "{}", cap.denial_count());
-    assert_eq!(cap.denials()[0].capability, "net");
-    assert!(cap.denials()[0].reason.contains("127.0.0.1"));
+    // Gh #294: the recorded family is whichever this sandbox declared -
+    // `net-local` now that the manifest carries a local grant family at all,
+    // per the engine's documented rule (an unmatched target is recorded under
+    // the family that was declared, `net` only when none was). Asserting
+    // "net" here would pin the pre-#294 grant table, not the property.
+    assert!(
+        matches!(cap.denials()[0].capability.as_str(), "net" | "net-local"),
+        "recorded as a network denial: {}",
+        cap.denials()[0].capability
+    );
+    assert!(cap.denials()[0].reason.contains("ungranted.example.com"));
 }
 
 // Verifies: FR-PROV-7's shape through the real transport — a canned SSE
