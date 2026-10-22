@@ -176,16 +176,45 @@ fn flow_grant_for(url: &str) -> Option<String> {
     Some(format!("{host}:{port}"))
 }
 
-/// The origin (`scheme://host[:port]`) of a URL.
+/// The origin (`scheme://host[:port]`) of a URL, userinfo stripped.
+///
+/// gh #467: the first version split the whole URL on `/` with `splitn(4, '/')`
+/// and rejected the **second** piece. For `http://h:1/mcp` that piece is the
+/// empty string *between the two slashes of `//`* - empty for every well-formed
+/// URL - so the guard fired on exactly the input it was written for and
+/// `origin_of` could never succeed. It survived because it is the last resort
+/// in [`discover`] and nothing tested the branch that reaches it.
+///
+/// So this parses instead of pattern-matching: scheme, then authority, then
+/// cut the authority at the path/query/fragment. `checked_endpoint` already
+/// knows how to read an authority (userinfo, an IPv6 literal's brackets, the
+/// port), and an origin that disagrees with it about "which host is this"
+/// would be a second, quietly different answer to the same question.
+///
+/// The scheme is lowercased because a grant lookup is an exact string compare:
+/// `HTTP://h` must not reach a host check as a different scheme.
 fn origin_of(url: &str) -> Result<String, String> {
-    let mut parts = url.splitn(4, '/');
-    let scheme = parts.next().unwrap_or("");
-    let empty = parts.next().unwrap_or("");
-    let host = parts.next().unwrap_or("");
-    if scheme.is_empty() || empty.is_empty() || host.is_empty() {
-        return Err(format!("cannot take the origin of {url:?}"));
+    let (scheme, rest) = url
+        .split_once("://")
+        .ok_or_else(|| format!("cannot take the origin of {url:?}: it has no scheme"))?;
+    let scheme = scheme.to_ascii_lowercase();
+    // The authority ends at the path, the query, or the fragment - whichever
+    // comes first. `split('/')` alone would keep `example.com?q=1` whole.
+    let authority = rest.find(['/', '?', '#']).map_or(rest, |cut| &rest[..cut]);
+    // `checked_endpoint` validates the shape (a scheme we speak, plain http only
+    // on loopback) and reads the host past any userinfo; `rsplit('@')` is where
+    // the credential is dropped.
+    let (_, host) = checked_endpoint(url, "the MCP origin")?;
+    if authority.is_empty() || host.is_empty() {
+        return Err(format!(
+            "cannot take the origin of {url:?}: it names no host"
+        ));
     }
-    Ok(format!("{scheme}//{host}"))
+    // Keep the port: an IdP on an ephemeral loopback port is exactly the case
+    // this fallback serves, and `flow_grant_for` keys its grant by host *and*
+    // port for the same reason.
+    let authority_no_user = authority.rsplit('@').next().unwrap_or(authority);
+    Ok(format!("{scheme}://{authority_no_user}"))
 }
 
 /// Find the authorization server: the configured metadata document
@@ -626,4 +655,124 @@ pub fn via_copy(server: &HttpServerConfig, hosts: &[String]) -> String {
         registration_endpoint: None,
     }
     .via_report(server, hosts)
+}
+
+#[cfg(test)]
+mod origin_tests {
+    //! gh #467: `origin_of` must parse a real URL.
+    //!
+    //! These rows are unit-level on purpose: the defect survived because
+    //! nothing asserted that a *well-formed* URL succeeds. The branch-level
+    //! rows (that `discover` actually falls back) live in
+    //! `tests/oauth.rs::discovery_falls_back_to_the_servers_own_origin`,
+    //! because that is where the fallback is reachable at all.
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code
+
+    use super::origin_of;
+
+    // Verifies: gh #467 - the row whose absence let a function that cannot
+    // succeed survive. Every one of these used to return an error.
+    #[test]
+    fn an_origin_is_the_scheme_and_authority_of_a_real_url() {
+        for (url, expected) in [
+            ("http://127.0.0.1:49388/mcp", "http://127.0.0.1:49388"),
+            ("http://127.0.0.1:49388", "http://127.0.0.1:49388"),
+            ("https://example.com", "https://example.com"),
+            ("https://example.com/", "https://example.com"),
+            (
+                "https://example.com:8443/a/b?q=1#frag",
+                "https://example.com:8443",
+            ),
+            ("https://example.com?q=1", "https://example.com"),
+            ("https://example.com#frag", "https://example.com"),
+        ] {
+            assert_eq!(
+                origin_of(url).unwrap_or_else(|err| panic!("{url:?} has an origin: {err}")),
+                expected,
+                "the origin of {url:?}"
+            );
+        }
+    }
+
+    // Verifies: gh #467 design point 1 - userinfo is stripped. A credential
+    // must never reach a string that gets compared against a host grant or
+    // written into a discovery note.
+    #[test]
+    fn credentials_never_survive_into_the_origin() {
+        for (url, expected) in [
+            ("https://user:pw@example.com/mcp", "https://example.com"),
+            (
+                "https://token@example.com:9000/x",
+                "https://example.com:9000",
+            ),
+            ("http://a:b@127.0.0.1:8080", "http://127.0.0.1:8080"),
+        ] {
+            let origin = origin_of(url).unwrap_or_else(|err| panic!("{url:?}: {err}"));
+            assert_eq!(origin, expected, "the origin of {url:?}");
+            assert!(
+                !origin.contains('@'),
+                "no userinfo survives: {origin:?} from {url:?}"
+            );
+            assert!(!origin.contains("pw"), "and not the value: {origin:?}");
+        }
+    }
+
+    // Verifies: gh #467 design point 1 - an IPv6 literal keeps its brackets,
+    // and the colons inside it are not a port. `checked_endpoint` learned this
+    // the hard way; an origin string that split on ':' would mangle every v6
+    // host into `http://[::1`.
+    #[test]
+    fn an_ipv6_literal_keeps_its_brackets_and_its_port() {
+        for (url, expected) in [
+            ("http://[::1]:8080/mcp", "http://[::1]:8080"),
+            ("http://[::1]/mcp", "http://[::1]"),
+            ("https://[2001:db8::1]:443/x", "https://[2001:db8::1]:443"),
+        ] {
+            assert_eq!(
+                origin_of(url).unwrap_or_else(|err| panic!("{url:?}: {err}")),
+                expected,
+                "the origin of {url:?}"
+            );
+        }
+    }
+
+    // Verifies: gh #467 - a scheme-less string is refused, and the message
+    // names the input. This is the *real* input error the old guard was
+    // pretending to be.
+    #[test]
+    fn a_url_with_no_scheme_is_refused_and_named() {
+        for url in ["example.com/mcp", "/mcp", "127.0.0.1:8080"] {
+            let err = origin_of(url).expect_err("a scheme-less string has no origin");
+            assert!(
+                err.contains(url),
+                "the refusal names the input {url:?}: {err}"
+            );
+        }
+    }
+
+    // Verifies: gh #467 - an empty authority is refused rather than becoming
+    // `http://`, which would be a URL that resolves to nothing and a grant
+    // that matches nothing - a silent failure dressed as success.
+    #[test]
+    fn an_empty_authority_is_refused() {
+        for url in ["http:///mcp", "https://", "http://"] {
+            let err = origin_of(url).expect_err("no authority, no origin");
+            assert!(
+                err.contains(url),
+                "the refusal names the input {url:?}: {err}"
+            );
+        }
+    }
+
+    // Verifies: gh #467 - the scheme keeps its case-insensitive identity but a
+    // grant lookup is exact, so a mixed-case scheme normalises rather than
+    // reaching a comparison as `HTTP://`. `checked_endpoint` lowercases for the
+    // same reason.
+    #[test]
+    fn a_mixed_case_scheme_normalises() {
+        assert_eq!(
+            origin_of("HTTPS://Example.com/x").expect("an origin"),
+            "https://Example.com"
+        );
+    }
 }
