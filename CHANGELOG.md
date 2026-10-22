@@ -7,6 +7,21 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **Launching from `$HOME` no longer warns that every installed extension is a
+  broken project extension** (gh #463). The project-extension directory is
+  `<cwd>/.lca/extensions` and the data home is `~/.lca/extensions`; from `$HOME`
+  they are the same place, so the scan read the install tree — whose components are
+  named `sha256-<digest>.wasm`, never `component.wasm` — and printed
+  `warning: skipping project extension ...: no component.wasm` for every globally
+  installed extension, then loaded it successfully. Wrong twice. The scan is
+  now skipped when the two directories are the same place, compared **canonically**
+  (a symlinked `$HOME`, macOS's `/var` → `/private/var`, and Windows's `\\?\`
+  prefix all defeat a string compare — the third cycle in a row for that class). The
+  same confusion on the project-trust prompt is closed with it: from `$HOME`, the
+  installed extensions no longer make the TUI offer "Trust this project folder?". A
+  **genuine** project extension missing its component still warns, and a row pins
+  that so the diagnostic cannot be disabled by accident.
+
 - **A flag whose value is a program — or a shell string — now reviews instead of
   auto-approving** (gh #458). The same class gh #347 closed for evaluator flags and
   gh #365 closed for positional program text, reached another way. `vim -c ':!id' f`,
