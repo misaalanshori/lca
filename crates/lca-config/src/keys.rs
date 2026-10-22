@@ -171,6 +171,9 @@ pub const KNOWN_KEYS: &[&str] = &[
 /// is equally a table. Keeping one list of table-shaped keys is what makes
 /// the walk and the catalogue agree by construction.
 pub const TABLE_KEYS: &[&str] = &[
+    // Gh #412: persona names are user-shaped, and each one's fields are validated
+    // by `persona::parse_personas` rather than by the generic walk.
+    "personas",
     "thinking.budgets",
     "models.thinking_levels",
     "extensions.catalogs",
@@ -469,4 +472,8 @@ pub enum TypedValue {
     Bool(bool),
     /// A validated color mode.
     Color(ColorMode),
+    /// The `[personas]` bundles (gh #412), as written. The layer is carried
+    /// alongside by `Config::apply_personas`, because whether a persona may apply
+    /// depends on which file defined it (FR-PERM-9).
+    Personas(BTreeMap<String, crate::persona::Persona>),
 }

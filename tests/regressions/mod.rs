@@ -752,6 +752,11 @@ mod description_matches_code;
 #[path = "261-deny-rule-actually-matches.rs"]
 mod deny_rule_actually_matches;
 
+// Gh #412: `/persona` applies a bundle of model, thinking, loadout and
+// instructions atomically, or nothing at all.
+#[path = "412-persona-bundle-atomic.rs"]
+mod persona_bundle_atomic;
+
 // Gh #411: the diagnostic bundle is scrubbed before it is written, and the user
 // inspects it first - while the session log on disk is never touched.
 #[path = "411-bug-bundle-redaction.rs"]
