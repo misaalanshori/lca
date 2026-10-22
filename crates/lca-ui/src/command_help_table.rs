@@ -34,6 +34,7 @@ pub(crate) fn command_help(command: &str) -> &'static str {
         "/logout" => "clear the provider's stored key",
         "/usage" => "show the provider's usage, when it has one",
         "/model" => "list or switch the session's model",
+        "/persona" => "apply a named bundle of model, thinking, tools, and instructions",
         "/compact" => "summarize the session to free context",
         "/attach" => "attach an image to the next message",
         "/paste" => "paste the clipboard image to the next message",

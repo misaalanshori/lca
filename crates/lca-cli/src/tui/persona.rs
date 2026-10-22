@@ -13,7 +13,7 @@
 
 use std::sync::Arc;
 
-use lca_ui::state::PersonaBundle;
+use lca_ui::PersonaBundle;
 
 impl super::Ui {
     /// Whether this project is trusted, for the persona listing.
@@ -177,4 +177,44 @@ fn registered_tools(registry: &lca_core::ExtensionRegistry) -> Vec<String> {
     names.sort();
     names.dedup();
     names
+}
+
+impl super::Ui {
+    /// `/persona`'s listing seam (gh #412).
+    pub(super) fn persona_list_hook(self: &Arc<Self>) -> Option<lca_ui::PersonaList> {
+        let ui = self.clone();
+        Some(Arc::new(move || {
+            let trusted = ui.is_trusted();
+            crate::lock(&ui.config)
+                .personas()
+                .available(trusted)
+                .into_iter()
+                .map(|(name, persona, _source)| lca_ui::PersonaBundle {
+                    name: name.to_string(),
+                    model: persona.model.clone(),
+                    thinking: persona.thinking.clone(),
+                    tools: persona.tools.clone(),
+                    instructions: persona.instructions.clone(),
+                })
+                .collect()
+        }))
+    }
+}
+
+impl super::Ui {
+    /// `/persona`'s validate-before-apply seam (gh #412).
+    pub(super) fn persona_check_hook(self: &Arc<Self>) -> Option<lca_ui::PersonaCheck> {
+        let ui = self.clone();
+        Some(Arc::new(move |bundle: &lca_ui::PersonaBundle| {
+            ui.persona_check(bundle)
+        }))
+    }
+
+    /// `/persona`'s apply seam (gh #412), called only after the check passed.
+    pub(super) fn persona_apply_hook(self: &Arc<Self>) -> Option<lca_ui::PersonaApply> {
+        let ui = self.clone();
+        Some(Arc::new(move |bundle: &lca_ui::PersonaBundle| {
+            ui.clone().persona_apply(bundle)
+        }))
+    }
 }

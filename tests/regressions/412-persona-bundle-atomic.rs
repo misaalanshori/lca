@@ -109,7 +109,8 @@ fn the_check_runs_before_any_application() {
         "a host without a check refuses rather than applying blind"
     );
     // The seam that validates writes nothing, so a refusal cannot leave a trace.
-    let state = read("crates/lca-ui/src/state.rs");
+    // The seam types live in their own module (split for the ceiling, gate 11).
+    let state = read("crates/lca-ui/src/state_persona.rs");
     let check_type = state
         .split("pub type PersonaCheck")
         .nth(1)

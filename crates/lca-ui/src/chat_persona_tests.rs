@@ -11,7 +11,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::state::PersonaBundle;
+use crate::state_persona::PersonaBundle;
 
 /// What a fake host recorded, so a row can assert the pre-state was untouched.
 #[derive(Default)]

@@ -82,7 +82,7 @@ pub(super) fn model_rows(
 /// against the previous state. A diff reads as "nothing happened" when the persona
 /// already matches what was set, which is the wrong thing to tell someone who just
 /// asked for it.
-pub(super) fn persona_notice(bundle: &lca_ui::state::PersonaBundle) -> String {
+pub(super) fn persona_notice(bundle: &lca_ui::PersonaBundle) -> String {
     format!(
         "persona {}: {}",
         bundle.name,

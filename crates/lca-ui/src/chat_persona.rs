@@ -27,7 +27,7 @@
 //! is `/persona` and `[personas]` everywhere.
 
 use super::chat::Chat;
-use crate::state::PersonaBundle;
+use crate::state_persona::PersonaBundle;
 
 impl Chat {
     /// `/persona` or `/persona <name>`.

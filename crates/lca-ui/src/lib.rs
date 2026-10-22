@@ -46,6 +46,7 @@ mod run_selection;
 mod run_status;
 pub mod separator;
 pub mod state;
+mod state_persona;
 mod status;
 pub mod theme;
 pub mod transcript;
@@ -86,5 +87,6 @@ pub use state::{
     sanitize_block, sanitize_text,
 };
 pub use state::{CompactPoll, CompactState};
+pub use state_persona::{PersonaApply, PersonaBundle, PersonaCheck, PersonaList};
 pub use theme::Theme;
 pub use transcript::{Entry, EntryHit, ToolStatus, Transcript, image_label};
