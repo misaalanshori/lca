@@ -90,8 +90,10 @@ pub struct Chat {
     /// total takes it (or core's authoritative `TurnOutcome`) once, at
     /// the turn boundary.
     pub turn_usage: Usage,
-    /// The turn's generation-time meter (the footer's tok/s reading).
-    meter: crate::turn_metrics::StreamMeter,
+    /// The turn's generation-time meter (the footer's tok/s reading). It adds
+    /// up the spans `lca-core` stamped where the stream was consumed (gh
+    /// #464); it holds no clock of its own.
+    meter: crate::footer::meter::StreamMeter,
     /// Whether a turn is running.
     pub turn_running: bool,
     /// Whether a background `/compact` is summarizing (the interface stays
@@ -508,18 +510,9 @@ impl Chat {
             TurnEvent::TurnStarted | TurnEvent::MessageStarted { .. } => {}
             TurnEvent::MessageEnded { .. } | TurnEvent::RetryFinished { .. } => {}
             TurnEvent::CompactionStarted { .. } | TurnEvent::CompactionEnded { .. } => {}
-            TurnEvent::TextDelta(delta) => {
-                self.transcript.append_text(&delta);
-                self.meter.open();
-            }
-            TurnEvent::ReasoningDelta(delta) => {
-                self.transcript.append_reasoning(&delta);
-                self.meter.open();
-            }
+            TurnEvent::TextDelta(delta) => self.transcript.append_text(&delta),
+            TurnEvent::ReasoningDelta(delta) => self.transcript.append_reasoning(&delta),
             TurnEvent::ToolStarted(call) => {
-                // A tool run is not generation: the meter closes so its
-                // latency never lands in the tok/s reading.
-                self.meter.close();
                 // gh #404 gap 1: the parent link rides along so an orphaned
                 // child (a parent card that is not on screen) still renders as a
                 // top-level card instead of vanishing.
@@ -578,7 +571,10 @@ impl Chat {
                 // FR-UI-20: the live prompt size is this call's input side.
                 self.footer.context_used = usage.input + usage.cache_read + usage.cache_write;
                 // The turn's own output side, for the tok/s reading at its end.
-                self.meter.note_usage(usage.output);
+                // Gh #464: the meter takes the whole record and uses only the
+                // calls that stamped a generation span, so an unstamped call's
+                // tokens can never pad the numerator.
+                self.meter.note_usage(&usage);
                 // gh #327: this is display state only. The session total is
                 // folded once at the turn boundary; growing it here would
                 // count the turn twice (the stream, then `reap`) and would
@@ -625,8 +621,9 @@ impl Chat {
                 status,
                 stop_reason,
             } => {
-                // The footer's throughput reading (owner ask): measured
-                // over streaming time only, with the provider's own count.
+                // The footer's throughput reading (owner ask): output tokens
+                // over the generation span core stamped where the stream was
+                // consumed, summed over the turn's calls (gh #464).
                 self.meter.finish_turn(&mut self.footer);
                 self.transcript.finish_assistant();
                 self.turn_running = false;
@@ -1191,6 +1188,9 @@ pub(super) fn highlight_matches(line: &str, query: &str) -> String {
 #[cfg(test)]
 #[path = "chat_command_guards.rs"]
 mod command_guards;
+#[cfg(test)]
+#[path = "chat_meter_tests.rs"]
+mod meter_tests;
 #[cfg(test)]
 #[path = "chat_tests.rs"]
 pub(crate) mod tests;
