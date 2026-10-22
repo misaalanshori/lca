@@ -31,6 +31,23 @@ impl PermissionPrompt for Always {
     }
 }
 
+/// The two delivery modes of one fixture, plus the engine the native twin
+/// ran on (so its recorded denials stay visible to the row).
+type Modes = (
+    Arc<dyn ExtensionDispatch>,
+    Arc<dyn ExtensionDispatch>,
+    Arc<lca_tools::Capabilities>,
+);
+
+/// [`Modes`] plus the concrete WASM handle (gh #449: a row wanting the
+/// guest's single-tool schema reuses this compile instead of a new one).
+type ModesWithGuest = (
+    Arc<lca_ext_host::WasmExtension>,
+    Arc<dyn ExtensionDispatch>,
+    Arc<dyn ExtensionDispatch>,
+    Arc<lca_tools::Capabilities>,
+);
+
 struct Fixture {
     root: std::path::PathBuf,
     prompt: Arc<Mutex<Always>>,
@@ -117,33 +134,18 @@ impl Fixture {
         Arc::new(cap)
     }
 
-    fn both_modes(
-        &self,
-    ) -> (
-        Arc<dyn ExtensionDispatch>,
-        Arc<dyn ExtensionDispatch>,
-        Arc<lca_tools::Capabilities>,
-    ) {
+    fn both_modes(&self) -> Modes {
         let (_concrete, wasm, native, engine) = self.both_modes_keeping_wasm();
         (wasm, native, engine)
     }
 
-    /// [`Fixture::both_modes`], also handing back the concrete WASM
-    /// handle.
+    /// [`Fixture::both_modes`] plus the concrete WASM handle.
     ///
-    /// gh #449: a row that additionally asks the guest for its single-tool
-    /// schema used to call `host.load` a second (and third) time for it,
-    /// paying `Component::new` again - ~6 s per load in a test build.
-    /// `schema()` is just another call into the same component, so this is
-    /// the handle to ask rather than a reason to compile a second one.
-    fn both_modes_keeping_wasm(
-        &self,
-    ) -> (
-        Arc<lca_ext_host::WasmExtension>,
-        Arc<dyn ExtensionDispatch>,
-        Arc<dyn ExtensionDispatch>,
-        Arc<lca_tools::Capabilities>,
-    ) {
+    /// gh #449: a row that also asks the guest for its single-tool schema
+    /// used to `host.load` a second time for it, paying `Component::new`
+    /// again (~6 s in a test build). `schema()` is just another call into
+    /// the same component, so this is the handle to ask.
+    fn both_modes_keeping_wasm(&self) -> ModesWithGuest {
         let mut host = ExtHost::new(
             ExtensionLimits {
                 memory_bytes: 64 * 1024 * 1024,
@@ -155,13 +157,13 @@ impl Fixture {
         let wasm: Arc<lca_ext_host::WasmExtension> =
             Arc::new(host.load(FIXTURE, MANIFEST).expect("load wasm mode"));
         let engine = self.capabilities();
-        let native: Arc<dyn ExtensionDispatch> =
-            Arc::new(conformance::NativeConformance::new(engine.clone()));
         // The same registry type holds both handle kinds (FR-EXT-6: one
         // handle type, no mode branching).
         let mut registry = NativeRegistry::new();
         registry.register(wasm.clone());
-        registry.register(native);
+        registry.register(Arc::new(conformance::NativeConformance::new(
+            engine.clone(),
+        )));
         let handles = registry.into_handles();
         // The SAME engine the native handle ran on, so its recorded
         // denials are visible to the test (FR-PERM-3).
