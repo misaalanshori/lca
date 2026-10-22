@@ -606,6 +606,8 @@ A git repository works too (gh #59): `lca ext install git+https://git.example.co
 
 A repo can ship its own tools without publishing (gh #138): drop one directory per extension into `.lca/extensions/`, each holding an `extension.toml` and a `component.wasm` — the same two files an install lays down, minus the digest (the repo is the record). They load when the project is trusted (persistent or session trust; an untrusted project ignores the directory, and its presence triggers the trust prompt like a `.lca/config.toml` does). Grants still prompt exactly as installed extensions do, and `lca ext disable <name>` applies. Most-specific scope wins: a project-local extension shadows a same-named installed one. `--no-extensions` skips them with everything else.
 
+This directory is *only* read when it is genuinely project-local. Launching `lca` from your home directory makes `<cwd>/.lca/extensions` the same place as the installed set (`~/.lca/extensions`), and in that case the scan is skipped entirely: there is nothing project-local to find, and the installed set already covers it. The comparison is canonical, so a symlinked `$HOME` or macOS's `/var` → `/private/var` is recognised as the same place rather than silently colliding. A **genuine** `.lca/extensions/<name>/` in a real project that is missing its `component.wasm` still warns — that diagnostic is about a repository file, and it stays.
+
 ## Versioning
 
 The extension version is yours. The ABI version is not.

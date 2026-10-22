@@ -42,6 +42,7 @@ pub(crate) fn assemble(
         crate::project_ext::load_project_local(
             &mut registry,
             cwd,
+            &crate::data_dir(),
             config.extensions_log_limit_bytes() as usize,
             shared_prompt.clone(),
             shared_dialogs.clone(),
