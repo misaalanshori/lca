@@ -45,6 +45,17 @@ pub const QUOTA_ERROR_EXTRA: &str = "quota-error";
 /// `thinking-signature` stream-event kind: one vocabulary entry, two
 /// channels (gh #108 pins the exact string).
 pub const THINKING_SIGNATURE_EXTRA: &str = "thinking-signature";
+/// How long a provider call spent *generating*, in microseconds (gh #464):
+/// the span from its first text or reasoning delta to its last, stamped by
+/// the consumer in `lca-core` rather than measured by whoever renders the
+/// footer. Two things make that the only honest place: the interface thread
+/// drains a bounded channel in a burst (so a UI-side interval measures its
+/// own scheduling - the 5,263,158 tok/s receipt), and a per-call span
+/// excludes a tool run between calls by construction.
+///
+/// Absent means "not measured" (no generation delta, a call that failed,
+/// or a provider that never streamed), never "zero".
+pub const GENERATION_US_EXTRA: &str = "generation_us";
 
 /// A per-model image profile: pi's `ModelImageResizeOptions` shape.
 /// `max_bytes` bounds the encoded payload. Vendor-sourced when present;

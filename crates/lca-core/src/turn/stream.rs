@@ -3,12 +3,44 @@
 //! once the stream closes. Split from `turn/mod.rs` for the workspace
 //! file ceiling (gate 11).
 
-use lca_protocol::{StreamEvent, TurnEvent, Usage};
+use lca_protocol::{GENERATION_US_EXTRA, StreamEvent, TurnEvent, Usage};
 use lca_provider::{CompletionRequest, ToolCallAccumulator};
 use lca_tools::CancelFlag;
 
 use super::{CallFail, CallResponse};
 use crate::{Agent, TurnSink};
+
+/// The generation span of one provider call (gh #464): first to last delta.
+///
+/// Only a *generation* delta opens or extends it - text or reasoning, the two
+/// events that carry the tokens the numerator counts. A tool-call delta is the
+/// model choosing a tool, not generating the reply, and it is what the old
+/// interface-side meter closed its window on; excluding it here keeps a call
+/// whose only output is a tool call from reporting a speed at all.
+///
+/// Reasoning deltas are deliberately included: the provider's `output` count
+/// includes reasoning tokens (Antigravity sums `candidatesTokenCount` and
+/// `thoughtsTokenCount`), so the denominator must span the time those tokens
+/// took. Mixing the two - tokens in, time out - is what produced millions.
+#[derive(Debug, Default)]
+struct Span {
+    first: Option<std::time::Instant>,
+    last: Option<std::time::Instant>,
+}
+
+impl Span {
+    /// A generation delta arrived.
+    fn note(&mut self, at: std::time::Instant) {
+        self.first.get_or_insert(at);
+        self.last = Some(at);
+    }
+
+    /// The span in microseconds, or `None` when nothing was generated.
+    fn micros(&self) -> Option<u64> {
+        let (first, last) = (self.first?, self.last?);
+        Some(last.duration_since(first).as_micros() as u64)
+    }
+}
 
 impl Agent<'_> {
     /// Replay one closed stream to `hooks-stream` observers (gh #45),
@@ -168,6 +200,9 @@ impl Agent<'_> {
         // observation never steers or stalls a live stream.
         let mut stream_log: Vec<StreamEvent> = Vec::new();
         let mut natural_end = false;
+        // Gh #464: the generation span, stamped here - where the events are
+        // consumed - rather than in whatever thread renders the footer.
+        let mut span = Span::default();
 
         loop {
             tokio::select! {
@@ -177,11 +212,13 @@ impl Agent<'_> {
                     Some(StreamEvent::TextDelta { delta }) => {
                         stream_log.push(StreamEvent::TextDelta { delta: delta.clone() });
                         text.push_str(&delta);
+                        span.note(std::time::Instant::now());
                         sink.on_event(TurnEvent::TextDelta(delta));
                     }
                     Some(StreamEvent::ReasoningDelta { delta }) => {
                         stream_log.push(StreamEvent::ReasoningDelta { delta: delta.clone() });
                         reasoning.push_str(&delta);
+                        span.note(std::time::Instant::now());
                         sink.on_event(TurnEvent::ReasoningDelta(delta));
                     }
                     Some(event @ (StreamEvent::ToolCallStart { .. }
@@ -224,11 +261,13 @@ impl Agent<'_> {
                             StreamEvent::TextDelta { delta } => {
                                 stream_log.push(StreamEvent::TextDelta { delta: delta.clone() });
                                 text.push_str(&delta);
+                                span.note(std::time::Instant::now());
                                 sink.on_event(TurnEvent::TextDelta(delta));
                             }
                             StreamEvent::ReasoningDelta { delta } => {
                                 stream_log.push(StreamEvent::ReasoningDelta { delta: delta.clone() });
                                 reasoning.push_str(&delta);
+                                span.note(std::time::Instant::now());
                                 sink.on_event(TurnEvent::ReasoningDelta(delta));
                             }
                             event @ (StreamEvent::ToolCallStart { .. }
@@ -273,6 +312,16 @@ impl Agent<'_> {
         // one seam, before records, permission, and dispatch see the name.
         for call in &mut calls {
             call.name = lca_tools::canonical_tool_name(&call.name).to_string();
+        }
+        // Gh #464: the span rides the call's own usage record, which is the
+        // one value that reaches both the assistant record and the interface
+        // unchanged. A call that generated nothing (a tool call only, an
+        // empty answer) stamps nothing: absence is "not measured", and the
+        // footer already knows not to invent a reading for it.
+        if let Some(micros) = span.micros() {
+            usage
+                .extras
+                .insert(GENERATION_US_EXTRA.to_string(), micros.to_string());
         }
         Ok(CallResponse {
             text,
