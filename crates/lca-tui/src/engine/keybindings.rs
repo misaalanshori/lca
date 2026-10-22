@@ -36,8 +36,8 @@ macro_rules! def {
 /// Fourteen UI sites used it and every hint printed the default key after a
 /// rebind.
 ///
-/// Use [`KeybindingsManager::key_hint`] (or `display_keys`) for anything a reader
-/// sees. This one is for a caller that genuinely wants the shipped default - a
+/// Use [`KeybindingsManager::display_keys`] (or the UI's `render_key_hint`, which
+/// adds the theme's dim/muted roles) for anything a reader sees. This one is for a caller that genuinely wants the shipped default - a
 /// settings screen showing "default: ctrl+o", say - and it is the only place the
 /// default table is consulted without a manager.
 pub fn default_key_text(action: &str) -> String {
