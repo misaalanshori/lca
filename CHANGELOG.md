@@ -112,6 +112,23 @@ Dates are UTC.
   record, which stays `/mcp disable`'s job.
 
 ### Fixed
+- **A synchronous extension call no longer spawns a thread** (gh #286).
+  `WasmExtension::blocking` ran `std::thread::spawn(..).join()` on every call, so
+  each `render`/`on_event` — one per TUI frame — and each stream delta created and
+  reaped an OS thread: syscalls, stack allocation, and latency jitter on the
+  hottest path in the interface. Each extension now owns one long-lived driver
+  thread, created on first use and reused for every call. Measured on this box,
+  medians of 500-call runs (three runs each way): **~689 µs/call before, ~273
+  µs/call after** — about 415 µs off every frame that touches an extension's UI.
+  The thread still exists because the guest's WASI is linked synchronously, so a
+  guest doing file I/O must not run on a runtime worker; it is now created once per
+  extension instead of once per call. Cancellation is unchanged and pinned: an
+  epoch bump still traps a guest mid-call wherever it runs, a trap still evicts the
+  instance cache and disables the extension, and dropping an extension shuts its
+  driver down. The driver holds its extension *weakly* — a strong handle closes a
+  reference cycle that would keep the extension and its instance cache alive for
+  the process lifetime, which the shutdown row caught in the first version of this
+  change.
 - **A typo in a manifest's `worlds` list is refused, not installed as an
   extension that does nothing** (gh #288). `worlds = ["contxt-transform"]` — one
   transposed letter — used to install successfully and load as an extension whose

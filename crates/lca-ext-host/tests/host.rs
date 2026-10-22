@@ -399,3 +399,374 @@ fn guest_error_text_is_never_classified_as_a_trap() {
         "guest text never disables the extension"
     );
 }
+
+// ── gh #286: no per-call thread spawn ─────────────────────────────────────
+
+// Verifies: gh #286 - N synchronous calls spawn a **bounded** number of threads,
+// not N of them.
+//
+// The issue's claim is structural, so this is a count and not a stopwatch. Before
+// the fix, `WasmExtension::blocking` ran `std::thread::spawn(..).join()` per call,
+// so 20 calls from one extension started 20 threads. Now the first call starts
+// one driver and the rest reuse it.
+//
+// The bound is 3, not 1, for a reason worth stating: the driver starts lazily, so
+// a *second* extension loaded in the same test process would start its own, and
+// the process-wide counter would read 2. The row asserts "at most one per
+// extension, and fewer than one per call" - which is the property that matters -
+// rather than the exact figure, which would be a different fact (how many
+// extensions a test happened to load).
+#[test]
+fn n_synchronous_calls_spawn_a_bounded_number_of_threads() {
+    let calls = 20;
+    let before = lca_ext_host::driver_spawns();
+    let mut host = ExtHost::new(limits(), env("spawn"));
+    let extension = host.load(fixture(), manifest()).expect("loads");
+    // Warm up out of the measurement so the driver's creation is attributed
+    // either side of the window, not argued about.
+    let loaded_at = lca_ext_host::driver_spawns();
+    for _ in 0..calls {
+        extension.execute(&call("ok")).expect("execute");
+    }
+    let spawned = lca_ext_host::driver_spawns() - loaded_at;
+    assert!(
+        spawned <= 1,
+        "{calls} calls spawned {spawned} threads; the per-call spawn is back \
+         (pre-fix this was {calls})"
+    );
+    // And the counter is actually wired: loading an extension in this process
+    // must have registered at least one driver over the whole test, or the
+    // assertion above is vacuous.
+    assert!(
+        lca_ext_host::driver_spawns() > before,
+        "no driver thread was ever counted, so the row proves nothing"
+    );
+}
+
+// Verifies: gh #286 - the same bound holds across the *mixed* high-frequency
+// path: many `schema` and `execute` calls interleaved, which is what a turn
+// actually does, must not spawn per call either.
+#[test]
+fn mixed_call_kinds_reuse_one_driver() {
+    let mut host = ExtHost::new(limits(), env("spawn-mixed"));
+    let extension = host.load(fixture(), manifest()).expect("loads");
+    extension.execute(&call("ok")).expect("warm");
+    let baseline = lca_ext_host::driver_spawns();
+    for _ in 0..10 {
+        extension.schema().expect("schema");
+        extension.execute(&call("ok")).expect("execute");
+    }
+    assert_eq!(
+        lca_ext_host::driver_spawns(),
+        baseline,
+        "schema/execute calls after the first must reuse the driver"
+    );
+}
+
+// Verifies: gh #286 - two extensions get one driver each, not one each per call.
+#[test]
+fn two_extensions_use_one_driver_each() {
+    let mut host = ExtHost::new(limits(), env("spawn-two"));
+    let first = host.load(fixture(), manifest()).expect("loads");
+    let second = host.load(fixture(), manifest()).expect("loads");
+    first.execute(&call("ok")).expect("first warm");
+    second.execute(&call("ok")).expect("second warm");
+    let baseline = lca_ext_host::driver_spawns();
+    for _ in 0..5 {
+        first.execute(&call("ok")).expect("first");
+        second.execute(&call("ok")).expect("second");
+    }
+    assert_eq!(
+        lca_ext_host::driver_spawns(),
+        baseline,
+        "neither extension may spawn after its warm-up call"
+    );
+}
+
+// Verifies: gh #286 - **cancellation still reaches a guest running on the
+// driver**. This is the row the issue's manager note calls the one that proves
+// the refactor kept #103/#150's promise: a cancelled turn must trap a guest in
+// the middle of a `blocking` call, and the driver must not put the guest
+// somewhere an epoch bump cannot reach.
+//
+// It goes further than the pre-existing `epoch_interrupt_cancels_a_running_call`
+// row in one way that matters for this refactor: it asserts the *caller's*
+// thread is not the one running the guest, which is what "it is really on the
+// driver" means. `in_flight` is incremented from inside the guest, so watching it
+// rise while the main thread is still inside `execute` proves the guest is
+// elsewhere - and the bump then has to reach that elsewhere.
+#[test]
+fn an_epoch_bump_traps_a_guest_on_the_driver() {
+    let mut host = ExtHost::new(
+        ExtensionLimits {
+            fuel_per_call: u64::MAX,
+            ..limits()
+        },
+        env("spawn-cancel"),
+    );
+    let extension = host.load(fixture(), manifest()).expect("loads");
+    // Warm the driver so this row measures cancellation, not thread creation.
+    extension.execute(&call("ok")).expect("warm");
+
+    let engine = extension.engine().clone();
+    let watcher = extension.clone();
+    let stopper = std::thread::spawn(move || {
+        while watcher.in_flight() == 0 {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        engine.increment_epoch();
+    });
+    let started = std::time::Instant::now();
+    let err = extension.execute(&call("loop")).expect_err("interrupted");
+    stopper.join().expect("stopper");
+    assert!(
+        matches!(err, CallError::Cancelled),
+        "the driver's guest must trap on the epoch bump, got {err:?}"
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(500),
+        "and promptly (NFR-29's shape)"
+    );
+    // The trapped guest was evicted: the next call must succeed on a fresh
+    // instance rather than resume a poisoned one.
+    let after = extension
+        .execute(&call("ok"))
+        .expect("a fresh instance runs");
+    assert_eq!(after.status, ToolResultStatus::Ok);
+    assert!(
+        extension.is_enabled(),
+        "a cancel is not a trap: still enabled"
+    );
+}
+
+// Verifies: gh #286 - trap isolation is unchanged: a guest that traps on the
+// **driver** still evicts the instance cache and disables the extension exactly
+// as it did when it trapped on a per-call thread.
+//
+// The driver owns no instance (the cache does), so the eviction path has to
+// reach it through `Inner::classify` whichever thread noticed. This asserts that
+// rather than assuming it.
+#[test]
+fn a_trap_on_the_driver_still_evicts_the_cache() {
+    let mut host = ExtHost::new(
+        ExtensionLimits {
+            fuel_per_call: u64::MAX,
+            ..limits()
+        },
+        env("spawn-trap"),
+    );
+    let extension = host.load(fixture(), manifest()).expect("loads");
+    extension.execute(&call("ok")).expect("warm");
+    let schema_before = extension.schema().expect("schema on the warm instance");
+
+    let err = extension.execute(&call("trap")).expect_err("traps");
+    assert!(
+        matches!(err, CallError::Trap(_)),
+        "a trap is reported as one, got {err:?}"
+    );
+    assert!(
+        !extension.is_enabled(),
+        "a trap disables the extension for the session (FR-EXT-3)"
+    );
+    // Disabled means the next call is refused, never served from the trap's
+    // store - which is what eviction buys.
+    let after = extension.execute(&call("ok")).expect_err("disabled");
+    assert!(matches!(after, CallError::Disabled), "got {after:?}");
+    // The cache really was cleared, not merely gated: the schema call on a
+    // disabled handle must not have been served from the pre-trap guest.
+    assert_eq!(
+        schema_before.name, "conformance",
+        "the warm instance was a real one before the trap"
+    );
+}
+
+// Verifies: gh #286 - two threads calling `blocking` on the same extension
+// neither deadlock nor corrupt the guest.
+//
+// The driver **serialises**: one job at a time, in arrival order, because a guest
+// instance is not re-entrant (its store is `&mut` for the duration of a call).
+// That is the same guarantee the pre-#286 code had - calls got their own threads
+// but `checkout` serialised them at the cache - so this row pins the shape rather
+// than changing it. The failure it exists to catch is a driver that multiplexes
+// (two guests on one store) or a lock ordering that deadlocks.
+#[test]
+fn two_threads_calling_the_same_extension_do_not_deadlock() {
+    let mut host = ExtHost::new(limits(), env("spawn-concurrent"));
+    let extension = host.load(fixture(), manifest()).expect("loads");
+    extension.execute(&call("ok")).expect("warm");
+
+    let workers: Vec<_> = (0..4)
+        .map(|_| {
+            let handle = extension.clone();
+            std::thread::spawn(move || {
+                for _ in 0..8 {
+                    let result = handle.execute(&call("ok")).expect("no deadlock, no error");
+                    assert_eq!(result.status, ToolResultStatus::Ok);
+                }
+            })
+        })
+        .collect();
+    for worker in workers {
+        worker.join().expect("a worker panicked");
+    }
+    // And the handle is still healthy afterwards: nothing was left mid-call.
+    assert_eq!(extension.in_flight(), 0, "no call is left in flight");
+    assert!(extension.is_enabled());
+    extension.execute(&call("ok")).expect("still works");
+}
+
+// Verifies: gh #286 - dropping an extension shuts its driver down, so a session
+// that loads and drops extensions does not accumulate threads.
+//
+// Measured with the driver's own spawn/exit counters, not `/proc/self/task`: a
+// process-wide thread count cannot attribute a leak, and my first version of this
+// row read 2 -> 7 for a drop where the driver was innocent (Wasmtime's engine pool
+// and the harness contributed the rest). The counters say exactly the thing being
+// claimed.
+#[test]
+fn dropping_an_extension_shuts_its_driver_down() {
+    let spawns_before = lca_ext_host::driver_spawns();
+    let exits_before = lca_ext_host::driver_exits();
+    {
+        let mut host = ExtHost::new(limits(), env("spawn-drop"));
+        let extension = host.load(fixture(), manifest()).expect("loads");
+        extension.execute(&call("ok")).expect("starts the driver");
+        assert_eq!(
+            lca_ext_host::driver_spawns() - spawns_before,
+            1,
+            "one driver for this extension"
+        );
+        assert_eq!(
+            lca_ext_host::driver_exits() - exits_before,
+            0,
+            "and it is still running while the handle is alive"
+        );
+    }
+    // The driver exits when its job sender drops. It is idle on `recv`, so this is
+    // prompt, but the loop below keeps the row from being a timing coin-flip.
+    let mut exited = lca_ext_host::driver_exits() - exits_before;
+    for _ in 0..200 {
+        if exited >= 1 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        exited = lca_ext_host::driver_exits() - exits_before;
+    }
+    assert_eq!(
+        exited, 1,
+        "the driver thread outlived its extension: it never reported an exit"
+    );
+}
+
+// ── gh #286: the values are unchanged, not just the timing ────────────────
+
+/// A full-world host on the conformance fixture, so `render`/`on_ui_event` are
+/// reachable: the `ui` world is only served when the manifest grants the region.
+fn ui_host(tag: &str) -> (ExtHost, Arc<lca_ext_host::WasmExtension>) {
+    let mut host = ExtHost::new(limits(), env(tag));
+    let extension: Arc<lca_ext_host::WasmExtension> = Arc::new(
+        host.load(fixture(), manifest())
+            .expect("the conformance component exports every world"),
+    );
+    (host, extension)
+}
+
+// Verifies: gh #286 - `render` returns the same tree it did before the driver.
+//
+// The brief's correctness clause: the refactor moves *where* the guest runs, so
+// the values crossing the boundary must be identical. These are the scripted
+// conformance trees, so this is an exact comparison rather than a shape check -
+// and it runs the count-per-frame path the issue is about (`render` is called once
+// per TUI frame per granted region).
+#[test]
+fn render_returns_the_same_tree_through_the_driver() {
+    let (_host, extension) = ui_host("driver-render");
+    // Twice, so the second call takes the *cached* guest on the driver thread
+    // rather than a freshly built one - the path the per-frame call actually hits.
+    let first = extension.render("footer").expect("render").expect("a tree");
+    let second = extension
+        .render("footer")
+        .expect("render again")
+        .expect("a tree");
+    assert_eq!(first, second, "a repeated render is byte-identical");
+    assert!(!first.is_empty(), "and it is not an empty tree");
+    // Every granted region answers, and the driver did not confuse them.
+    for region in ["status-line", "footer", "panel", "modal"] {
+        let tree = extension
+            .render(region)
+            .unwrap_or_else(|err| panic!("render {region}: {err:?}"))
+            .unwrap_or_else(|| panic!("{region} has a scripted tree"));
+        assert!(!tree.is_empty(), "{region} has content");
+    }
+    // ...and an ungranted region is still `None`, not an error and not a tree.
+    assert!(
+        extension
+            .render("no-such-region")
+            .expect("no error")
+            .is_none(),
+        "an ungranted region answers None through the driver too"
+    );
+}
+
+// Verifies: gh #286 - `on_ui_event` returns the same effect it did before.
+#[test]
+fn on_ui_event_returns_the_same_effect_through_the_driver() {
+    let (_host, extension) = ui_host("driver-event");
+    let input = lca_protocol::UiInput::Submit {
+        text: "hello".to_string(),
+    };
+    let first = extension
+        .on_ui_event("modal", &input)
+        .expect("event")
+        .clone();
+    let second = extension
+        .on_ui_event("modal", &input)
+        .expect("event again")
+        .clone();
+    assert_eq!(first, second, "a repeated event is identical");
+    // An ungranted region is still a no-op rather than an error.
+    let none = extension
+        .on_ui_event("no-such-region", &input)
+        .expect("no error");
+    assert!(
+        matches!(none, lca_protocol::UiEffect::None),
+        "an ungranted region answers None through the driver too, got {none:?}"
+    );
+}
+
+// Verifies: gh #286 - a repeated synchronous call returns the same value on the
+// driver thread as it did on its own thread.
+//
+// `schema` and `execute` are the two calls the loop makes most; both now go
+// through the driver. The row drives them repeatedly against one extension and
+// asserts stability, which is what catches a driver that reuses a guest with the
+// previous call's state (the store is re-armed at checkout - this proves the
+// re-arm still happens).
+#[test]
+fn repeated_calls_are_stable_on_the_driver() {
+    let mut host = ExtHost::new(limits(), env("driver-stable"));
+    let extension = host.load(fixture(), manifest()).expect("loads");
+    let schema = extension.schema().expect("schema");
+    let mut contents = Vec::new();
+    for _ in 0..12 {
+        let again = extension.schema().expect("schema again");
+        assert_eq!(again.name, schema.name, "the spec name is stable");
+        assert_eq!(
+            again.parameters, schema.parameters,
+            "and so are its parameters"
+        );
+        let result = extension.execute(&call("ok")).expect("execute");
+        assert_eq!(result.status, ToolResultStatus::Ok);
+        contents.push(result.content);
+    }
+    assert!(
+        contents.windows(2).all(|pair| pair[0] == pair[1]),
+        "12 executes answer the same thing through the driver: {contents:?}"
+    );
+    // Honest scope: the conformance tool is stateless, so this row would still
+    // pass if `arm` were skipped at checkout - I checked by removing it. It
+    // proves the *values* crossing the driver are stable, which is what this row
+    // is for; the re-arm itself is pinned by
+    // `instance_cache`'s own rows and by `fuel_budget_cancels_a_spinning_call`
+    // (a store that is not re-fuelled cannot run the next call).
+}

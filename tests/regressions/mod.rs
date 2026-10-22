@@ -728,6 +728,12 @@ mod system_panels_and_scheme;
 // as an extension that matches no world.
 #[path = "288-unknown-world-is-refused.rs"]
 mod unknown_world_is_refused;
+
+// Gh #286: the synchronous call path hands work to one long-lived driver per
+// extension instead of spawning a thread per call, with cancellation, trap
+// isolation, and shutdown still pinned.
+#[path = "286-no-thread-spawn-per-call.rs"]
+mod no_thread_spawn_per_call;
 // GitHub #449: two `conformance_diff` rows compiled the WASM fixture more than
 // once, so they sat at ~1.6x nextest's default cap and timed out on a loaded
 // runner. The measurement put the cost in `wasmtime::component::Component::new`
