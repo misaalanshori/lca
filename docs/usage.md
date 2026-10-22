@@ -133,6 +133,7 @@ their own `/`-commands to the same menu.
 | `/name <name>` | rename this session (`/rename` is the same) |
 | `/paste` | paste the clipboard image to the next message |
 | `/permissions` | manage allow/deny rules (session, project, global) |
+| `/persona` | apply a named bundle of model, thinking, tools, and instructions |
 
 ### Permission rules
 
@@ -196,6 +197,14 @@ works:
 /export                  # write this session out (/export html for the page)
 /import <file.jsonl>     # import JSONL lines as a new session
 ```
+
+`/persona <name>` applies a bundle defined under `[personas.<name>]` in your
+config: a model, a reasoning level, a tool loadout, and optional instructions, in
+one step. `/persona` with no argument lists them with what each carries. The whole
+bundle is checked against the running session first — if any field does not fit
+(the model is not offered, that model does not take that thinking level, a tool is
+not registered) **nothing is applied**, because a half-applied persona is a persona
+you are not in. See [Personas](configuration.md#personas) for the fields.
 
 `/bug`'s bundle contains the transcript. It is written next to your
 project, not uploaded, and sharing it is a deliberate act.

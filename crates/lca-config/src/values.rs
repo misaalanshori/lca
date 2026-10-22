@@ -126,6 +126,13 @@ impl Config {
         &self.thinking_budgets
     }
 
+    /// The `[personas]` bundles in effect, with the layer each came from
+    /// (gh #412). The caller passes `project_trusted` when it asks for one,
+    /// because an untrusted project's personas must not apply (FR-PERM-9).
+    pub fn personas(&self) -> &crate::persona::Personas {
+        &self.personas
+    }
+
     /// First retry delay in milliseconds (gh #83, pi's
     /// `retry.baseDelayMs`); doubles per attempt (FR-CORE-6).
     pub fn provider_retry_base_delay_ms(&self) -> u64 {
@@ -453,6 +460,24 @@ impl Config {
                     "<unset>".to_string()
                 } else {
                     format!("{} model(s)", self.models_thinking_levels.len())
+                },
+            ),
+            (
+                // Gh #412: a table key, so the inspector summarises it the way the
+                // other tables are summarised - the count, not the contents (a
+                // persona's instructions can be long, and `lca config` is a
+                // reference, not a transcript).
+                "personas",
+                if self.personas.is_empty() {
+                    "<unset>".to_string()
+                } else {
+                    let names: Vec<&str> = self
+                        .personas
+                        .available(true)
+                        .iter()
+                        .map(|(name, _, _)| *name)
+                        .collect();
+                    format!("{} persona(s): {}", names.len(), names.join(", "))
                 },
             ),
             (

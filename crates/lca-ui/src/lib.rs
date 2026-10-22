@@ -18,6 +18,7 @@ mod chat_models;
 mod chat_mouse;
 mod chat_notices;
 mod chat_overlays;
+pub mod chat_persona;
 mod chat_pickers;
 mod chat_poll;
 mod chat_project_override;

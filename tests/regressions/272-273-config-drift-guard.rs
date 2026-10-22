@@ -136,6 +136,9 @@ fn field_backing(field: &str) -> Backing {
         ("models_thinking_levels", &["models.thinking_levels"]),
         ("thinking_budgets", &["thinking.budgets"]),
         ("extensions_catalogs", &["extensions.catalogs"]),
+        // Gh #412: a table key like the others above - user-shaped children, a
+        // key's own parser, no single-value environment form.
+        ("personas", &["personas"]),
         ("sources", &[]),
         ("substituted", &[]),
     ];

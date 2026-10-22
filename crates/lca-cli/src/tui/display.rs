@@ -76,6 +76,20 @@ pub(super) fn model_rows(
 /// The `(id, label)` halves of [`model_rows`] for one model (gh #204):
 /// the checklist reuses the label rule without the list shape. `None`
 /// for a blank id.
+/// The notice `/persona` reports after applying a bundle (gh #412 design point 3).
+///
+/// It names the bundle as **applied** - model, level, loadout - rather than a diff
+/// against the previous state. A diff reads as "nothing happened" when the persona
+/// already matches what was set, which is the wrong thing to tell someone who just
+/// asked for it.
+pub(super) fn persona_notice(bundle: &lca_ui::state::PersonaBundle) -> String {
+    format!(
+        "persona {}: {}",
+        bundle.name,
+        lca_ui::chat_persona::summary(bundle)
+    )
+}
+
 pub(super) fn model_label(
     model: &lca_protocol::ModelInfo,
     provider: &str,
