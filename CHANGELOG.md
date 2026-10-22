@@ -69,6 +69,30 @@ Dates are UTC.
   record, which stays `/mcp disable`'s job.
 
 ### Fixed
+- **A theme's missing roles fall back through a declared parent instead of
+  guessing** (gh #387 gap 5). A theme file under `~/.lca/themes/` may name only
+  some roles, and everything it omits used to resolve to `Text` (or to whatever
+  the base palette happened to hold) — so a theme written a year ago could start
+  rendering differently the moment a role was added, and a *background* role
+  could be handed a foreground colour. Every role now declares a colour slot and
+  a parent in the same slot, resolved once at load: `mdLink`, `mdCode`,
+  `mdListBullet`, `syntaxKeyword`, `customMessageLabel` and `bashMode` follow
+  `accent`; `syntaxType` follows `mdCode` and then `accent`; the thinking levels
+  form a linear ramp where naming one level sets every hotter level. Setting a
+  parent carries its children, naming a child still wins, and a role with no
+  named ancestor keeps the base palette's own value — so a two-line theme does
+  not flatten the whole palette onto one colour. The table is validated at load:
+  every role has exactly one entry, no parent crosses the foreground/background
+  boundary, and a declared cycle fails with the loop named. An unknown role name
+  is still skipped, so a theme written against a newer LCA keeps loading.
+  `docs/configuration.md` now documents the rule, role by role, with a test that
+  fails if the doc and the table ever disagree.
+- **`/reload` re-reads the active theme file.** It refreshed the `/theme`
+  picker's list of names and then reported "reloaded: … themes …", but the
+  palette on screen was never re-applied — so editing a theme and reloading
+  changed nothing until a restart. Found while verifying the fallback chains
+  above: set one parent role, edit it, `/reload`, and the frame was unchanged
+  while the notice claimed otherwise.
 - **The thinking-level border is a ramp you can read** (gh #387 gap 4). The
   seven levels are the one ambient signal of how much reasoning budget a turn is
   spending, and they were hand-picked hex with no ordering relationship at all:

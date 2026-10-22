@@ -121,7 +121,7 @@ Network and retry inventory (gh #83, pi's "Network and retries"): attempts, base
 | `extensions.catalogs` | list of `{id, name, url}` tables | unset | User-configured custom extension catalogs (#227), merged behind the official catalog with their own provenance in `/extensions`. File-only: no flag or environment form. The `id` names the catalog's TTL cache file (`~/.lca/catalogs/<id>.toml`), so it is restricted to ASCII letters, digits, `-`, and `_` (gh #348): a value outside that vocabulary is refused at load, naming the id, rather than joined onto a path.
 | `update.check` | boolean | `true` interactive, `false` headless | Daily background version check (FR-CFG-6). |
 | `ui.color` | `auto` or `never` | `auto` | `never` forces plain text on terminals without color support (FR-UI-5). |
-| `ui.theme` | string | `auto` | The theme (S5): `auto` follows the detected terminal scheme; `dark`/`light`/`plain`/`system` are built in (`system` derives foreground/background roles from the detected terminal palette and repaints on scheme change; `plain` emits no SGR); any other name loads `<config dir>/themes/<name>.toml` (or `<name>.light.toml` / `<name>.dark.toml` for a scheme pair). A theme file names any of the ~50 roles in `#rrggbb`, `#rgb`, 256-index, `""` (terminal default), or `vars` reference form; an invalid file keeps the previous palette and says why. |
+| `ui.theme` | string | `auto` | The theme (S5): `auto` follows the detected terminal scheme; `dark`/`light`/`plain`/`system` are built in (`system` derives foreground/background roles from the detected terminal palette and repaints on scheme change; `plain` emits no SGR); any other name loads `<config dir>/themes/<name>.toml` (or `<name>.light.toml` / `<name>.dark.toml` for a scheme pair). A theme file names any of the ~50 roles in `#rrggbb`, `#rgb`, 256-index, `""` (terminal default), or `vars` reference form; an invalid file keeps the previous palette and says why. A file may name only the roles it wants to change: every role it omits resolves through its **declared parent role** rather than an arbitrary default (gh #387), so setting `accent` also sets `mdLink`, `mdCode`, `mdListBullet`, `syntaxKeyword`, `customMessageLabel` and `bashMode`, and a theme written before a role existed does not change how it renders when that role is added. See [Theme fallbacks](#theme-fallbacks). |
 | `ui.fullscreen` | boolean | `false` | Also settable in the config file (gh #112): a persisted `<config dir>/ui.json` wins when present, else this key, else scrollback. Malformed `ui.json` falls back and warns on the transcript head. The `/fullscreen` toggle's persisted choice (FR-UI-21). `false` (the default, S1) is the main-screen terminal scrollback renderer, which appends to the real scrollback so the terminal's native selection, scrollbar, right-click paste, and Ctrl+V work by construction. `true` opts into the alt-screen renderer with app-owned scroll and selection. Written to `<config dir>/ui.json` when toggled, not to the config file, so the runtime toggle never rewrites user config. In this mode the viewport is a pinned dock (separator, notice, queue, editor, footer) over a scrolling transcript window with a scrollbar on its right margin and a jump-to-bottom indicator; `End` returns to the live bottom (gh #35). |
 | `shell.tool` | `auto`, `bash`, `pwsh`, `powershell`, or `cmd` | `auto` | The `shell` tool's interpreter (ADR-0041). `auto` on Windows walks Git Bash at its known install locations, then `pwsh.exe`, then `powershell.exe`, then `cmd.exe`; on Unix it is `sh`. A configured tool that cannot be found fails every shell call with the locations searched - never a silent fallback to a different shell. |
 | `shell.path` | string | unset | An exact interpreter path, which wins over `shell.tool`. It may name anything, including the WSL stub (`C:\Windows\System32\bash.exe`), because naming a path is deliberate; auto mode skips that stub (it runs in a different filesystem namespace). `lca config` shows the key rows and a `shell.resolved` row naming what the ladder actually picked (gh #30 moved the dump there; `/settings` is the editor for the keys themselves). |
@@ -152,6 +152,72 @@ Network and retry inventory (gh #83, pi's "Network and retries"): attempts, base
 | `trust.default_project` | `ask`, `always`, or `never` | `ask` | The fallback project-trust behavior when no stored decision exists (gh #80, pi's `defaultProjectTrust`): `always` trusts for the session at startup, `never` skips the trust prompt and stays untrusted, `ask` prompts as before. User file or `LCA_TRUST_DEFAULT_PROJECT` only - a project file that granted its own trust would defeat FR-PERM-9, so one that tries is refused at load. `-a`/`--approve` (trust for the run) and `--no-approve`/`--na` (untrusted for the run) beat the fallback; the two refuse each other. An explicit `/trust` answer mid-run still wins.
 | `permissions.mode` | `ask` or `yolo` | `ask` | How permission prompts are answered (ADR-0042). `yolo` answers every prompt "always, for this exact pattern": the pattern is persisted and a `permission` record is written exactly as a human answer would write it. Explicit deny rules still deny. `--yolo` sets it for one process, beating any file. While it is on, the footer carries a `YOLO` line in the error role. Reads outside the workspace never prompt in either mode. |
 | `permissions.proposals` | table | empty | Project file only. Proposals with no force; see ADR-0006. |
+
+## Theme fallbacks
+
+A theme file under `~/.lca/themes/` may name only the roles it wants to
+change. Every role it omits resolves through a **declared parent role**
+(gh #387 gap 5), so a small theme still renders coherently and an old
+theme does not change appearance when the vocabulary grows.
+
+The rule has two halves:
+
+*Every role belongs to a slot* - `foreground` (what is painted as ink)
+or `background` (what is painted as a band). A parent is always in the
+same slot as its child, so a band can never inherit a text colour.
+
+*Every role except a slot root declares one parent.* The two roots are
+`text` (foreground) and `selectedBg` (background); they have no parent.
+Everything else names a semantically related role, one hop away in the
+common case:
+
+| Role | Falls back to | Why that parent |
+|---|---|---|
+| This role: `accent` | `text` | an accent is a text colour that stands out |
+| These roles: `border`, `success`, `error`, `warning`, `muted`, `mdHeading`, `mdCodeBlock`, `toolTitle`, `userMessageText`, `customMessageText`, `syntaxFunction`, `syntaxVariable`, `syntaxOperator`, `scrollbarThumb`, `searchMatchText` | `text` | they are body-adjacent ink |
+| These roles: `borderAccent`, `borderMuted` | `border` | both are border variants |
+| These roles: `dim` | `muted` | dimmer than muted, same family |
+| These roles: `thinkingText`, `toolOutput`, `mdLinkUrl`, `mdQuote`, `toolDiffContext`, `syntaxComment`, `syntaxPunctuation`, `scrollbarTrack` | `muted` | secondary ink |
+| These roles: `mdLink`, `mdCode`, `mdListBullet`, `syntaxKeyword`, `customMessageLabel`, `bashMode` | `accent` | they *are* the accent, in a different place |
+| These roles: `syntaxType` | `mdCode` | types are rendered like inline code |
+| These roles: `syntaxString`, `toolDiffAdded` | `success` | strings are the "values" green |
+| These roles: `syntaxNumber` | `warning` | numbers are the "attention" amber |
+| These roles: `toolDiffRemoved` | `error` | a removed line is the error red |
+| These roles: `mdCodeBlockBorder`, `mdQuoteBorder`, `mdHr` | `borderMuted` | rules and fences are quiet borders |
+| These roles: `thinkingOff` | `borderMuted` | the quietest thinking level matches a quiet border |
+| These roles: `thinkingMinimal` | `thinkingOff` | one step hotter than `off` |
+| These roles: `thinkingLow` | `thinkingMinimal` | the ramp is **linear** - each level's parent is the level one cooler, so naming a level also sets every hotter level |
+| These roles: `thinkingMedium` | `thinkingLow` | as above |
+| These roles: `thinkingHigh` | `thinkingMedium` | as above |
+| These roles: `thinkingXhigh` | `thinkingHigh` | as above |
+| These roles: `thinkingMax` | `thinkingXhigh` | hottest; pi's top level falls back the same way |
+| These roles: `searchMatchBg`, `userMessageBg`, `customMessageBg`, `sidePanel`, `toolPendingBg` | `selectedBg` | they are all selection-like bands |
+| These roles: `toolSuccessBg`, `toolErrorBg` | `toolPendingBg` | the settled states shade from the pending one |
+
+**Setting a parent carries its children.** If your file sets
+`accent = "#7aa2f7"`, then `mdLink`, `mdCode`, `mdListBullet`,
+`syntaxKeyword`, `customMessageLabel` and `bashMode` all become that
+colour, because they declare `accent` as their parent. Naming a child
+yourself always wins over its parent - the chain is a default, not an
+override of your own words. A role whose entire chain is absent, and
+one you did not name, keeps the base palette's value, so a small theme
+does not flatten the whole palette onto one colour.
+
+Two consequences worth knowing:
+
+- Naming the *root* of a slot is the broadest edit you can make.
+  `text = "#cccccc"` moves every foreground role that has no closer
+  named ancestor; `selectedBg` does the same for the bands.
+- Setting a slot root to `""` (the terminal default) makes its
+  unnamed children the terminal default too. That is how the `system`
+  theme works, and it is why a translucent terminal stays translucent.
+
+The table above is enforced, not advisory: the shipped table is
+validated at load (every role has exactly one entry, every parent is
+in the same slot, no chain loops) and a failure names the role. If you
+name a role that is not in the vocabulary, it is **skipped** rather
+than fatal, so a theme written against a newer LCA still loads in an
+older one - only a malformed *value* for a known role is an error.
 
 ## Model metadata overrides
 

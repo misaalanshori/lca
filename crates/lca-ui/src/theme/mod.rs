@@ -14,6 +14,7 @@ mod highlight;
 mod palette;
 mod scheme;
 pub mod thinking;
+pub mod tokens;
 
 pub use scheme::{detect_scheme, scheme_from_colorfgbg};
 pub(crate) mod panels;

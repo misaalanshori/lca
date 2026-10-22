@@ -245,6 +245,17 @@ impl Chat {
                 // Interface-owned state refreshes here; the host did
                 // the files, the registry, and the agent config.
                 self.world.options.themes = report.themes;
+                // Gh #387 gap 5: re-apply the **active** theme, not just refresh
+                // the picker's list. The host hook re-reads the theme directory
+                // and reports the names it found; the palette on screen is
+                // interface state, so an edited `<name>.toml` only took effect on
+                // restart while this notice claimed "themes" had been reloaded.
+                // Found by this batch's live verification: set one parent role,
+                // edit it, `/reload`, and nothing on screen changed.
+                let setting = self.theme_setting().to_string();
+                if !setting.is_empty() && !self.theme_follows_detection() {
+                    self.set_theme(&setting);
+                }
                 self.keybindings =
                     Arc::new(KeybindingsManager::with_user_bindings(report.key_bindings));
                 self.world.options.keybinding_error = report.keybinding_error;

@@ -9,6 +9,12 @@ use super::super::Chat;
 use crate::state::LoginNext;
 use std::sync::Arc;
 
+/// The role a `chain.toml` naming only `accent` should move through its
+/// children; `mdLink` is the one the live pane showed.
+fn lca_ui_role() -> crate::theme::Role {
+    crate::theme::Role::MdLink
+}
+
 #[test]
 fn clone_duplicates_the_tip_and_switches() {
     let mut options = options();
@@ -99,6 +105,62 @@ fn open_resume_picker_lists_sessions_or_says_none() {
 // Verifies: gh #130 - `/reload` runs the host hook and applies the
 // report interface-side: the notice names it, themes refresh, and the
 // key manager reloads (refused mid-turn like a switch).
+// Verifies: gh #387 gap 5 - `/reload` re-reads the active theme file, not just
+// the list of names.
+//
+// Found while doing the live verification for this batch: a theme that sets one
+// parent role had its children following correctly at startup, then editing the
+// file and running `/reload` changed nothing on screen - while the notice said
+// "reloaded: ... themes ...". The claim was false. The host hook reports *names*
+// for the picker; the interface owns its state, so re-applying belongs here.
+//
+// The row proves the theme object itself is rebuilt, not merely that the file
+// changed on disk: `set_theme` reads the file, so a same-process edit is picked
+// up exactly as a restart would.
+#[test]
+fn reload_reapplies_the_active_theme() {
+    let dir = std::env::temp_dir().join(format!("lca-reload-theme-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+    let theme_path = dir.join("chain.toml");
+    std::fs::write(&theme_path, "accent = \"#00ff88\"\n").expect("write theme");
+
+    let mut opts = options();
+    // The shared fixture is `plain: true` (most rows here do not care about
+    // colour); a plain theme would make this row vacuous.
+    opts.plain = false;
+    opts.theme = "chain".to_string();
+    opts.theme_extra_dirs = vec![dir.clone()];
+    opts.hooks.reload = Some(Arc::new(|| crate::state::ReloadReport {
+        notice: "reloaded: 0 extensions, settings, prompts, themes, keybindings".to_string(),
+        themes: vec!["chain".to_string()],
+        key_bindings: Default::default(),
+        keybinding_error: None,
+    }));
+    let mut chat = Chat::new(opts, Arc::new(KeybindingsManager::new()));
+    let first = chat.theme.palette.get(lca_ui_role());
+    assert_eq!(
+        first,
+        crate::theme::Color::Rgb(0x00, 0xff, 0x88),
+        "the theme loads at construction"
+    );
+
+    // Edit the file, then reload.
+    std::fs::write(&theme_path, "accent = \"#ff5577\"\n").expect("rewrite theme");
+    for c in "/reload".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    chat.handle_key("\r");
+    assert_eq!(
+        chat.theme.palette.get(lca_ui_role()),
+        crate::theme::Color::Rgb(0xff, 0x55, 0x77),
+        "`/reload` must re-read the active theme file: the notice says themes \
+         were reloaded, so the colours on screen have to change with it"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn reload_applies_the_host_report() {
     let mut opts = options();
