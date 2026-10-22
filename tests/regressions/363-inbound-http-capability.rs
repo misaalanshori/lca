@@ -464,8 +464,8 @@ fn a_port_in_use_falls_back_to_the_next_one_and_the_bound_address_says_so() {
     );
     // And the fallback range is still inside the documented window.
     assert!(
-        bound >= serve_http::DEFAULT_PORT
-            && bound < serve_http::DEFAULT_PORT + serve_http::PORT_ATTEMPTS,
+        (serve_http::DEFAULT_PORT..serve_http::DEFAULT_PORT + serve_http::PORT_ATTEMPTS)
+            .contains(&bound),
         "bound {bound} is outside the fallback range"
     );
     drop(squatter);

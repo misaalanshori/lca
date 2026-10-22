@@ -11,10 +11,16 @@ impl Ui {
         &self.temp_dir
     }
 
-    /// The close-out: let hooks flush state, then close every
-    /// session this run opened (gh #209 - background tabs end cleanly
-    /// too, never crash-shaped).
+    /// The close-out: stop this session's inbound HTTP listener, let hooks
+    /// flush state, then close every session this run opened (gh #209 -
+    /// background tabs end cleanly too, never crash-shaped).
+    ///
+    /// The listener stops **first** (gh #363, ADR-0049): a request arriving
+    /// while hooks flush would be answered by an extension whose session is
+    /// already closing, and the port must be free before this returns so a
+    /// restarted session can take the same one.
     pub(super) fn close(&self) {
+        crate::lock(&self.session_http).stop();
         let registry = self.registry();
         lca_core::drive_blocking(async move {
             registry.on_session_close().await;

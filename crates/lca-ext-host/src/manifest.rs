@@ -330,6 +330,10 @@ impl Manifest {
                 // needs no resolved copy here. Validating it is the point.
                 let _ = reason;
             }
+            if let Some(cap) = table.get("pty") {
+                reason_of(cap, "capabilities.pty")?;
+                pty = true;
+            }
             if let Some(cap) = table.get("tools") {
                 reason_of(cap, "capabilities.tools")?;
                 tools = true;

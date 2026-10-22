@@ -48,38 +48,9 @@ pub const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 /// 64 characters: short enough to paste, far past guessing.
 const TOKEN_BYTES: usize = 32;
 
-/// One request as the listener parsed it.
-///
-/// After routing, `path` holds the **stripped** path the extension sees
-/// (`/index.html`), never the mounted one. One field rather than two so there
-/// is no way for a caller to read the wrong one and serve the mounted path by
-/// accident.
-#[derive(Debug, Clone)]
-pub struct IncomingRequest {
-    /// Upper-case method as sent (`GET`, `POST`, ...).
-    pub method: String,
-    /// The request path the extension should interpret: stripped of
-    /// `/<session>/<extension>`, always starting with `/`.
-    pub path: String,
-    /// Everything after `?`, without the `?`.
-    pub query: String,
-    /// Headers with names lower-cased.
-    pub headers: Vec<(String, String)>,
-    /// The body, already bounded by [`MAX_BODY_BYTES`].
-    pub body: Vec<u8>,
-}
-
-impl IncomingRequest {
-    /// The first value for `name`, case-insensitively.
-    #[must_use]
-    pub fn header(&self, name: &str) -> Option<&str> {
-        let name = name.to_ascii_lowercase();
-        self.headers
-            .iter()
-            .find(|(candidate, _)| *candidate == name)
-            .map(|(_, value)| value.as_str())
-    }
-}
+/// The contract types live in `lca-protocol` so the listener, the guest call,
+/// and the dispatch trait share one definition (see that module's docs).
+pub use lca_protocol::http::{HttpRequest as IncomingRequest, HttpResponse, ServeHttpNamespace};
 
 /// What a parsed request asks for after routing.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -314,56 +285,6 @@ impl Listener {
 impl Drop for Listener {
     fn drop(&mut self) {
         self.stop();
-    }
-}
-
-/// What the listener calls when a request is routed: the host hands this to
-/// the accept loop, and it reaches whichever extension owns the namespace.
-///
-/// A trait object rather than a concrete type so `lca-tools` never learns
-/// about `lca-ext-host`'s handle type - the same seam `CompletionBackend`
-/// uses, for the same reason (the contract crate cannot depend on the
-/// implementation crate).
-pub trait ServeHttpNamespace: Send + Sync {
-    /// The extension name this namespace serves.
-    fn extension(&self) -> &str;
-    /// The session id this namespace is mounted under.
-    fn session(&self) -> &str;
-    /// Answer one request, whose `path` is already stripped of
-    /// `/<session>/<extension>` and always starts with `/`.
-    fn answer(
-        &self,
-        base_url: &str,
-        request: IncomingRequest,
-    ) -> Result<HttpResponse, CapabilityError>;
-    /// Record a refusal against this extension's denial journal.
-    fn record_refusal(&self, parameter: &str, reason: &str);
-}
-
-/// A response the guest produced, ready to write to the wire.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HttpResponse {
-    /// HTTP status code.
-    pub status: u16,
-    /// Headers as `(name, value)`.
-    pub headers: Vec<(String, String)>,
-    /// The body.
-    pub body: Vec<u8>,
-}
-
-impl HttpResponse {
-    /// A small plain-text response, used by the host for its own refusals and
-    /// for a guest failure.
-    #[must_use]
-    pub fn text(status: u16, body: impl Into<String>) -> HttpResponse {
-        HttpResponse {
-            status,
-            headers: vec![(
-                "content-type".to_string(),
-                "text/plain; charset=utf-8".to_string(),
-            )],
-            body: body.into().into_bytes(),
-        }
     }
 }
 

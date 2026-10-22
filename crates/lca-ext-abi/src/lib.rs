@@ -515,6 +515,21 @@ pub mod dispatch {
             Vec::new()
         }
 
+        /// This handle's `serve-http` mount, when it declared the capability
+        /// (gh #363, ADR-0049). `None` means "no route": the session mounts
+        /// only what this returns, so an extension without the grant is absent
+        /// from the port rather than reachable-but-refusing.
+        ///
+        /// The trait object is the protocol crate's, not this crate's, because
+        /// the listener lives in `lca-tools` and the contract at the bottom is
+        /// what lets the two name each other (see `lca_protocol::http`).
+        fn serve_http_mount(
+            &self,
+            _session: &str,
+        ) -> Option<std::sync::Arc<dyn lca_protocol::http::ServeHttpNamespace>> {
+            None
+        }
+
         /// The tree for one region (`ui` world, ADR-0003, FR-UI-1).
         /// Synchronous on purpose: this runs on a frame's clock, and a
         /// native handle answers immediately while a WASM handle joins

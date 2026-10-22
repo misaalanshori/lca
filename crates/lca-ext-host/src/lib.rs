@@ -52,6 +52,7 @@ mod host_imports;
 mod instance_cache;
 mod manifest;
 mod provider;
+mod serve_http;
 mod tool_hooks;
 mod transform;
 mod ui;
@@ -154,6 +155,13 @@ pub enum CallError {
     /// A provider login submission failed (ADR-0033).
     #[error("login failed: {0}")]
     LoginFailed(String),
+    /// The guest answered with a capability-level failure of its own (gh
+    /// #363): a `serve-http` handler that refused or reported an internal
+    /// problem. Carried rather than pre-formatted so the caller can act on the
+    /// variant - the listener puts the text in a 500 body, and a refusal keeps
+    /// its `NotGranted` shape.
+    #[error("{0}")]
+    GuestReason(CapabilityError),
 }
 
 type HostLinker = Linker<HostState>;
@@ -298,6 +306,7 @@ impl ExtHost {
                 credentials: manifest.credentials,
                 completion: manifest.completion,
                 tools: manifest.tools,
+                serve_http: manifest.serve_http.clone(),
             },
             self.env.roots.clone(),
             self.env.prompt.clone(),
@@ -480,6 +489,13 @@ impl ExtHost {
                     .map_err(|err| LoadError::Link(err.to_string()))
             })
             .transpose()?;
+        let serve_http = declared
+            .contains(&lca_ext_abi::World::ServeHttp)
+            .then(|| {
+                lca_ext_abi::host::serve_http::ServeHttpPre::new(pre.clone())
+                    .map_err(|err| LoadError::Link(err.to_string()))
+            })
+            .transpose()?;
         let ui = declared
             .contains(&lca_ext_abi::World::Ui)
             .then(|| UiPre::new(pre).map_err(|err| LoadError::Link(err.to_string())))
@@ -498,6 +514,7 @@ impl ExtHost {
                 compaction,
                 context_transform,
                 ui,
+                serve_http,
                 ui_regions: manifest.ui_regions.clone(),
                 manifest_text: manifest_text.to_string(),
                 granted_env,
@@ -555,6 +572,9 @@ struct Inner {
     hooks_compaction: Option<lca_ext_abi::host::hooks_compaction::HooksCompactionPre<HostState>>,
     hooks_cache: Option<lca_ext_abi::host::hooks_cache::HooksCachePre<HostState>>,
     hooks_trust: Option<lca_ext_abi::host::hooks_trust::HooksTrustPre<HostState>>,
+    /// The `serve-http` world (gh #363, ADR-0049): instantiated when the
+    /// manifest declares it, so the host's listener has something to call.
+    serve_http: Option<lca_ext_abi::host::serve_http::ServeHttpPre<HostState>>,
     command: Option<lca_ext_abi::host::command::CommandPre<HostState>>,
     hooks: Option<lca_ext_abi::host::hooks::HooksPre<HostState>>,
     provider: Option<ProviderPre<HostState>>,

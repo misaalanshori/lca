@@ -114,6 +114,10 @@ pub struct CapabilityGrants {
     /// The `tools` capability, when declared (gh #77): call other
     /// tools through the host.
     pub tools: bool,
+    /// The `serve-http` capability's parameters (gh #363, ADR-0049), when
+    /// declared. The listener is the host's; this is what the extension
+    /// claimed, and its `Some(..)` is also "may be mounted on the port".
+    pub serve_http: Option<lca_permissions::ServeHttpSettings>,
 }
 
 type HttpClient = Client<hyper_rustls::HttpsConnector<proxy::ProxyTcp>, Full<hyper::body::Bytes>>;
@@ -548,6 +552,32 @@ impl Capabilities {
     /// capability catalog `ui`).
     pub fn note_ui_denial(&self, region: &str) {
         self.record("ui", region, "the manifest does not declare this region");
+    }
+
+    /// Record a `serve-http` refusal (gh #363). The listener owns the socket
+    /// and the gate; this is how a refusal or a failed handler reaches the
+    /// extension's own denial journal, which is what `ext info` counts.
+    pub fn note_serve_http(&self, parameter: &str, reason: &str) {
+        self.record("serve-http", parameter, reason);
+    }
+
+    /// Whether this extension declared `serve-http` at all (gh #363). The
+    /// listener mounts a namespace only when this is true, so an ungranted
+    /// extension has no route to be reached on rather than a route that
+    /// refuses.
+    pub fn serves_http(&self) -> bool {
+        self.grants.serve_http.is_some()
+    }
+
+    /// [`Capabilities::refused`] for callers outside this module (the host's
+    /// `serve-http` mount records through the engine, not around it).
+    pub fn refused_for(
+        &self,
+        capability: &str,
+        parameter: &str,
+        err: CapabilityError,
+    ) -> CapabilityError {
+        self.refused(capability, parameter, err)
     }
 
     /// Every URL this extension asked the host to open, in order: how

@@ -348,7 +348,24 @@ impl lca_ext_abi::ExtensionDispatch for NativeConformance {
             lca_ext_abi::World::Compaction,
             lca_ext_abi::World::ContextTransform,
             lca_ext_abi::World::Ui,
+            lca_ext_abi::World::ServeHttp,
         ]
+    }
+
+    /// The native twin's `serve-http` mount (gh #363, ADR-0049): the same
+    /// shared script the WASM guest runs, so the two delivery modes agree by
+    /// construction rather than by two implementations that happen to match.
+    ///
+    /// This is what makes the conformance comparison meaningful: the *host*
+    /// owns the listener in both modes, so what differs between them is only
+    /// how a request reaches the handler.
+    fn serve_http_mount(
+        &self,
+        session: &str,
+    ) -> Option<Arc<dyn lca_protocol::http::ServeHttpNamespace>> {
+        Some(Arc::new(NativeServeHttpMount {
+            session: session.to_string(),
+        }))
     }
 
     fn ui_regions(&self) -> Vec<String> {
@@ -685,4 +702,61 @@ impl lca_ext_abi::ExtensionDispatch for NativeConformance {
     ) -> lca_ext_abi::DispatchFuture<'static, Result<(), lca_protocol::DispatchError>> {
         Box::pin(std::future::ready(Ok(())))
     }
+}
+
+/// The native twin's `serve-http` namespace (gh #363): the same script the WASM
+/// guest runs, reached through the host's listener instead of a component call.
+///
+/// The delivery modes differ in exactly one way — a WIT record crossing into a
+/// guest versus a plain struct — which is what the comparison is meant to
+/// isolate. If both modes answer differently, the difference is a marshalling
+/// or host-wiring defect, never a difference in the script.
+pub struct NativeServeHttpMount {
+    session: String,
+}
+
+impl lca_protocol::http::ServeHttpNamespace for NativeServeHttpMount {
+    fn extension(&self) -> &str {
+        "conformance"
+    }
+
+    fn session(&self) -> &str {
+        &self.session
+    }
+
+    fn answer(
+        &self,
+        base_url: &str,
+        request: lca_protocol::http::HttpRequest,
+    ) -> Result<lca_protocol::http::HttpResponse, lca_protocol::CapabilityError> {
+        let outcome = crate::serve_http_answer(
+            base_url,
+            &crate::ServeHttpProbe {
+                method: request.method,
+                path: request.path,
+                query: request.query,
+                headers: request.headers,
+                body: request.body,
+            },
+        );
+        match outcome {
+            crate::ServeHttpOutcome::Answer {
+                status,
+                headers,
+                body,
+            } => Ok(lca_protocol::http::HttpResponse {
+                status,
+                headers,
+                body,
+            }),
+            crate::ServeHttpOutcome::NotGranted(reason) => {
+                Err(lca_protocol::CapabilityError::NotGranted(reason))
+            }
+            crate::ServeHttpOutcome::Failed(reason) => {
+                Err(lca_protocol::CapabilityError::Permission(reason))
+            }
+        }
+    }
+
+    fn record_refusal(&self, _parameter: &str, _reason: &str) {}
 }

@@ -136,6 +136,12 @@ pub(crate) struct Ui {
     /// #130) can swap in a fresh discovery while turns hold their own
     /// clone - a swap never disturbs a running turn.
     registry: Mutex<Arc<ExtensionRegistry>>,
+    /// The session's inbound HTTP listener (gh #363, ADR-0049). One per
+    /// process, shared by every extension that declared `serve-http`. Behind a
+    /// lock because `Ui` is shared through an `Arc` and the listener needs
+    /// `&mut` to stop; `Drop` also stops it, so an exiting session leaves no
+    /// bound port either way.
+    session_http: Mutex<crate::session_http::SessionHttp>,
     /// The terminal taken before this load, with what was typed into it
     /// (gh #400). Behind a lock because `options` takes `&Arc<Self>` and the
     /// loop takes ownership exactly once.
@@ -736,6 +742,26 @@ impl Ui {
             initial_head.push(warning);
         }
 
+        // Gh #363 / ADR-0049: start the session's inbound HTTP listener.
+        //
+        // Mounts come from the handles that declared `serve-http`, so an
+        // extension without the grant has no route rather than a route that
+        // refuses. A listener that cannot start degrades: the notice says why
+        // and the session continues, because a web UI is a convenience and a
+        // port collision must not cost the user their agent.
+        let mounts: Vec<Arc<dyn lca_protocol::http::ServeHttpNamespace>> = registry
+            .handles()
+            .iter()
+            .filter_map(|handle| handle.serve_http_mount(&session_id))
+            .collect();
+        let session_http = crate::session_http::SessionHttp::start(mounts);
+        // The notice names the URL and the port actually bound, never the
+        // default: a user told 8080 while the listener is on 8083 has been told
+        // something false. It is also the only place the token is rendered.
+        if let Some(notice) = session_http.notice() {
+            initial_head.push(notice);
+        }
+
         // FR-PROV-6: the configured provider resolves to an enabled handle,
         // or the session opens in the zero-provider state (FR-PROV-9). The
         // interactive surface must never be lockable from the inside, so a
@@ -930,6 +956,7 @@ impl Ui {
                 agent_config,
             })),
             registry: Mutex::new(registry),
+            session_http: Mutex::new(session_http),
             early_input: Mutex::new(Some(early_input)),
             settings_cell,
             model_cell: cells.model,
