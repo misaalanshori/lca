@@ -6,6 +6,25 @@ Dates are UTC.
 
 ## [Unreleased]
 
+### Fixed
+- **A silent MCP server that fails the handshake no longer hangs on `connecting`**
+  (gh #459). `lca mcp list`, `/mcp`, and the startup wait all reported `connecting`
+  until the 10-second budget expired and then still reported `connecting`, with the
+  server's actual error never shown. The cause was the good kind of irony: the
+  failure path wraps the error with the child's stderr tail so a chatty crash
+  explains itself, and that tail read **blocked** on a live child whose stderr pipe
+  was empty — no EOF, no data — so the path that exists to surface an error hung
+  before it could surface one, and the worker never landed a row. The tail read is
+  now non-blocking (`O_NONBLOCK` on Unix, `PeekNamedPipe` on Windows, both already
+  in the tree for the pty capability): a live child with nothing to say returns
+  immediately, a closed pipe still drains to the end, and a partial line still comes
+  back. The ABI's `read-stderr` import keeps its blocking semantics — an extension
+  asking for output must still wait for it — so the bounded read is a second path,
+  not a quiet change under the first. A row still `connecting` after the budget now
+  says so ("did not answer within Ns") instead of leaving a bare label that can
+  outlive every deadline. The chatty-crash case is unchanged and still reports its
+  tail.
+
 ### Added
 - **`/persona` sets a model, thinking level, tool loadout, and instructions in one
   command** (gh #412). A persona is a named bundle under `[personas.<name>]` in the

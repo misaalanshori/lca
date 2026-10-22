@@ -351,7 +351,13 @@ impl CliMcp {
     /// arranges.
     pub fn list(&self, budget: std::time::Duration) -> Result<ListReport, String> {
         let manager = self.manager()?;
-        manager.wait_until_settled(budget);
+        // Gh #459 design point 3: after the budget, a row still `connecting` is not
+        // "no news yet" any more - it is news, and it is that the server did not
+        // answer in time. The state stays `Connecting` (the worker may still be
+        // handshaking, and claiming otherwise would be its own lie), but the report
+        // carries the reason so the row cannot read as the one label that means
+        // "nothing has happened yet".
+        let still_connecting = manager.wait_until_settled(budget);
         let statuses = manager.bridge().statuses();
         let entries = manager.entries();
         let servers = statuses
@@ -393,9 +399,19 @@ impl CliMcp {
                         ("connected".to_string(), None, tools)
                     }
                     crate::ServerStateKind::Disabled => ("disabled".to_string(), None, Vec::new()),
-                    crate::ServerStateKind::Connecting => {
-                        ("connecting".to_string(), None, Vec::new())
-                    }
+                    crate::ServerStateKind::Connecting => (
+                        "connecting".to_string(),
+                        // Gh #459: name the deadline that passed rather than
+                        // leaving `connecting` bare. A row that outlives every
+                        // budget without saying so is a label that lies.
+                        still_connecting.contains(&status.name).then(|| {
+                            format!(
+                                "did not answer within {}s - it may still be                                  starting, or it may be stuck",
+                                budget.as_secs()
+                            )
+                        }),
+                        Vec::new(),
+                    ),
                     crate::ServerStateKind::NeedsSignIn(detail) => (
                         "needs-sign-in".to_string(),
                         Some(detail.clone()),

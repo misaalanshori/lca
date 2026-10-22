@@ -33,6 +33,7 @@ mod net;
 mod oauth_page;
 #[cfg(test)]
 mod pinned_tests;
+mod process_io;
 mod proxy;
 #[cfg(test)]
 mod query_tests;
@@ -804,92 +805,6 @@ impl Capabilities {
             },
         );
         Ok(id)
-    }
-
-    /// Read up to `max` bytes of the child's stdout; `None` at EOF.
-    pub fn process_read_stdout(
-        &self,
-        handle: u32,
-        max: usize,
-    ) -> Result<Option<Vec<u8>>, CapabilityError> {
-        let mut table = lock(&self.handles);
-        let entry = table
-            .entries
-            .get_mut(&handle)
-            .ok_or_else(|| CapabilityError::NotFound(format!("unknown handle {handle}")))?;
-        let HandleEntry::Process { child, stdout, .. } = entry else {
-            return Err(CapabilityError::Invalid(format!(
-                "handle {handle} is not a process"
-            )));
-        };
-        let reader = match stdout.as_mut() {
-            Some(reader) => reader,
-            None => {
-                let Some(reader) = child.stdout() else {
-                    return Err(CapabilityError::Invalid(format!(
-                        "handle {handle} has no stdout"
-                    )));
-                };
-                stdout.insert(reader)
-            }
-        };
-        Ok(crate::process::read_up_to(reader, max)?)
-    }
-
-    /// Read up to `max` bytes of the child's stderr; `None` at EOF.
-    pub fn process_read_stderr(
-        &self,
-        handle: u32,
-        max: usize,
-    ) -> Result<Option<Vec<u8>>, CapabilityError> {
-        let mut table = lock(&self.handles);
-        let entry = table
-            .entries
-            .get_mut(&handle)
-            .ok_or_else(|| CapabilityError::NotFound(format!("unknown handle {handle}")))?;
-        let HandleEntry::Process { child, stderr, .. } = entry else {
-            return Err(CapabilityError::Invalid(format!(
-                "handle {handle} is not a process"
-            )));
-        };
-        let reader = match stderr.as_mut() {
-            Some(reader) => reader,
-            None => {
-                let Some(reader) = child.stderr() else {
-                    return Err(CapabilityError::Invalid(format!(
-                        "handle {handle} has no stderr"
-                    )));
-                };
-                stderr.insert(reader)
-            }
-        };
-        Ok(crate::process::read_up_to(reader, max)?)
-    }
-
-    /// Write to the child's stdin.
-    pub fn process_write_stdin(&self, handle: u32, bytes: &[u8]) -> Result<u64, CapabilityError> {
-        let mut table = lock(&self.handles);
-        let entry = table
-            .entries
-            .get_mut(&handle)
-            .ok_or_else(|| CapabilityError::NotFound(format!("unknown handle {handle}")))?;
-        let HandleEntry::Process { child, stdin, .. } = entry else {
-            return Err(CapabilityError::Invalid(format!(
-                "handle {handle} is not a process"
-            )));
-        };
-        let writer = match stdin.as_mut() {
-            Some(writer) => writer,
-            None => {
-                let Some(writer) = child.stdin() else {
-                    return Err(CapabilityError::Invalid(format!(
-                        "handle {handle} has no stdin"
-                    )));
-                };
-                stdin.insert(writer)
-            }
-        };
-        Ok(crate::process::write_all(writer, bytes)?)
     }
 
     /// Wait for the child; returns its exit code and releases the handle.

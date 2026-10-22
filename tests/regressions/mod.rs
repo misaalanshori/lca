@@ -752,6 +752,11 @@ mod description_matches_code;
 #[path = "261-deny-rule-actually-matches.rs"]
 mod deny_rule_actually_matches;
 
+// Gh #459: the MCP error path reads a live child's stderr without waiting, so a
+// silent failure lands `Failed` instead of hanging on `Connecting`.
+#[path = "459-stderr-tail-never-blocks.rs"]
+mod stderr_tail_never_blocks;
+
 // Gh #412: `/persona` applies a bundle of model, thinking, loadout and
 // instructions atomically, or nothing at all.
 #[path = "412-persona-bundle-atomic.rs"]

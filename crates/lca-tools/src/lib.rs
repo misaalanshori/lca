@@ -42,7 +42,7 @@ pub use capabilities::{
 pub use open::{UrlLauncher, open_url, url_launchers, windows_url_launcher};
 pub use ops::{Entry, ExecOutcome, NativeOps, SKIP_DIRS, SessionEnv, Stat, ToolOps};
 pub use paths::{is_inside, resolve_target, sha256_hex};
-pub use process::{TreeChild, read_up_to, spawn_direct, write_all};
+pub use process::{TreeChild, read_buffered, read_up_to, spawn_direct, write_all};
 pub use pty::PtyChild;
 pub use shell::{Kind as ShellKind, Os as ShellOs, Probe as ShellProbe, Shell, Transport};
 

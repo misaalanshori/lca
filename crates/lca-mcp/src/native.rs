@@ -453,65 +453,9 @@ fn connect_one_stdio(
         Err(err) => Err(format!(
             "MCP server {:?} failed: {err}{}",
             entry.name,
-            stderr_tail(caps, handle)
+            crate::stdio_tail::stderr_tail(caps, handle)
         )),
     }
-}
-
-/// The last ≤2,000 bytes the child wrote to stderr, as a ` stderr: ...`
-/// suffix, or an empty string when it wrote nothing.
-///
-/// gh #418 Phase C#C1: a server that dies during the handshake usually
-/// explained itself on stderr ("config is wrong", a Python traceback, a
-/// missing token). Reporting only "the handshake failed" throws that away,
-/// so `/mcp` cannot say why. Only read on the failure path, and only
-/// non-blocking (see [`read_stderr_tail`]), because a live child's pipe may
-/// never close.
-fn stderr_tail(caps: &Arc<lca_tools::Capabilities>, handle: u32) -> String {
-    let tail = read_stderr_tail(caps, handle);
-    if tail.is_empty() {
-        return String::new();
-    }
-    format!(" stderr: {tail}")
-}
-
-/// How much of the child's stderr is kept (pi keeps 64 KiB; the tail that
-/// explains a crash is at the end, and 2 KiB is what `/mcp` can show).
-const STDERR_TAIL_BYTES: usize = 2000;
-
-/// Read what the child has already written to stderr, bounded.
-///
-/// `read_up_to` asks for at most one buffer and returns `None` at EOF, so a
-/// child that closed its pipe (the usual failure shape) is read to the end
-/// and a still-running child gives us its partial output. Never called on
-/// success, so it cannot steal a live server's stderr.
-fn read_stderr_tail(caps: &Arc<lca_tools::Capabilities>, handle: u32) -> String {
-    let mut collected = Vec::new();
-    loop {
-        match caps.process_read_stderr(handle, STDERR_TAIL_BYTES) {
-            Ok(Some(chunk)) if !chunk.is_empty() => {
-                collected.extend_from_slice(&chunk);
-                // Keep only the tail, so a chatty server cannot grow this.
-                if collected.len() > STDERR_TAIL_BYTES {
-                    let keep_from = collected.len() - STDERR_TAIL_BYTES;
-                    let keep_from = String::from_utf8_lossy(&collected[keep_from..])
-                        .char_indices()
-                        .next()
-                        .map(|(index, _)| index + keep_from)
-                        .unwrap_or(keep_from);
-                    collected.drain(..keep_from);
-                }
-            }
-            _ => break,
-        }
-    }
-    let text = String::from_utf8_lossy(&collected).trim().to_string();
-    if text.is_empty() {
-        return String::new();
-    }
-    // One line, so the notice stays one line; a traceback keeps its shape
-    // in the log but not in the status row.
-    text.replace(['\r', '\n'], " | ")
 }
 
 /// Connect one remote entry, sorting the outcome into live, silent
