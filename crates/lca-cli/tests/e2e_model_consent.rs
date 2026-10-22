@@ -51,6 +51,12 @@ fn an_ungranted_endpoint_prompts_before_the_model_list_and_lists_after() {
     let session = Tmux::new("model-consent-allow");
     session.spawn(&sandbox, Some(&mock), true, discovery_env(), &[]);
     session.wait_for("[session in", Duration::from_secs(25));
+    // gh #446 (the #447 family): this row failed on macOS in 0.82 s - far too
+    // fast for the consent round-trip it exercises - because the keystrokes
+    // below arrived before the input thread was reading. Wait for an echoed
+    // keystroke: that can only come through a live input path, and it is the
+    // readiness `[session in` was wrongly taken to imply.
+    session.wait_for_input_ready(Duration::from_secs(15));
 
     // 1. The ask comes first: the modal names the exact host (FR-PERM-16).
     session.send(&["/model", "Enter"]);
@@ -63,7 +69,9 @@ fn an_ungranted_endpoint_prompts_before_the_model_list_and_lists_after() {
     // 2. Allow: discovery runs (the grant landed first), the rows arrive,
     //    and the picker opens with the service in every label.
     session.send(&["a"]);
-    let pane = session.wait_for("zen-free (", Duration::from_secs(25));
+    // Both rows are asserted from one frame, so read a settled one: the picker
+    // fills its rows over several paints (gh #447).
+    let pane = session.wait_settled_for("zen-free (", Duration::from_secs(25));
     assert!(
         pane.contains("zen-free (127.0.0.1)") && pane.contains("zen-lite (127.0.0.1)"),
         "each row names the service that will bill the call:\n{pane}"
@@ -73,7 +81,7 @@ fn an_ungranted_endpoint_prompts_before_the_model_list_and_lists_after() {
         "the crate name is nowhere in the rows:\n{pane}"
     );
     session.send(&["Escape"]);
-    std::thread::sleep(Duration::from_millis(400));
+    session.wait_until_painted(Duration::from_secs(10));
 
     // 3. The grant persists: the second listing offers the model again
     //    and asks nothing. The row may be showing in the picker or
@@ -97,7 +105,7 @@ fn an_ungranted_endpoint_prompts_before_the_model_list_and_lists_after() {
         "the consent is per host: the second listing asked nothing:\n{pane}"
     );
     session.send(&["Escape"]);
-    std::thread::sleep(Duration::from_millis(300));
+    session.wait_until_painted(Duration::from_secs(10));
     session.send(&["/exit", "Enter"]);
     wait_for_session_end(&sandbox.state_dir(), Duration::from_secs(15));
 
@@ -106,6 +114,7 @@ fn an_ungranted_endpoint_prompts_before_the_model_list_and_lists_after() {
     let again = Tmux::new("model-consent-fresh");
     again.spawn(&sandbox, Some(&mock), true, discovery_env(), &[]);
     again.wait_for("[session in", Duration::from_secs(25));
+    again.wait_for_input_ready(Duration::from_secs(15));
     again.send(&["/model", "Enter"]);
     let deadline = std::time::Instant::now() + Duration::from_secs(20);
     let pane = loop {
@@ -124,7 +133,7 @@ fn an_ungranted_endpoint_prompts_before_the_model_list_and_lists_after() {
         "a fresh process lists with no re-prompt:\n{pane}"
     );
     again.send(&["Escape"]);
-    std::thread::sleep(Duration::from_millis(300));
+    again.wait_until_painted(Duration::from_secs(10));
     again.send(&["/exit", "Enter"]);
     wait_for_session_end(&sandbox.state_dir(), Duration::from_secs(15));
 }

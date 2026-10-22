@@ -31,12 +31,16 @@ fn ctrl_c_clears_text_then_exits() {
     let session = Tmux::new("polish-clear");
     session.spawn(&sandbox, None, false, &[], &[]);
     session.wait_for("[session in", std::time::Duration::from_secs(30));
+    session.wait_for_input_ready(std::time::Duration::from_secs(15));
 
     session.paste_text("scratch-text");
     session.wait_for("scratch-text", std::time::Duration::from_secs(10));
     session.send(&["C-c"]);
-    std::thread::sleep(std::time::Duration::from_millis(600));
-    let pane = session.capture();
+    // gh #447: "the tap cleared it" is an absence assertion, so it is only
+    // meaningful on a frame that has stopped changing. A sleep here could assert
+    // against a frame the `C-c` had not reached yet and pass for the wrong
+    // reason, which is worse than a flake.
+    let pane = session.wait_until_painted(std::time::Duration::from_secs(10));
     assert!(
         !pane.contains("scratch-text"),
         "the first tap clears:\n{pane}"
@@ -107,7 +111,7 @@ fn hover_highlights_settings_without_scrolling() {
     );
     assert!(!pane.contains('▲'), "nothing scrolled:\n{pane}");
     session.send(&["Escape"]);
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    session.wait_until_painted(std::time::Duration::from_secs(10));
     session.send(&["/exit", "Enter"]);
     // No turns ran, so no log exists for a session-end marker (gh
     // #122): the dead pane is the receipt.
@@ -143,7 +147,7 @@ fn settings_selector_shows_labels_and_help() {
         "raw keys hide:\n{pane}"
     );
     session.send(&["Escape"]);
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    session.wait_until_painted(std::time::Duration::from_secs(10));
     session.send(&["/exit", "Enter"]);
     // No turns ran, so no log exists for a session-end marker (gh
     // #122): the dead pane is the receipt.

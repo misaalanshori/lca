@@ -7,6 +7,33 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Added
+- **The real-terminal harness can wait for readiness instead of guessing at it**
+  (gh #447). `main` had been red on most pushes since batch-13, and the shape was
+  one class rather than five bugs: a row asked the pane one question and treated
+  the answer as complete. `wait_for(head)` returns the frame the head was painted
+  in, so a row asserting a *second* glyph read two moments as one
+  (`e2e_picker_scroll`'s `╭`, `e2e_tree_navigator`'s pair of connectors,
+  `e2e_color`'s separator); and `[session in` is painted by the first render,
+  which says nothing about the input thread, so a scenario typed in that gap was
+  lost with no trace to poll for (`e2e_slash_output`, `e2e_model_consent`'s
+  0.82 s failure). Three primitives in `tests/common/readiness.rs` close both
+  classes once: **`wait_until_painted`/`wait_settled_for`** capture until two
+  consecutive frames are identical and assert on that frame; **`wait_for_input_ready`**
+  types a unique probe, waits for it to be echoed through the live input path, and
+  erases it so it never becomes the scenario; **`retry_once`** promotes the
+  `conformance_diff.rs` house pattern so adopters stop re-writing it. None of them
+  changes what a row asserts — a row that still fails on a settled frame is a real
+  failure and keeps failing, and every primitive has a negative row in
+  `harness_contract.rs` (a fake that never settles must fail with both frames, not
+  hang; a `stty -echo` pane must fail with a message naming what a lost scenario
+  means). The settle heuristic's ceiling is documented and pinned: a pause longer
+  than the poll interval looks settled, which is why rows anchor on a needle where
+  they can. `an_oauth_flow_host_does_not_survive_into_tool_traffic` needed the
+  fix in kind rather than a longer window: it sampled the flow-scoped host set
+  every 5 ms from outside the flow, so a fast runner could finish the sign-in
+  before the first tick and the row failed while the product was correct — it now
+  reads the set from the browser opener, which runs synchronously inside
+  `sign_in_flow`, so the observation cannot miss.
 - **Sandboxed extensions can read the environment variables they declare**
   (gh #170). A WASM extension started with an empty environment, so an extension
   that fell back to an API-key variable worked when compiled in and broke as a

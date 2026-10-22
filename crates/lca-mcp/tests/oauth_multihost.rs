@@ -426,34 +426,59 @@ fn an_oauth_flow_host_does_not_survive_into_tool_traffic() {
     lca_mcp::remote::remember_unauthorized(&caps, &server, &format!("{}/mcp", mcp.base))
         .expect("the 401 was captured");
 
-    // Sample the flow's host set while it is live: the sign-in runs on a
-    // thread so the sampling can happen mid-flight, exactly when a leak would
-    // be observable.
+    // Observe the host set from **inside the flow**, not by polling it from
+    // outside (gh #447).
+    //
+    // The original row spawned a watcher that polled `oauth_flow_hosts()` every
+    // 5 ms and returned at the first non-empty sample. On a loaded runner the
+    // whole sign-in could finish before the watcher's first tick, leaving
+    // `during` legitimately empty and failing a row whose product was correct:
+    // the row was racing its own instrument, and a sample-based assertion cannot
+    // pin "it was admitted during the flow" if the flow can be shorter than the
+    // sampling period.
+    //
+    // The browser opener is the seam that fixes it in kind rather than by
+    // widening a window: `oauth_open` invokes it *synchronously, inside*
+    // `sign_in_flow`, after both `oauth_flow_attach` waves and before
+    // `sign_in` clears the set. Reading the hosts here is therefore a fact
+    // about the flow's own body - it cannot miss, and it cannot observe an
+    // after-state. The opener also delivers the pasted callback, exactly as
+    // `answer_callback` did, so the journey is unchanged.
     let seen = Arc::new(Mutex::new(Vec::<String>::new()));
-    let seen_writer = seen.clone();
-    let watcher_caps = caps.clone();
-    let watching = std::thread::spawn(move || {
-        for _ in 0..400 {
-            let hosts: Vec<String> = watcher_caps
-                .oauth_flow_hosts()
-                .into_iter()
-                .map(|pattern| describe(&pattern))
-                .collect();
-            if !hosts.is_empty() {
-                seen_writer.lock().expect("seen").extend(hosts);
-                return;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
+    let opener_caps = caps.clone();
+    let opener_seen = seen.clone();
+    caps.set_browser_opener(Some(Arc::new(move |url: &str| {
+        // Inside the flow: the authorisation URL is being opened, so whatever
+        // hosts the flow admitted are admitted right now.
+        *opener_seen.lock().expect("seen") = opener_caps
+            .oauth_flow_hosts()
+            .into_iter()
+            .map(|pattern| describe(&pattern))
+            .collect();
+        // Deliver the callback the way a browser that cannot reach the loopback
+        // would (the manual-delivery seam the other rows use).
+        let field = |name: &str| {
+            url.split(&format!("{name}="))
+                .nth(1)
+                .and_then(|rest| rest.split('&').next())
+                .unwrap_or("")
+        };
+        let state = field("state").to_string();
+        if !state.is_empty() {
+            let _ = opener_caps.oauth_deliver_manual(vec![
+                ("code".to_string(), "d-code".to_string()),
+                ("state".to_string(), state),
+            ]);
         }
-    });
-    answer_callback(caps.clone());
+        Ok(())
+    })));
     lca_mcp::sign_in(caps.clone(), &server).expect("the sign-in completes");
-    watching.join().expect("watcher");
 
     let during = seen.lock().expect("seen").clone();
     assert!(
         !during.is_empty(),
-        "the flow admitted at least one discovered host while it ran"
+        "the flow admitted at least one discovered host while it ran \
+         (observed from inside the flow, so this cannot be a missed sample)"
     );
     // `localhost` may surface as its resolved `[::1]` spelling: the flow's
     // grant is keyed by what the URL said, and a URL may name either. Accept

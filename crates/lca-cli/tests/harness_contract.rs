@@ -244,3 +244,267 @@ fn an_empty_pane_is_respawned_once_and_then_succeeds() {
         "the fake command ran at least once"
     );
 }
+
+// ---------------------------------------------------------------------
+// gh #447 - the readiness primitives' own contract.
+//
+// Every one of these drives a *fake* command, exactly like the #413 rows
+// above: the property under test is the harness's behaviour, and a product
+// binary would only make the test slower and less deterministic. Each
+// primitive gets a positive row (a fake that settles / echoes) and a negative
+// row (a fake that never settles / never echoes), because the failure mode of
+// every flake fix is turning a flake into a hang or a silent pass.
+// ---------------------------------------------------------------------
+
+// Verifies: gh #447 - `wait_until_painted` returns a frame that has stopped
+// changing, so a row reading two facts out of one capture reads one moment.
+//
+// The fake paints a head, waits, then paints the rest — the exact two-frame
+// shape `e2e_picker_scroll` lost on macOS. Reading the frame the head appeared
+// in is precisely what the old rows did; the primitive must give the later one.
+#[cfg(unix)]
+#[test]
+fn wait_until_painted_returns_the_frame_after_the_screen_stops_changing() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal rows are Unix-only)");
+        return;
+    }
+    let session = Tmux::new("settle-positive");
+    // Two paints a fraction of a poll interval apart — the real shape: the app
+    // paints a head, then the rest of the frame on its next render. (A pause
+    // *longer* than the poll interval is the documented ceiling, and is pinned
+    // by its own row below rather than pretended away here.)
+    session.spawn_raw("sh -c 'echo head; sleep 0.1; echo border; sleep 30'");
+    let pane = session.wait_until_painted(std::time::Duration::from_secs(20));
+    assert!(
+        pane.contains("head") && pane.contains("border"),
+        "the settled frame carries both paints, not the frame the head arrived in:\n{pane}"
+    );
+    // A settle really did poll more than once: the receipt for the report.
+    let (captures, settles) = common::settle_stats();
+    assert!(
+        captures >= 2,
+        "settling captured at least twice: {captures}"
+    );
+    assert!(settles >= 1, "at least one frame was declared settled");
+}
+
+// Verifies: gh #447 - a frame that never settles **fails** (with both frames in
+// the message) instead of hanging or passing.
+//
+// This is the row the brief calls out: a fix that turns a flake into a hang is
+// worse than the flake. The fake repaints a changing counter forever, so no two
+// consecutive captures are ever equal.
+#[cfg(unix)]
+#[test]
+fn a_frame_that_never_settles_fails_and_shows_both_frames() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal rows are Unix-only)");
+        return;
+    }
+    // A value that changes as fast as the shell can print it.
+    //
+    // The first version echoed `$RANDOM` every 100 ms and **flaked**: under load
+    // two 150 ms captures both landed in the same 100 ms gap, saw identical
+    // frames, and the primitive correctly declared the pane settled - so a row
+    // demanding a failure failed instead. That is the primitive's documented
+    // ceiling, but a *negative* row must not depend on the scheduler to stay
+    // negative, so the fake now prints a nanosecond clock with no sleep: any two
+    // captures a poll apart differ by construction.
+    //
+    // A second version still flaked at load average ~40, where the shell could go
+    // more than a poll interval without being scheduled at all. That is not a
+    // property this row can demand of a starved machine, so the row retries its
+    // *own precondition* (`retry_once`, the primitive it is testing) and fails
+    // loudly if the precondition misses twice - instead of turning a starved box
+    // into a red `main`, which is the exact failure this cycle exists to remove.
+    let outcome = common::retry_once(|| {
+        let session = Tmux::new("settle-negative");
+        session.spawn_raw("sh -c 'while :; do date +%s%N; done'");
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            session.wait_until_painted(std::time::Duration::from_millis(700));
+        }))
+        .err()
+    });
+    // `retry_once` yields `None` only when both attempts saw the pane settle, so
+    // a `None` here is the failure the row is watching for.
+    let Some(err) = outcome else {
+        panic!(
+            "a pane that never settles must fail, not hang: the pane settled twice \
+             (a starved box can go a whole poll interval without printing anything)"
+        );
+    };
+    let message = err
+        .downcast_ref::<String>()
+        .cloned()
+        .unwrap_or_else(|| "non-string panic".to_string());
+    assert!(
+        message.contains("stop changing"),
+        "the failure says the frame never settled: {message}"
+    );
+    assert!(
+        message.contains("--- previous ---") && message.contains("--- current ---"),
+        "both frames are in the message, so the reader can see why: {message}"
+    );
+    // The negative case must not be silently re-spawned: a *painted* pane is a
+    // fact, and re-spawning it would hide a real failure.
+    assert!(
+        !message.contains("re-spawn"),
+        "a painted pane is never re-spawned: {message}"
+    );
+}
+
+// Verifies: gh #447 - `wait_for_input_ready` proves the input path is live, and
+// leaves nothing of its probe behind.
+//
+// The property that matters is end-to-end: after the primitive returns, the
+// scenario's own text must reach the reader and be echoed. The probe is only the
+// gate; if the probe were left in the composer it would corrupt that scenario,
+// so its absence is asserted too.
+#[cfg(unix)]
+#[test]
+fn wait_for_input_ready_proves_the_reader_and_leaves_no_probe() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal rows are Unix-only)");
+        return;
+    }
+    let probe = format!("zq{}zq", std::process::id());
+    let session = Tmux::new("input-ready-positive");
+    // `cat` echoes every line it reads, so a scenario sent after the primitive
+    // returning must come back — that is the contract, not the probe itself.
+    session.spawn_raw("sh -c 'cat'");
+    session.wait_for_input_ready(std::time::Duration::from_secs(15));
+
+    // The real contract: a scenario typed now reaches the reader.
+    session.send(&["scenario-text", "Enter"]);
+    let pane = session.wait_until_painted(std::time::Duration::from_secs(15));
+    assert!(
+        pane.contains("scenario-text"),
+        "the scenario after the gate reached the reader:\n{pane}"
+    );
+    assert!(
+        !pane.contains(&probe),
+        "the probe was erased, so it cannot become the scenario's first words:\n{pane}"
+    );
+}
+
+// Verifies: gh #447 - a pane whose input never comes up **fails with a useful
+// message** rather than waiting forever (gh #444/#446's shape).
+//
+// The fake paints (so it is not a blank-pane case) and never reads: a `sleep`
+// with no reader. A keystroke is therefore never echoed, and the primitive must
+// say so in terms of what the user would see — "input is not attached" and the
+// consequence ("a scenario sent now would be lost").
+#[cfg(unix)]
+#[test]
+fn a_pane_that_never_echoes_fails_with_a_useful_message() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal rows are Unix-only)");
+        return;
+    }
+    let session = Tmux::new("input-ready-negative");
+    // Painted (so `wait_for` is happy) but nothing will echo a keystroke.
+    //
+    // `stty -echo` is what makes this faithful rather than fake: a pty's line
+    // discipline echoes typed bytes even when no program reads them, so a bare
+    // `sleep` would echo the probe and *pass*. Turning echo off reproduces the
+    // real shape — a terminal the app owns, with no input loop behind it — which
+    // is the state `[session in` used to be mistaken for.
+    session.spawn_raw("sh -c 'stty -echo; echo painted-but-deaf; sleep 30'");
+    session.wait_for("painted-but-deaf", std::time::Duration::from_secs(15));
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        session.wait_for_input_ready(std::time::Duration::from_millis(700));
+    }));
+    let err = outcome.expect_err("a deaf pane must fail, not hang");
+    let message = err
+        .downcast_ref::<String>()
+        .cloned()
+        .unwrap_or_else(|| "non-string panic".to_string());
+    assert!(
+        message.contains("never echoed a probe keystroke"),
+        "the failure names what was missing: {message}"
+    );
+    assert!(
+        message.contains("input is not attached") && message.contains("would be lost"),
+        "and says what it means for the scenario, not just for the harness: {message}"
+    );
+    assert!(
+        message.contains("gh #444"),
+        "the message points at the family it belongs to: {message}"
+    );
+}
+
+// Verifies: gh #447 - `retry_once` is lazy (a passing first attempt runs once)
+// and its second attempt is the last (a double miss is a failure, not a loop).
+//
+// The lazy half is the subtle one: the original inline pattern's sibling
+// `(attempt(), attempt())` would evaluate both eagerly and run a whole journey
+// twice even when the first was fine.
+#[cfg(unix)]
+#[test]
+fn retry_once_is_lazy_and_gives_up_after_the_second_miss() {
+    // A pass on the first try costs exactly one call.
+    let mut calls = 0;
+    let hit = common::retry_once(|| {
+        calls += 1;
+        Some("first")
+    });
+    assert_eq!(hit, Some("first"));
+    assert_eq!(calls, 1, "a passing first attempt is not duplicated");
+
+    // A first miss retries exactly once and can succeed.
+    let mut calls = 0;
+    let recovered = common::retry_once(|| {
+        calls += 1;
+        (calls == 2).then_some("second")
+    });
+    assert_eq!(recovered, Some("second"));
+    assert_eq!(calls, 2, "one retry, no more");
+
+    // Two misses give up: the primitive never loops.
+    let mut calls = 0;
+    let missed = common::retry_once(|| {
+        calls += 1;
+        None::<()>
+    });
+    assert_eq!(missed, None);
+    assert_eq!(
+        calls, 2,
+        "a second miss is final, so a broken row cannot spin"
+    );
+}
+
+// Verifies: gh #447 - the settle heuristic's **ceiling is real and documented**,
+// so the next person inherits a known limit instead of a surprise.
+//
+// A pane that pauses for longer than the poll interval between two paints looks
+// settled, and this row pins that honestly rather than letting the doc comment
+// be the only record. What would catch it, if it ever bites: a longer quiet
+// window (require N settled frames or a minimum quiet period), or asserting on a
+// state marker the app emits instead of on the absence of motion — and this row
+// is what tells the next reader which of those to reach for.
+#[cfg(unix)]
+#[test]
+fn a_pane_that_pauses_past_the_poll_interval_looks_settled() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal rows are Unix-only)");
+        return;
+    }
+    let session = Tmux::new("settle-ceiling");
+    // Longer than the harness's 150 ms poll: the two captures between the paints
+    // are identical, so the heuristic settles on the head frame alone.
+    session.spawn_raw("sh -c 'echo head; sleep 1.2; echo border; sleep 30'");
+    let pane = session.wait_until_painted(std::time::Duration::from_secs(20));
+    assert!(
+        pane.contains("head") && !pane.contains("border"),
+        "the documented ceiling: a pause longer than the poll interval settles \
+         early, which is why rows must anchor on a needle where they can:\n{pane}"
+    );
+    // The remedy the doc names, working: anchoring on the *later* paint waits
+    // for a frame that carries it and then settles.
+    let anchored = session.wait_settled_for("border", std::time::Duration::from_secs(20));
+    assert!(
+        anchored.contains("border"),
+        "anchoring on the needle is what closes the ceiling:\n{anchored}"
+    );
+}

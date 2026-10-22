@@ -77,10 +77,17 @@ fn bands_card_states_and_the_separator_render_on_a_real_pane() {
     let session = Tmux::new("color");
     session.spawn(&sandbox, Some(&mock), true, &[], &["--yolo"]);
     session.wait_for("YOLO MODE", std::time::Duration::from_secs(20));
+    session.wait_for_input_ready(std::time::Duration::from_secs(15));
 
     session.send(&["run the sleeper", "Enter"]);
-    // While the command runs: the user band, the pending card, and the
-    // spinner row, all at once.
+    // While the command runs: the user band, the pending card, and the spinner
+    // row, all at once.
+    //
+    // Read with `wait_for_e`, **not** a settle (gh #447): the spinner animates
+    // continuously, so a live frame legitimately never repeats and a settle
+    // would time out. The two-frame class this row belonged to was in the
+    // *post-turn* reads below, which run on a static idle screen - that is where
+    // settling belongs, and where it now is.
     let working = session.wait_for_e(TOOL_PENDING, std::time::Duration::from_secs(25));
     assert!(
         working.contains(USER_BAND),
@@ -118,8 +125,8 @@ fn bands_card_states_and_the_separator_render_on_a_real_pane() {
     );
 
     // After the turn: the success tint and the rest-state separator.
-    session.wait_for("first turn done", std::time::Duration::from_secs(30));
-    let done = session.capture_e();
+    session.wait_settled_for("first turn done", std::time::Duration::from_secs(30));
+    let done = session.wait_until_painted_e(std::time::Duration::from_secs(15));
     assert!(
         done.contains(TOOL_SUCCESS),
         "the settled card is quiet green:\n{done}"
@@ -133,8 +140,8 @@ fn bands_card_states_and_the_separator_render_on_a_real_pane() {
 
     // Turn 2: a failing read tints the card error-red.
     session.send(&["read a missing file", "Enter"]);
-    session.wait_for("second turn done", std::time::Duration::from_secs(30));
-    let failed = session.capture_e();
+    session.wait_settled_for("second turn done", std::time::Duration::from_secs(30));
+    let failed = session.wait_until_painted_e(std::time::Duration::from_secs(15));
     assert!(
         failed.contains(TOOL_ERROR),
         "the failed card is error-tinted:\n{failed}"
@@ -146,8 +153,8 @@ fn bands_card_states_and_the_separator_render_on_a_real_pane() {
 
     // Turn 3: a fenced block highlights per the RE's classes (R3).
     session.send(&["show me a code block", "Enter"]);
-    session.wait_for("fn greet", std::time::Duration::from_secs(30));
-    let code = session.capture_e();
+    session.wait_settled_for("fn greet", std::time::Duration::from_secs(30));
+    let code = session.wait_until_painted_e(std::time::Duration::from_secs(15));
     assert!(code.contains(SYNTAX_KEYWORD), "keyword class:\n{code}");
     assert!(code.contains(SYNTAX_STRING), "string class:\n{code}");
     assert!(code.contains(SYNTAX_COMMENT), "comment class:\n{code}");

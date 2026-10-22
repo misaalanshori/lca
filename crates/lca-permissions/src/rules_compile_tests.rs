@@ -9,8 +9,23 @@ use std::path::PathBuf;
 use super::{RuleRejection, RuleVerb, compile};
 use crate::{Action, RuleDecision, RuleScope, wildcard_match};
 
+/// A project root, absolute-shaped.
+///
+/// The compile step only uses it for documentation (`compile` deliberately does
+/// not bake the project directory into a rule), so the literal is inert. It is
+/// written Unix-shaped because the *pattern* rules are platform-independent by
+/// design (see `an_absolute_path_is_not_prefixed`); a platform-shaped fixture
+/// would suggest otherwise.
 fn project() -> PathBuf {
     PathBuf::from("/home/me/proj")
+}
+
+/// The path a `read` action carries for `name` under the project.
+///
+/// Built with `join`, so the separator is whatever the platform uses — the
+/// pattern side must match it without the fixture pretending to be Unix.
+fn under_project(name: &str) -> PathBuf {
+    project().join(name)
 }
 
 // ---------------------------------------------------------------- compiling
@@ -24,7 +39,7 @@ fn a_relative_path_gains_a_leading_wildcard() {
     assert_eq!(rule.pattern, "*muffin-recipe.txt");
     // And it matches what the action actually carries.
     let action = Action::ReadPath {
-        path: PathBuf::from("/home/me/proj/muffin-recipe.txt"),
+        path: under_project("muffin-recipe.txt"),
     };
     assert!(
         wildcard_match(&rule.pattern, &action.match_value()),
@@ -40,7 +55,7 @@ fn a_relative_write_path_gains_a_leading_wildcard() {
     assert_eq!(rule.verb, Some(RuleVerb::Write), "write is its own verb");
     assert_eq!(rule.pattern, "*out/report.txt");
     let action = Action::WritePath {
-        path: PathBuf::from("/home/me/proj/out/report.txt"),
+        path: under_project("out/report.txt"),
     };
     assert!(wildcard_match(&rule.pattern, &action.match_value()));
 }
@@ -49,6 +64,9 @@ fn a_relative_write_path_gains_a_leading_wildcard() {
 // working byte-for-byte. An anchored pattern is not rewritten.
 #[test]
 fn an_already_anchored_glob_passes_through_untouched() {
+    // `read /etc/*` is the case that went red on Windows: a leading `/` is
+    // absolute-shaped to the user on every platform, so it must pass through as
+    // typed. `Path::is_absolute` alone said otherwise on Windows.
     for typed in [
         "read *muffin-recipe.txt",
         "read /etc/*",
@@ -66,12 +84,55 @@ fn an_already_anchored_glob_passes_through_untouched() {
 // Verifies: gh #261 design point 2 - an absolute path is compared as written.
 #[test]
 fn an_absolute_path_is_not_prefixed() {
+    // The rule is platform-independent on purpose: an anchored pattern is stored
+    // as typed, and it matches the path an action carries however that platform
+    // spells an absolute path. This row asserts both halves without a `cfg!`
+    // branch, because branching on the platform would have hidden exactly the
+    // defect the Windows leg found.
     let rule = compile("read /etc/hostname", &project()).expect("compiles");
     assert_eq!(rule.pattern, "/etc/hostname");
     let action = Action::ReadPath {
         path: PathBuf::from("/etc/hostname"),
     };
-    assert!(wildcard_match(&rule.pattern, &action.match_value()));
+    assert!(
+        wildcard_match(&rule.pattern, &action.match_value()),
+        "the anchored rule matches the absolute path the action carries: {} vs {}",
+        rule.pattern,
+        action.match_value()
+    );
+
+    // And a relative rule still spans to an absolute match value, built with the
+    // platform's own separator.
+    let relative = compile("read muffin-recipe.txt", &project()).expect("compiles");
+    let resolved = Action::ReadPath {
+        path: under_project("muffin-recipe.txt"),
+    };
+    assert!(
+        wildcard_match(&relative.pattern, &resolved.match_value()),
+        "a relative rule matches the resolved path on this platform: {} vs {}",
+        relative.pattern,
+        resolved.match_value()
+    );
+}
+
+// Verifies: gh #261 (the same regression, other direction) - a Windows drive
+// path is anchored on every platform too, so a rule written on Windows keeps its
+// meaning when the tree is read elsewhere.
+#[test]
+fn a_windows_drive_pattern_is_anchored_on_every_platform() {
+    let rule = compile(r"read C:\Windows\hosts", &project()).expect("compiles");
+    assert_eq!(rule.pattern, r"C:\Windows\hosts");
+    // And a relative rule spans a Windows-shaped value too: `*` crosses `\`, so
+    // `*muffin-recipe.txt` matches `C:\Users\me\proj\muffin-recipe.txt`. This is
+    // the property that makes the relative rule portable without the compile step
+    // needing to know the platform - asserted on any host, because it is a fact
+    // about the matcher, not about the machine running the test.
+    let relative = compile("read muffin-recipe.txt", &project()).expect("compiles");
+    assert!(
+        wildcard_match(&relative.pattern, r"C:\Users\me\proj\muffin-recipe.txt"),
+        "a relative rule matches a Windows-shaped absolute path: {}",
+        relative.pattern
+    );
 }
 
 // Verifies: gh #261 - a bare glob (no verb) is unchanged: shell and net rules
