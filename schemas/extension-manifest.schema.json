@@ -109,6 +109,9 @@
         },
         "tools": {
           "$ref": "#/$defs/toolsCapability"
+        },
+        "env": {
+          "$ref": "#/$defs/envCapability"
         }
       }
     },
@@ -351,6 +354,33 @@
         }
       },
       "required": [
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "envCapability": {
+      "type": "object",
+      "description": "The right to read named variables from the host environment. The manifest lists variable NAMES; the host copies the values that are present into the sandboxed component at instantiation, so a declared name the user did not approve, or that is unset on the host, is simply absent inside the component. Values never enter the session log, an export, or `ext info` - only the names do. Exact names only: a wildcard would make the consent screen say nothing, which is the same rejection a bare `*` gets under `net`.",
+      "properties": {
+        "keys": {
+          "type": "array",
+          "description": "The exact variable names this extension may read. The install screen names them, because an environment variable can hold a secret and the list is the whole gate.",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+          },
+          "uniqueItems": true
+        },
+        "reason": {
+          "type": "string",
+          "description": "Shown verbatim at install time. A bare capability name gives the user nothing to evaluate.",
+          "minLength": 10,
+          "maxLength": 200
+        }
+      },
+      "required": [
+        "keys",
         "reason"
       ],
       "additionalProperties": false

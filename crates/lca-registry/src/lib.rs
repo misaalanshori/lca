@@ -371,6 +371,36 @@ pub fn consent_lines(manifest: &str) -> Result<Vec<String>, Error> {
                 "Open a browser sign-in and receive the response on a local port.".to_string(),
             ),
             "credentials" => lines.push("Store and read its own saved credentials.".to_string()),
+            // Gh #170: an environment variable is often a secret, so the line
+            // names every key. "Read some variables" would be a consent screen
+            // that says nothing - the same reasoning that refuses a wildcard
+            // grant.
+            "env" => {
+                let mut keys: Vec<String> = value
+                    .get("keys")
+                    .and_then(|keys| keys.as_array())
+                    .map(|keys| {
+                        keys.iter()
+                            .filter_map(|key| key.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                keys.sort();
+                if keys.is_empty() {
+                    lines.push(
+                        "Read named environment variables, none of which are granted yet."
+                            .to_string(),
+                    );
+                } else {
+                    lines.push(format!(
+                        "Read {} from your environment.",
+                        keys.iter()
+                            .map(|key| format!("`{key}`"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                }
+            }
             "completion" => lines.push(format!(
                 "{} This lets it ask the current model for a response.",
                 reason(value, "reason")

@@ -221,6 +221,14 @@ impl Cap for GuestCap {
     /// world now imports. This is the conformance obligation the import
     /// carries - if the guest stops delegating, granted/denied/unlisted
     /// all collapse into one shape and the matrix catches it.
+    /// Gh #170: inside a component `std::env::var` is served by
+    /// `wasi:cli/environment`, which the host populated with exactly the
+    /// variables the manifest declared - so this is the grant, observed from
+    /// the guest side, with no separate capability call needed.
+    fn env_get(&self, name: &str) -> Option<String> {
+        std::env::var(name).ok()
+    }
+
     fn net_fetch(&self, url: &str) -> Result<(u16, Vec<u8>), crate::CapabilityError> {
         let handle = net::request("GET", url, &[], None).map_err(map_net)?;
         let outcome = (|| {

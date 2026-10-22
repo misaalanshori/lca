@@ -174,6 +174,18 @@ impl Cap for NativeCap {
     /// Gh #302: a whole GET over the capability engine - the same shape
     /// the WASM half runs over the import, so the two modes' answers
     /// differ only when the host itself does.
+    /// Gh #170: a native twin reads the process environment, but the *grant*
+    /// is the manifest's declared list - the same set the host forwarded to a
+    /// component. Without that gate a compiled-in extension could read a
+    /// variable a sandboxed one cannot, which is precisely the native/WASM
+    /// divergence #170 exists to close.
+    fn env_get(&self, name: &str) -> Option<String> {
+        if !crate::declared_env_names().iter().any(|key| key == name) {
+            return None;
+        }
+        std::env::var(name).ok()
+    }
+
     fn net_fetch(&self, url: &str) -> Result<(u16, Vec<u8>), CapabilityError> {
         let handle = self.cap.net_request_asking("GET", url, &[], None)?;
         let outcome = (|| {

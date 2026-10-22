@@ -103,6 +103,16 @@ pub trait Cap {
     /// delegated only `request` would pass a narrower probe while still
     /// being unable to fetch.
     fn net_fetch(&self, url: &str) -> Result<(u16, Vec<u8>), CapabilityError>;
+    /// Read one environment variable by name (gh #170). `None` means absent -
+    /// distinct from `Some("")`, because absence and emptiness are different
+    /// facts and an empty API key that looks present is how a provider sends a
+    /// blank credential.
+    ///
+    /// Both delivery modes answer this through their own environment: a
+    /// component through `wasi:cli/environment` (which the host populated from
+    /// the manifest's declared names), a native twin through the process. The
+    /// comparison is the point, not an accident.
+    fn env_get(&self, name: &str) -> Option<String>;
 }
 
 /// The identity probe's capability surface: credentials plus the loopback
@@ -358,6 +368,43 @@ pub fn run_tool_mode(
     }
 }
 
+/// The variable names this package declares under `capabilities.env`
+/// (gh #170), read from the manifest the host also reads.
+///
+/// A native twin has no `WasiCtx` to forward into, so it must apply the same
+/// declared list itself - otherwise "compiled-in" would be a way to read a
+/// variable the sandbox refuses, and the two modes would differ for a reason
+/// nobody chose.
+///
+/// Parsed by scanning the one `[capabilities.env]` block's `keys = [...]` line
+/// rather than by pulling a TOML parser into this crate: the block is three
+/// lines of our own file, and the alternative is a dependency for a test
+/// fixture. A missing block reads as "declares nothing", which is the honest
+/// answer for a manifest without the grant.
+pub fn declared_env_names() -> Vec<String> {
+    let manifest = include_str!("../extension.toml");
+    let Some(block) = manifest.split("[capabilities.env]").nth(1) else {
+        return Vec::new();
+    };
+    let Some(keys_line) = block
+        .lines()
+        .find(|line| line.trim_start().starts_with("keys"))
+    else {
+        return Vec::new();
+    };
+    let Some(list) = keys_line
+        .split_once('[')
+        .and_then(|(_, rest)| rest.split_once(']'))
+    else {
+        return Vec::new();
+    };
+    list.0
+        .split(',')
+        .map(|key| key.trim().trim_matches('"').trim_matches('\'').to_string())
+        .filter(|key| !key.is_empty())
+        .collect()
+}
+
 /// Parse the `mode` argument; anything absent means `ok`.
 pub fn mode_and_args(arguments: &str) -> (String, serde_json::Value) {
     let value = serde_json::from_str::<serde_json::Value>(arguments).unwrap_or_default();
@@ -396,6 +443,33 @@ pub fn run_shared(
             text: "conformance ok".to_string(),
             extras: Default::default(),
         },
+        // gh #170: the `env` grant, as a whole probe. Both delivery modes read
+        // through `std::env::var`, which in a component is served by
+        // `wasi:cli/environment` from the `WasiCtx` the host built - so this
+        // compares the *host's* grant, not one mode's private path.
+        //
+        // Reported as `present:<value>` or `absent`, which makes the three
+        // interesting answers distinct: a granted-and-set key shows its value,
+        // a declared-but-unset key and an undeclared key both show `absent`,
+        // and neither can be confused with an empty string.
+        "env-get" => {
+            let name = args
+                .get("name")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            match cap.env_get(name) {
+                Some(value) => ModeOutcome {
+                    ok: true,
+                    text: format!("present:{value}"),
+                    extras: Default::default(),
+                },
+                None => ModeOutcome {
+                    ok: true,
+                    text: "absent".to_string(),
+                    extras: Default::default(),
+                },
+            }
+        }
         // gh #302: fetch one URL through the mode's `net` path. The
         // reply is `status:bytes`, so granted, denied, and unlisted all
         // compare across delivery modes - a denial is an error outcome
