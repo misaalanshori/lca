@@ -95,6 +95,9 @@ fn the_spawn_count_is_a_real_counter() {
         "fn a_trap_on_the_driver_still_evicts_the_cache",
         "fn two_threads_calling_the_same_extension_do_not_deadlock",
         "fn dropping_an_extension_shuts_its_driver_down",
+        "fn render_returns_the_same_tree_through_the_driver",
+        "fn on_ui_event_returns_the_same_effect_through_the_driver",
+        "fn repeated_calls_are_stable_on_the_driver",
     ] {
         assert!(
             tests.contains(row),
