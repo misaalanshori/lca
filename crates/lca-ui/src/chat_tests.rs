@@ -1105,6 +1105,10 @@ mod picker_scroll_tests;
 #[cfg(test)]
 #[path = "chat_settings_filter_tests.rs"]
 mod settings_filter_tests;
+// Gh #397: the `/settings` project-override row.
+#[cfg(test)]
+#[path = "chat_project_override_tests.rs"]
+mod project_override_tests;
 #[cfg(test)]
 #[path = "chat_toast_tests.rs"]
 mod toast_tests;

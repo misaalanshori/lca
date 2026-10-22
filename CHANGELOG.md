@@ -53,6 +53,22 @@ Dates are UTC.
   record, which stays `/mcp disable`'s job.
 
 ### Fixed
+- **A project override can be seen and cleared** (gh #397, tri-state slice). A
+  project override has three states, not two — the project file says nothing
+  (inherit the user file or the default), says on, or says off — and the
+  interface could only express the two set ones. `/settings` now shows each
+  boolean key's project state as a word (`project inherit` / `on` / `off`) and
+  cycles it with `Tab`. Returning to `inherit` **removes** the key instead of
+  writing `false`, because a `false` written to stop overriding would keep
+  beating the user file it was supposed to yield to; clearing the last key
+  removes the emptied file so the round trip is byte-identical. `Enter` still
+  writes the user file, `Tab` writes this project's: two different files, two
+  different consequences, and the row names the source that actually won. An
+  override in an untrusted project stays inert and says so (FR-PERM-9). Also
+  fixed while there: writing `ui.quiet_startup` through `/settings` used to
+  persist the TOML **string** `"true"`, which the loader then refused on
+  `/reload` ("expected true, false, or \"header\", got a string") — a write the
+  user could not read back.
 - **The footer tells the truth about git, and stops reading the disk on every
   frame** (gh #389, closing #330). The branch was read from `<cwd>/.git/HEAD`
   and nothing else, so it vanished when you ran the agent from a subdirectory,

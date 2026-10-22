@@ -28,6 +28,65 @@ fn persist_setting_list_at(
     persist_item_at(path, key, values)
 }
 
+/// The project configuration file for `cwd`: `<cwd>/.lca/config.toml`.
+///
+/// Gh #397: the project layer is a real file the user may have hand-written, so
+/// unlike the user file it is **not** created to hold a value. A write here is
+/// an explicit statement about this project only.
+pub fn project_config_file(cwd: &std::path::Path) -> std::path::PathBuf {
+    cwd.join(".lca").join("config.toml")
+}
+
+/// Write (or clear, with `None`) one key in the **project** file (gh #397).
+///
+/// `None` removes the key and prunes the tables it emptied, so "stop
+/// overriding here" leaves a file byte-identical to the one that did not
+/// mention the key. A removal that empties the whole file removes the file
+/// itself: `.lca/config.toml` existing with nothing in it would still trip the
+/// trust prompt (ADR-0039), so leaving an empty file behind would be a visible
+/// change from a no-op.
+pub fn persist_project_setting(
+    cwd: &std::path::Path,
+    key: &str,
+    value: Option<&str>,
+) -> std::io::Result<()> {
+    persist_project_setting_at(&project_config_file(cwd), key, value)
+}
+
+/// [`persist_project_setting`] against an explicit path (the testable half).
+fn persist_project_setting_at(
+    path: &std::path::Path,
+    key: &str,
+    value: Option<&str>,
+) -> std::io::Result<()> {
+    persist_item_at(path, key, value.map(|value| typed_item(key, value)))?;
+    // Idempotent clearing: a file that now holds nothing is not a project
+    // config, and leaving it would keep the trust prompt alive for a setting
+    // the user just asked to forget.
+    if value.is_none() && file_is_empty(path) {
+        std::fs::remove_file(path)?;
+        if let Some(parent) = path.parent() {
+            // Only if we left it empty; `.lca/` may hold extensions, mcp.json,
+            // sessions - anything else and it stays.
+            let _ = std::fs::remove_dir(parent);
+        }
+    }
+    Ok(())
+}
+
+/// Whether a config file exists but says nothing (only blanks and comments).
+fn file_is_empty(path: &std::path::Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let meaningful: String = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .collect();
+    meaningful.is_empty()
+}
+
 /// [`persist_setting`] against an explicit path (the testable half).
 fn persist_setting_at(
     path: &std::path::Path,
@@ -65,6 +124,16 @@ fn typed_item(key: &str, value: &str) -> toml_edit::Item {
         Ok(lca_config::TypedValue::Bool(flag)) => Item::Value(Value::from(flag)),
         Ok(lca_config::TypedValue::Count(count)) => Item::Value(Value::from(count as i64)),
         Ok(lca_config::TypedValue::Number(number)) => Item::Value(Value::from(number)),
+        // `ui.quiet_startup` is `bool | "header"`: the loader reads a TOML
+        // **boolean** or the exact string `"header"`, and refuses the string
+        // `"true"`. Writing `Text` as a quoted string made `/settings` produce
+        // a file `/reload` then rejected ("expected true, false, or \"header\",
+        // got a string") - a write that cannot be read back.
+        Ok(lca_config::TypedValue::Text(text))
+            if key == "ui.quiet_startup" && (text == "true" || text == "false") =>
+        {
+            Item::Value(Value::from(text == "true"))
+        }
         _ => toml_value(value),
     }
 }

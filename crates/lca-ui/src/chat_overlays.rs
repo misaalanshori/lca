@@ -20,7 +20,8 @@ const HINT_GRANTS: &str = "↑↓ move · enter revoke · esc close";
 const HINT_THEME: &str = "↑↓ preview · enter apply · esc restore";
 const HINT_SETTINGS_EDIT: &str = "type the value · enter apply · esc cancel";
 /// Pi's `/settings` hint verbatim: the list filters as you type.
-const HINT_SETTINGS_SEARCH: &str = "↑↓ move · enter/←→ change · q/esc close · type to search";
+const HINT_SETTINGS_SEARCH: &str =
+    "↑↓ move · enter/←→ change · tab project · q/esc close · type to search";
 const HINT_LOGIN: &str = "↑↓ move · enter choose · esc cancel";
 
 /// The sensitive filename in a permission modal's action text, if the
@@ -455,8 +456,16 @@ impl Chat {
                 {
                     body.push(format!(" {cur} {} = {}█", row.label, buffer));
                 } else {
+                    // Gh #397: a project-overridable row shows the tri-state as
+                    // a word (NFR-28: never colour alone), so "this project is
+                    // overriding your user file" is visible without reading the
+                    // source column.
+                    let project = match row.project {
+                        Some(state) => format!("project {}, ", state.word()),
+                        None => String::new(),
+                    };
                     body.push(format!(
-                        " {cur} {} = {} [{}]",
+                        " {cur} {} = {} [{project}{}]",
                         row.label,
                         row.display_value(),
                         row.source

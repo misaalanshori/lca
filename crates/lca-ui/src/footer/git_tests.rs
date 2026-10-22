@@ -334,7 +334,12 @@ fn a_gitdir_file_is_followed_once() {
     std::fs::write(root.join(".git"), "gitdir: ../b\n").expect("write a/.git");
     // One indirection resolves the path; it is not re-read as a `.git` file.
     let dirs = find_git_dir(&root).expect("the indirection resolves");
-    assert_eq!(dirs.git_dir, scratch.path().join("b"));
+    // Canonical, for the same reason as the commondir row: a scratch path is a
+    // symlink target on macOS and has an 8.3 alias on Windows.
+    assert_eq!(
+        std::fs::canonicalize(&dirs.git_dir).expect("the indirection resolves"),
+        std::fs::canonicalize(scratch.path().join("b")).expect("the target exists")
+    );
 }
 
 // Verifies: gh #389 gap 1 - the walk stops at the filesystem root without
@@ -391,5 +396,14 @@ fn a_worktree_resolves_its_common_dir() {
         dirs.git_dir, dirs.common_dir,
         "a worktree's gitdir holds HEAD; its refs live in the main repository"
     );
-    assert_eq!(dirs.common_dir, root.join(".git"));
+    // Compared canonically: the scratch path is a symlink target on macOS
+    // (`/private/var/...`) and a long name on Windows, where the same directory
+    // also answers to its 8.3 form (`RUNNER~1`). `commondir` is written by git
+    // from *its* view of the path, so a raw comparison pins the fixture's
+    // spelling instead of the property.
+    assert_eq!(
+        std::fs::canonicalize(&dirs.common_dir).expect("common dir canonicalizes"),
+        std::fs::canonicalize(root.join(".git")).expect("repo .git canonicalizes"),
+        "the worktree shares the main repository's refs"
+    );
 }

@@ -118,6 +118,7 @@ fn settings_paging_keys_jump_and_step_selection() {
                 masked: false,
                 section: String::new(),
                 values: Vec::new(),
+                project: None,
             })
             .collect(),
         selected: 0,
@@ -180,6 +181,7 @@ fn settings_rows_paint_labels_and_a_description() {
         source: "default".to_string(),
         masked: false,
         values: vec![],
+        project: None,
     };
     let mut chat = chat();
     chat.screen_mode = true;
@@ -219,6 +221,7 @@ fn settings_rows_show_human_values() {
         source: "default".to_string(),
         masked: false,
         values: values.iter().map(|value| value.to_string()).collect(),
+        project: None,
     };
     assert_eq!(
         row("ui.fullscreen", "false", &["false", "true"]).display_value(),
@@ -269,6 +272,7 @@ fn settings_painter_shows_scrollback_not_false() {
             masked: false,
             section: String::new(),
             values: vec!["false".to_string(), "true".to_string()],
+            project: None,
         }],
         selected: 0,
         editing: None,

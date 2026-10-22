@@ -47,6 +47,7 @@ fn rows_hook(writes: Writes) -> UiHooks {
             },
             masked: false,
             values: values.iter().map(|v| v.to_string()).collect(),
+            project: None,
         };
         vec![
             row("Display", "ui.theme", &[]),

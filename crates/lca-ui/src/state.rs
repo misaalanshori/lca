@@ -313,6 +313,15 @@ pub type ScreenModePersist = Arc<dyn Fn(bool) + Send + Sync>;
 /// Persists a runtime setting choice (`ui.theme`, `thinking`) to the config
 /// file (E2); `None` removes the key, and is how `unset` is written.
 pub type SettingPersist = Arc<dyn Fn(&str, Option<String>) + Send + Sync>;
+/// Persists a **project-scope** setting choice to `<cwd>/.lca/config.toml`
+/// (gh #397): `None` removes the key, which is how the picker's `inherit`
+/// state is written. A separate hook from [`SettingPersist`] because it is a
+/// different file with different consequences - this one states something
+/// about this project only, and its presence is what makes the project
+/// trust-requiring.
+pub type ProjectSettingPersist =
+    Arc<dyn Fn(&str, Option<String>) -> Result<(), String> + Send + Sync>;
+
 /// One `/model` picker row: `(raw id, display label)`.
 ///
 /// The label may carry pi's `model (provider)` decoration (issue #3); the
@@ -484,6 +493,67 @@ pub struct SettingRow {
     pub masked: bool,
     /// The values left/right and Enter cycle through.
     pub values: Vec<String>,
+    /// Gh #397: what **this project's** file says about the key, when the row
+    /// has a project layer to speak for. `None` (the default) means the row is
+    /// not project-overridable and cycles as before.
+    ///
+    /// The three states are the three meanings a project override has, and
+    /// conflating the first two is what made a hand-written override a
+    /// one-way door: the picker could not see that the key was present, so it
+    /// could not offer to remove it.
+    pub project: Option<ProjectOverride>,
+}
+
+/// Gh #397: the tri-state a project override actually has.
+///
+/// The cycle is `Inherit → On → Off → Inherit`, and **only `On`/`Off` write
+/// a key**: `Inherit` is the key's absence, never `= false`. Off is a real
+/// override (it beats a user-level `true`); inherit is the absence of an
+/// opinion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ProjectOverride {
+    /// The project file does not mention the key: inherit the user file or
+    /// the default.
+    #[default]
+    Inherit,
+    /// The project file sets the key to the row's "on" value.
+    On,
+    /// The project file sets the key to the row's "off" value.
+    Off,
+}
+
+impl ProjectOverride {
+    /// The next state in the cycle, forward or back.
+    #[must_use]
+    pub fn step(self, forward: bool) -> Self {
+        match (self, forward) {
+            (Self::Inherit, true) | (Self::Off, false) => Self::On,
+            (Self::On, true) | (Self::Inherit, false) => Self::Off,
+            (Self::Off, true) | (Self::On, false) => Self::Inherit,
+        }
+    }
+
+    /// The word the row shows (NFR-28: a word, never colour alone).
+    #[must_use]
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Inherit => "inherit",
+            Self::On => "on",
+            Self::Off => "off",
+        }
+    }
+
+    /// The state a project file's value for `on`/`off` means. A value that is
+    /// neither (a free-text or enum key) cannot be expressed as on/off, so it
+    /// reads as `Inherit` and the row stays a normal cycle.
+    #[must_use]
+    pub fn from_value(value: Option<&str>, on: &str, off: &str) -> Self {
+        match value {
+            Some(value) if value == on => Self::On,
+            Some(value) if value == off => Self::Off,
+            _ => Self::Inherit,
+        }
+    }
 }
 
 impl SettingRow {
@@ -624,6 +694,16 @@ pub struct UiHooks {
     /// Persist a runtime setting choice to the config file (E2):
     /// `/theme` writes `ui.theme`, `/thinking` writes `thinking`.
     pub persist_setting: Option<SettingPersist>,
+    /// Persist a setting to the **project** file (gh #397), where `None`
+    /// removes the key. Absent means the host cannot write a project layer,
+    /// and the picker then shows the tri-state read-only rather than
+    /// pretending an edit landed.
+    pub persist_project_setting: Option<ProjectSettingPersist>,
+    /// Whether the project layer is live in this session (FR-PERM-9): a
+    /// project file is ignored until the project is trusted. The picker uses
+    /// this to tell the user that a write landed in the file but will not take
+    /// effect yet, rather than pretending it applied (gh #397).
+    pub project_layer_trusted: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
     /// The live model list for `/model` (falls back to the startup
     /// `UiOptions::models` when absent).
     pub models: Option<ModelList>,
