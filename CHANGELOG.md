@@ -7,6 +7,24 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **The `openai-compatible` provider now declares the environment it reads, so the
+  sandboxed build can see it** (gh #461, follow-up to gh #170). A WASM component is
+  instantiated with an empty `WasiCtx`, so `std::env::var` inside it answers
+  `NotPresent`; the host forwards only the names a manifest lists under
+  `[capabilities.env]`. This provider read eight of them — the base URL, both key
+  names, the model, the context window, and two behaviour switches — and declared
+  none, so the `.wasm` build behaved as if nothing were configured while the
+  compiled-in one read the host environment directly. That divergence is what the
+  deleted `openai_ad_hoc_host()` workaround (gh #157) had been papering over: with
+  it gone, `OPENAI_API_KEY` set and granted still produced *"no API key is
+  configured"* from the guest. The eight names are now declared, the install consent
+  names each one, and a row asserts the declared set is **exactly** the literals the
+  crate reads — so a future broad grant shows up as a diff, not as a consent screen
+  nobody reads. One limitation is documented rather than discovered: a named
+  profile's key comes from the `provider-presets.toml` resource at run time, so under
+  the sandbox it resolves from the stored credential instead (the native build still
+  reads it).
+
 - **Launching from `$HOME` no longer warns that every installed extension is a
   broken project extension** (gh #463). The project-extension directory is
   `<cwd>/.lca/extensions` and the data home is `~/.lca/extensions`; from `$HOME`
