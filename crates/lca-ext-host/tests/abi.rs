@@ -375,3 +375,43 @@ fn the_documented_worlds_match_the_vocabulary() {
          in the same order"
     );
 }
+
+/// The loader asks "does the manifest declare this world?" in terms of `World`,
+/// never by comparing world strings.
+///
+/// gh #288's deeper half: after the validator was fixed, the *loader* still spelled
+/// world names as string literals (`.any(|world| world == "ui")`). A typo there -
+/// `"uii"` - passed every test in this file, because validation accepted the name
+/// the author wrote while the loader never matched it. Measured: injecting
+/// `"uii"` for `"ui"` left all ten world rows green. Asking in terms of
+/// `lca_ext_abi::World` makes that a compile error.
+#[test]
+fn the_loader_compares_worlds_as_worlds_not_strings() {
+    let loader = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"))
+        .expect("the loader is in the tree");
+    // Any world name at all in a comparison: the check is "no world string is
+    // compared", not "these four specific lines are gone". A list of forbidden
+    // literals only catches the spellings I happened to think of - which is how
+    // my first version of this row missed an `if world == "uii"` injection.
+    for (name, _) in lca_ext_abi::WORLDS {
+        let needle = format!("world == \"{name}\"");
+        assert!(
+            !loader.contains(&needle),
+            "the loader still compares a world string ({needle}); a typo there is \
+             a silent no-op that no validation can catch"
+        );
+    }
+    assert!(
+        loader.contains("lca_ext_abi::parse_world(world)"),
+        "the loader resolves declared worlds through the table"
+    );
+    // And the accessor exists, so a caller with a `Manifest` in hand does not
+    // reach for the strings either.
+    let manifest = manifest_with_worlds(r#"["ui", "hooks-tool-call"]"#).expect("a valid manifest");
+    assert!(manifest.declares(lca_ext_abi::World::Ui));
+    assert!(manifest.declares(lca_ext_abi::World::HooksToolCall));
+    assert!(
+        !manifest.declares(lca_ext_abi::World::Tool),
+        "an undeclared world answers false"
+    );
+}

@@ -130,6 +130,24 @@ fn parse_worlds(value: &toml::Value) -> Result<Vec<String>, LoadError> {
 }
 
 impl Manifest {
+    /// Whether the manifest declares `world`.
+    ///
+    /// The loader asks this instead of comparing world strings itself (gh #288):
+    /// a `world == "ui"` literal in the linking path was a second copy of the
+    /// vocabulary, and a typo there - `"uii"` - would have been invisible,
+    /// because validation would still accept the name the author wrote while the
+    /// loader never matched it. Asking in terms of [`lca_ext_abi::World`] makes
+    /// that typo a compile error instead of a silent no-op.
+    ///
+    /// Resolves through [`lca_ext_abi::WORLDS`], so a manifest built in code (the
+    /// tests do this) is consulted the same way as a parsed one.
+    #[must_use]
+    pub fn declares(&self, world: lca_ext_abi::World) -> bool {
+        self.worlds
+            .iter()
+            .any(|declared| lca_ext_abi::parse_world(declared) == Some(world))
+    }
+
     /// Parse and validate identity and capability declarations (the
     /// schema's rules; full JSON-schema validation lands with Phase 5).
     pub fn parse(toml_text: &str) -> Result<Manifest, LoadError> {
