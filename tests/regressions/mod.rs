@@ -757,6 +757,12 @@ mod deny_rule_actually_matches;
 #[path = "459-stderr-tail-never-blocks.rs"]
 mod stderr_tail_never_blocks;
 
+// Gh #458: a flag whose value is a program (or a shell string) reviews -
+// `vim -c ':!id'`, `tar --to-command=id`, and the four sibling tar flags the
+// enumeration found.
+#[path = "458-program-valued-flags-review.rs"]
+mod program_valued_flags_review;
+
 // Gh #467: the discovery origin fallback parses instead of pattern-matching, so
 // the last resort can succeed, and its branch is covered by a row.
 #[path = "467-origin-fallback-reachable.rs"]

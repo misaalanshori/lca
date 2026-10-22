@@ -7,6 +7,24 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **A flag whose value is a program — or a shell string — now reviews instead of
+  auto-approving** (gh #458). The same class gh #347 closed for evaluator flags and
+  gh #365 closed for positional program text, reached another way. `vim -c ':!id' f`,
+  `vim '+!id' f`, `ex -c '!id' f`, `ed f` and `tar xf a.tar --to-command=id` all ran
+  with no prompt in a trusted folder. Archive flags are refused as a measured set:
+  `--to-command` (whose value is shell-interpreted — `--to-command='id; echo PWNED'`
+  runs both), `-I`/`--use-compress-program`, `-F`/`--info-script`,
+  `--new-volume-script`, `--rsh-command`, and `--checkpoint-action=exec=` — five
+  flags where the issue named one. An editor's `-c` is a command language
+  (`:!`, `:r !`, `:g//!`, `:python`, `:terminal`), not a set, so the form reviews
+  wholesale, `+cmd` included (it is the same hole — measured). `ed` reviews
+  structurally: its whole language arrives on stdin. Ordinary use is untouched —
+  `vim file.txt`, `vim -S script.vim`, `tar xf a.tar`, `tar czf b.tgz dir`,
+  `tar xf a.tar -C out` all still auto-approve, and interactive editing through
+  `$EDITOR` never reaches the analyzer. A refusal names the reviewable form
+  (`-S` with a script file in the project), and a row asserts that advice is not
+  itself a bypass.
+
 - **OAuth discovery's last-resort fallback works, so a server with no RFC 9728
   document can still sign in** (gh #467). `origin_of` split a URL with
   `splitn(4, '/')` and rejected the second piece — the empty string *between the two

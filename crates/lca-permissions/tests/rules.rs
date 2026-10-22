@@ -158,3 +158,66 @@ fn a_session_refusal_suppresses_the_ask() {
     assert!(!store.is_trusted_here(&project), "still untrusted");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+// Verifies: gh #458 - the four measured forms review **through the real store**
+// in a trusted folder, not just at the predicate.
+//
+// This is the wiring guard. The analyzer's own unit rows call
+// `program_valued_flag` directly, so they would all still pass if the call were
+// removed from `segment_ok`; these rows go through `GrantStore::is_allowed`,
+// which is what a turn actually asks. Deleting the wiring turns every one of
+// them red.
+#[test]
+fn program_valued_flags_review_in_a_trusted_folder() {
+    let root = scratch("gh458-trust");
+    let project = root.join("proj");
+    std::fs::create_dir_all(&project).unwrap();
+    let mut store = GrantStore::open(&root.join("grants.json")).unwrap();
+    store.trust_for_session(&project);
+    for command in [
+        // Form 1: an editor command flag runs an ex command.
+        "vim -c ':!id' f",
+        "vim --cmd ':!id' f",
+        "vim '+!id' f",
+        "vim -c ':r !id' f",
+        "ex -c '!id' f",
+        // Form 2: `ed`'s whole language arrives on stdin.
+        "ed f.txt",
+        "ed -s f.txt",
+        // Form 3: `tar --to-command` and the four siblings the enumeration
+        // found - all of them a program in a flag's value.
+        "tar xf a.tar --to-command=id",
+        "tar xf a.tar --to-command id",
+        "tar cf b.tar dir -I gzip",
+        "tar cf b.tar dir --use-compress-program=gzip",
+        "tar xf a.tar -F id",
+        "tar xf a.tar --rsh-command=id",
+        "tar cf b.tar dir --checkpoint=1 --checkpoint-action=exec=id",
+    ] {
+        assert!(
+            !store.is_allowed(&project, &shell(&project, command)),
+            "a trusted folder must review: {command}"
+        );
+    }
+    // The benign neighbours still auto-approve in the same trusted folder. This
+    // is the false-positive cost, and it is zero for the ordinary case: opening
+    // a file, and archiving without a program-valued flag.
+    for command in [
+        "vim file.txt",
+        "vim",
+        "vim -R file.txt",
+        "vim -S script.vim file.txt",
+        "ex file.txt",
+        "tar xf a.tar",
+        "tar czf b.tgz dir",
+        "tar tvf a.tar",
+        "tar xf a.tar --exclude=target",
+        "tar cf b.tar dir",
+    ] {
+        assert!(
+            store.is_allowed(&project, &shell(&project, command)),
+            "a trusted folder keeps auto-approving: {command}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
