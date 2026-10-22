@@ -48,17 +48,6 @@ pub struct PendingMessage {
 /// startup; this is our wording on pi's shape. One dim line on the
 /// first frame, never a modal. Headless mode never builds a `Chat`, so
 /// it never prints this (the scripting contract).
-fn startup_hint(keybindings: &lca_tui::engine::keybindings::KeybindingsManager) -> String {
-    // Gh #410: the live manager, not the default table. This line is the first
-    // thing a user reads, so a rebind that does not reach it is the most visible
-    // version of the bug.
-    format!(
-        "{} interrupt · {} clear/exit · / commands",
-        keybindings.display_keys("app.interrupt"),
-        keybindings.display_keys("app.clear"),
-    )
-}
-
 /// The interactive chat.
 /// A transient toast (gh #239): a confirmation or host diagnostic
 /// that floats top-right and fades after five seconds, never
@@ -305,11 +294,12 @@ impl Chat {
         // hardware cursor keeps the job it already had.
         editor.set_paint_caret(theme.colored);
         let mut transcript = Transcript::new();
-        // gh #23: one dim key-hint line on the first frame (pi's startup shape,
-        // our wording). Gh #410: the key names come from the **live** manager, so
-        // a rebind reaches the first line a user reads.
-        transcript.push_raw((theme.dim)(&startup_hint(&keybindings)));
+        // gh #23: one key-hint line on the first frame (pi's startup shape, our
+        // wording). Gh #410: it renders from the **live** keybindings each frame,
+        // so a `/reload` rebind reaches the first line a user reads - it used to
+        // be a pre-rendered `Raw` string and therefore baked the keys at startup.
         transcript.set_keybindings(keybindings.clone());
+        transcript.push_startup_hint();
         for line in &world.options.initial_lines {
             transcript.push_raw(line.clone());
         }
@@ -891,6 +881,18 @@ impl Chat {
     /// name on reload would drop a background the terminal already reported.
     pub(crate) fn theme_follows_detection(&self) -> bool {
         self.theme_auto
+    }
+
+    /// Install a new keybinding manager and keep every hint in step (gh #410).
+    ///
+    /// Assigning `self.keybindings` alone rebinds what the interface *accepts*
+    /// while leaving the labels on the manager they were rendered with, which is
+    /// the same lie in the opposite direction. The transcript is told too, and it
+    /// drops its cached frames because a hint's text is part of one.
+    pub fn set_keybindings(&mut self, keybindings: Arc<KeybindingsManager>) {
+        self.transcript.set_keybindings(keybindings.clone());
+        self.editor.set_keybindings(keybindings.clone());
+        self.keybindings = keybindings;
     }
 
     /// Apply a theme by name and remember it (S5: built-in or custom file).

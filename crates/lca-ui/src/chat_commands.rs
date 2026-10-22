@@ -130,7 +130,7 @@ impl Chat {
                 return Action::Continue;
             }
             "hotkeys" => {
-                self.push_output(hotkeys_notice(&self.keybindings));
+                self.push_output(crate::chat_notices::hotkeys_notice(&self.keybindings));
                 return Action::Continue;
             }
             "fullscreen" => {
@@ -256,8 +256,16 @@ impl Chat {
                 if !setting.is_empty() && !self.theme_follows_detection() {
                     self.set_theme(&setting);
                 }
-                self.keybindings =
-                    Arc::new(KeybindingsManager::with_user_bindings(report.key_bindings));
+                // Gh #410: a rebind has to reach the labels, not just the key
+                // handler. `set_keybindings` keeps the transcript's hint manager
+                // in step; assigning the field alone left every rendered hint on
+                // the manager it was built with, so `/reload` changed which keys
+                // *worked* while the hints kept naming the old ones. Found by
+                // driving a real pane: the tool card still said `ctrl+o` after
+                // reloading a `ctrl+e` binding.
+                self.set_keybindings(Arc::new(KeybindingsManager::with_user_bindings(
+                    report.key_bindings,
+                )));
                 self.world.options.keybinding_error = report.keybinding_error;
                 self.say(report.notice);
                 return Action::Continue;
@@ -429,7 +437,7 @@ impl Chat {
             }
             // Gh #131: the embedded changelog's latest released section.
             "changelog" => {
-                let section = latest_changelog_section();
+                let section = crate::chat_notices::latest_changelog_section();
                 if section.is_empty() {
                     self.say("no released changes yet".to_string());
                 } else {
@@ -891,31 +899,10 @@ pub(crate) fn provider_for(options: &UiOptions) -> CombinedAutocompleteProvider 
 
 /// The product changelog, baked in at build time (gh #131): `/changelog`
 /// reads it without reaching the network or the filesystem.
-const CHANGELOG_TEXT: &str = include_str!("../../../CHANGELOG.md");
+pub(crate) const CHANGELOG_TEXT: &str = include_str!("../../../CHANGELOG.md");
 
 /// The latest released section: the first `## [` block that is not
 /// `[Unreleased]`, through the next `## [` or the end.
-fn latest_changelog_section() -> String {
-    let mut out = Vec::new();
-    let mut in_section = false;
-    for line in CHANGELOG_TEXT.lines() {
-        if line.starts_with("## [") {
-            if in_section {
-                break;
-            }
-            in_section = !line.contains("[Unreleased]");
-            if in_section {
-                out.push(line);
-            }
-            continue;
-        }
-        if in_section {
-            out.push(line);
-        }
-    }
-    out.join("\n").trim().to_string()
-}
-
 /// One-line descriptions for the interface's own commands.
 pub(crate) fn command_help(command: &str) -> &'static str {
     match command {
@@ -959,25 +946,6 @@ pub(crate) fn command_help(command: &str) -> &'static str {
         "/session" => "show this session's tokens, cache, and cost",
         _ => "",
     }
-}
-
-/// The `/hotkeys` text: the LIVE binding registry prints itself (gh
-/// #66), so rebound keys show their effective bindings, not defaults.
-fn hotkeys_notice(kb: &KeybindingsManager) -> String {
-    let mut lines = vec!["keys:".to_string()];
-    for (action, keys) in kb.resolved_bindings() {
-        if keys.is_empty() {
-            continue;
-        }
-        let description = kb.description(&action).unwrap_or("");
-        lines.push(format!("  {} - {description}", keys.join(", ")));
-    }
-    // R2: the main screen never captures the mouse; `/fullscreen` does, so
-    // the terminal's own bypass is worth naming for the fullscreen case.
-    lines.push(
-        "  Shift+click (or your terminal's bypass key) selects text in fullscreen".to_string(),
-    );
-    lines.join("\n")
 }
 
 /// The `/help` text: the commands the interface offers, then the keys.
