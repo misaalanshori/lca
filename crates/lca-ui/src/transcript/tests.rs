@@ -4,6 +4,15 @@
 use super::*;
 use lca_tui::engine::text::strip_terminal_sequences;
 
+/// The expand hint as the current platform renders it (`ctrl+o to expand`, and
+/// `option+t to expand` for an `alt` binding on macOS).
+fn expand_hint() -> String {
+    format!(
+        "{} to expand",
+        lca_tui::engine::keybindings::KeybindingsManager::new().display_keys("app.tools.expand")
+    )
+}
+
 fn plain() -> Theme {
     Theme::plain()
 }
@@ -454,8 +463,14 @@ fn reasoning_shows_a_snippet_by_default() {
     );
     assert!(shown[0].contains("one"), "{lines:?}");
     assert!(shown[2].contains("three"), "{lines:?}");
+    // gh #410: the key now renders through pi's display rules, so on macOS the
+    // `alt+t` binding reads `option+t` (a Mac keyboard has no key printed `alt`).
+    // Asking the manager for the display form keeps this row platform-correct
+    // instead of pinning one spelling.
+    let expand_key =
+        lca_tui::engine::keybindings::KeybindingsManager::new().display_keys("app.thinking.toggle");
     assert!(
-        shown[3].contains("… +2 lines") && shown[3].contains("alt+t to expand"),
+        shown[3].contains("… +2 lines") && shown[3].contains(&format!("{expand_key} to expand")),
         "{lines:?}"
     );
     assert!(!lines.iter().any(|l| l.contains("four")), "{lines:?}");
@@ -627,7 +642,9 @@ fn a_tool_card_collapses_and_expands() {
         collapsed.iter().any(|l| l.contains("> read a.rs ok")),
         "{collapsed:?}"
     );
-    assert!(collapsed.iter().any(|l| l.contains("ctrl+o to expand")));
+    // gh #410: ask the manager for the display form, so the row does not pin a
+    // platform-specific spelling (`alt` reads `option` on macOS).
+    assert!(collapsed.iter().any(|l| l.contains(&expand_hint())));
     assert!(!collapsed.iter().any(|l| l.contains("line two")));
     t.toggle_tools_expanded();
     let expanded = strip(&t.render(60, &plain()));
@@ -691,7 +708,7 @@ fn a_read_card_stays_one_line() {
     t.finish_tool(ToolStatus::Ok, Some("1  fn main() {}\n2  more\n".into()));
     let out = strip(&t.render(60, &plain()));
     assert!(out.iter().any(|l| l.contains("> read a.rs ok")), "{out:?}");
-    assert!(out.iter().any(|l| l.contains("ctrl+o to expand")));
+    assert!(out.iter().any(|l| l.contains(&expand_hint())));
     assert!(!out.iter().any(|l| l.contains("fn main")), "{out:?}");
 }
 
