@@ -402,7 +402,13 @@ impl McpManager {
             .into_iter()
             .map(|status| ModalServerRow {
                 state: state_word(&status.state),
-                detail: state_detail(&status.state, status.tools),
+                // The list row carries a SHORT state, never the failure text.
+                // The full message and the stderr tail belong on the detail
+                // screen: a list row that inlines a traceback wraps across three
+                // lines and pushes every other server off the visible box, which
+                // is the opposite of what an attention-sorted list is for. (Found
+                // in the live pane, not in a unit row.)
+                detail: list_state_summary(&status.state, status.tools),
                 effective_exposure: exposure_word(status.exposure),
                 scope: match status.source {
                     ServerSource::User => "user",
@@ -916,6 +922,22 @@ fn state_word(state: &crate::ServerStateKind) -> String {
         crate::ServerStateKind::NeedsSignIn(_) => "needs-auth",
     }
     .to_string()
+}
+
+/// The ONE-LINE state a list row shows (gh #418 Phase G).
+///
+/// Deliberately shorter than [`state_detail`]: the list is for triage, so a
+/// failure reads `failed` here and its cause is one `Enter` away. The stderr tail
+/// makes this distinction load-bearing rather than cosmetic - a traceback inlined
+/// into a row wraps three lines deep.
+fn list_state_summary(state: &crate::ServerStateKind, tools: usize) -> String {
+    match state {
+        crate::ServerStateKind::Connected => format!("connected ({tools} tools)"),
+        crate::ServerStateKind::Disabled => "disabled".to_string(),
+        crate::ServerStateKind::Connecting => "connecting".to_string(),
+        crate::ServerStateKind::Failed(_) => "failed".to_string(),
+        crate::ServerStateKind::NeedsSignIn(_) => "needs sign-in".to_string(),
+    }
 }
 
 /// The state as a sentence, with the failure's own message.
