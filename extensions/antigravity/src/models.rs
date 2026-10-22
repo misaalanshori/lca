@@ -439,3 +439,61 @@ pub fn virtualize_catalog(
     out.sort_by(|a, b| compare_public_models(&a.id, &b.id));
     out
 }
+
+#[cfg(test)]
+mod tests {
+    //! gh #279: the filter is the half of the pair that the description has to
+    //! agree with. Pinned behaviourally here, because the drift guard in
+    //! `tests/regressions/279-*.rs` reads this file as *data* (it looks for the
+    //! check) and cannot prove the check actually refuses anything.
+
+    use super::is_selectable;
+
+    // Verifies: gh #279 - an image model id is refused.
+    //
+    // This is why the extension's description no longer advertises "image
+    // generation": the code declines the models, and the provider stream has no
+    // variant an image result could arrive in. If a future cycle enables image
+    // generation, this row is the one that changes first, deliberately, together
+    // with the description.
+    #[test]
+    fn an_image_model_is_not_selectable() {
+        assert!(!is_selectable("gemini-3.1-flash-image"));
+        assert!(!is_selectable("gemini-2.5-flash-image-preview"));
+        assert!(!is_selectable("claude-image-agent"));
+        // Case-insensitively, like pi's `/image/i`.
+        assert!(!is_selectable("Gemini-3.1-Flash-IMAGE"));
+    }
+
+    // Verifies: gh #279 - and refusing image ids did not come at the cost of the
+    // models the extension does offer.
+    //
+    // The three families `is_selectable` accepts are named in its prefix check; a
+    // filter that refused everything would make the row above pass and the
+    // extension useless.
+    #[test]
+    fn the_offered_families_are_still_selectable() {
+        for id in [
+            "gemini-3.6-flash",
+            "gemini-3.8-pro-high",
+            "claude-sonnet-4-5",
+            "gpt-oss-120b-medium",
+        ] {
+            assert!(is_selectable(id), "{id} must stay selectable");
+        }
+    }
+
+    // Verifies: gh #279 - the other refusals still hold, so moving the image
+    // decision did not disturb its neighbours.
+    #[test]
+    fn the_other_refusals_are_unchanged() {
+        // Internal/runtime noise pi also filters.
+        assert!(!is_selectable("MODEL_gemini-3.6-flash"));
+        assert!(!is_selectable("chat_editor"));
+        assert!(!is_selectable("tab_completion"));
+        // Whitespace in an id is never a real model.
+        assert!(!is_selectable("gemini-3.6 flash"));
+        // A family outside the three advertised ones.
+        assert!(!is_selectable("llama-3-70b"));
+    }
+}
