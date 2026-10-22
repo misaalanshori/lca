@@ -717,3 +717,8 @@ mod tool_world_net_import;
 // load, so typing and quit keys work from the first frame.
 #[path = "400-type-while-loading.rs"]
 mod type_while_loading;
+
+// Gh #387 gaps 1 and 2: the `system` palette's panels are derived from the
+// probed background (not copied from it), and COLORFGBG 7/8 classifies like pi.
+#[path = "387-system-panels-and-scheme.rs"]
+mod system_panels_and_scheme;

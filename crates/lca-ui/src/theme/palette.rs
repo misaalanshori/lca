@@ -181,10 +181,33 @@ impl Palette {
             lca_tui::engine::colors::ColorScheme::Dark => Palette::dark(),
         };
         palette.set(Role::Text, Color::Default);
-        if let Some(background) = background {
-            let background = Color::Rgb(background.r, background.g, background.b);
-            palette.set(Role::UserMessageBg, background);
-            palette.set(Role::CustomMessageBg, background);
+        // Gh #387 gap 1: **shaded**, not `background`.
+        //
+        // These roles used to be set *equal to* the reported background, which
+        // made a user band and a tool card the same colour as the page they sat
+        // on - no band at all. Each family now takes the probed background,
+        // mixes its own hue in, and steps one perceptual notch away from it
+        // (lighter on dark, darker on light). The step is the same for every
+        // family, so text contrast is equal across panels and the state reads
+        // by hue alone; the mix is the background's, so Solarized surfaces stay
+        // Solarized.
+        //
+        // `None` keeps every panel at `Default`: there is nothing to offset
+        // from, and inventing a colour would paint a band the user did not ask
+        // for (and break a translucent terminal).
+        // Gh #387 gap 1: the `system` palette owns **every** panel role.
+        //
+        // The scheme base sets them so the named themes (`dark`, `light`) are
+        // self-contained, but a `system` session has no business painting them
+        // from a base: either the terminal told us its background, in which case
+        // each family is derived from *that*, or it did not, in which case the
+        // panels stay transparent. Leaving the base's values in place for the
+        // `None` case would paint opaque bands over a translucent terminal the
+        // user configured on purpose.
+        for family in crate::theme::panels::families() {
+            let derived = background
+                .and_then(|background| crate::theme::panels::panel(background, scheme, &family));
+            palette.set(family.role, derived.unwrap_or(Color::Default));
         }
         palette
     }

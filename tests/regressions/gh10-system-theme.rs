@@ -1,4 +1,8 @@
 //! GitHub issue #10 (EFG-014, criterion 1, plus `#rgb`): adopt pi's
+//!
+//! Two rows changed under gh #387 gap 1 (the panel derivation): they asserted
+//! that a reported background was painted **verbatim** into the panel roles,
+//! which is the defect. Named in that commit.
 //! `system` theme shape with our TOML divergence. `ui.theme = "system"`
 //! derives foreground/background roles from the detected terminal
 //! palette (the OSC 11 / DSR / COLORFGBG parsers the engine already
@@ -86,10 +90,16 @@ fn system_without_answers_falls_back_to_scheme_hues() {
     );
 }
 
-// A reported background repaints the background roles and keeps the
+// A reported background **derives** the panel roles from it and keeps the
 // terminal-default foreground.
+//
+// Changed by gh #387 gap 1: this row used to assert that `UserMessageBg` was
+// set *equal to* the reported background, which is the invisible-card defect -
+// a band the same colour as the page is not a band. The contract now is
+// "derived from the reported background" (a stepped, hue-tinted surface), so
+// the assertion moved from equality to "shaded, and not the base's value".
 #[test]
-fn a_reported_background_repaints_the_background_roles() {
+fn a_reported_background_derives_the_panel_roles() {
     let background = RgbColor {
         r: 10,
         g: 20,
@@ -97,15 +107,26 @@ fn a_reported_background_repaints_the_background_roles() {
     };
     let theme = Theme::system_theme(Some(background), None);
     assert_eq!(theme.name, "system");
-    assert_eq!(
-        theme.palette.get(Role::UserMessageBg),
-        lca_ui::theme::Color::Rgb(10, 20, 30)
+    let band = theme.palette.get(Role::UserMessageBg);
+    assert_ne!(
+        band,
+        lca_ui::theme::Color::Rgb(10, 20, 30),
+        "the band is derived from the reported background, not a copy of it"
+    );
+    assert_ne!(
+        band,
+        lca_ui::theme::Color::Default,
+        "and it is a real surface, not transparent, because a background was reported"
     );
     assert_eq!(theme.palette.get(Role::Text), lca_ui::theme::Color::Default);
 }
 
-// The interface applies a terminal background answer to a `system`
-// theme and repaints: the band carries the reported background.
+// The interface applies a terminal background answer to a `system` theme and
+// repaints: the band is derived from it and reaches the screen.
+//
+// Changed by gh #387 gap 1 for the same reason as the row above: the old
+// assertion was "the reported background appears verbatim on screen", which is
+// exactly the flat band the issue filed.
 #[test]
 fn the_interface_repaints_a_system_theme_on_a_background_answer() {
     let mut chat = chat_with_theme("system");
@@ -116,14 +137,19 @@ fn the_interface_repaints_a_system_theme_on_a_background_answer() {
         g: 20,
         b: 30,
     });
-    assert_eq!(
-        chat.theme.palette.get(Role::UserMessageBg),
-        lca_ui::theme::Color::Rgb(10, 20, 30)
+    let band = chat.theme.palette.get(Role::UserMessageBg);
+    assert_ne!(
+        band,
+        lca_ui::theme::Color::Rgb(10, 20, 30),
+        "the band is a derived surface, not the probed background"
     );
+    let lca_ui::theme::Color::Rgb(r, g, b) = band else {
+        panic!("the band is a concrete colour after a reported background: {band:?}");
+    };
     let raw: String = chat.render(80).join("\n");
     assert!(
-        raw.contains("48;2;10;20;30"),
-        "the reported background reaches the screen"
+        raw.contains(&format!("48;2;{r};{g};{b}")),
+        "the derived band reaches the screen: {raw}"
     );
 }
 

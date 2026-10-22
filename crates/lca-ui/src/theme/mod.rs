@@ -12,6 +12,10 @@
 
 mod highlight;
 mod palette;
+mod scheme;
+
+pub use scheme::{detect_scheme, scheme_from_colorfgbg};
+pub(crate) mod panels;
 
 pub use highlight::{SyntaxStyles, highlight};
 pub use palette::Palette;
@@ -818,19 +822,6 @@ pub fn theme_names_all(dirs: &[std::path::PathBuf]) -> Vec<String> {
         }
     }
     names
-}
-
-/// Detect the terminal's color scheme from `COLORFGBG` (the OSC 11 / DEC
-/// report ladder is the engine's, consumed at negotiation).
-pub fn detect_scheme() -> Option<lca_tui::engine::colors::ColorScheme> {
-    use lca_tui::engine::colors::ColorScheme;
-    let value = std::env::var("COLORFGBG").ok()?;
-    let background: u32 = value.rsplit(';').next()?.trim().parse().ok()?;
-    Some(if background >= 8 {
-        ColorScheme::Light
-    } else {
-        ColorScheme::Dark
-    })
 }
 
 impl Default for Theme {

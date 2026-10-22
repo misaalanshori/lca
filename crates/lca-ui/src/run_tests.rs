@@ -946,3 +946,78 @@ fn progress_arms_for_compaction_and_shell_runs() {
     turns.sync_program_status(&chat, &mut term);
     assert!(!term.progress(), "and it disarms when the run ends");
 }
+
+// Verifies: gh #387 gap 1 **on the live path**, not just in the palette: an
+// OSC 11 background reply arriving through the real `handle_input` rebuilds the
+// `system` theme, and the rendered user band then carries a SGR background
+// distinct from the probed one.
+//
+// This is the row the panes could not give me: `tmux` 3.5a has no
+// `default-background` option and forwards OSC 11 to a parent terminal that does
+// not exist in CI, so a real pane never receives a reply. Driving `handle_input`
+// with the reply a terminal *would* send is the same code path minus the
+// terminal.
+#[test]
+fn an_osc11_reply_rebuilds_the_system_panels() {
+    use lca_tui::engine::colors::RgbColor;
+    let mut term = FakeTerminal::new(100, 30);
+    // The product default: a coloured theme that follows the terminal. The
+    // shared `options()` is `plain: true` (most rows here do not care about
+    // colour), which would make this row vacuous.
+    let mut opts = options();
+    opts.plain = false;
+    // `auto` is what an unconfigured install uses - the spelling the old
+    // literal-`"system"` check missed.
+    opts.theme = "auto".to_string();
+    let mut chat = crate::chat::Chat::new(
+        opts,
+        std::sync::Arc::new(lca_tui::engine::keybindings::KeybindingsManager::default()),
+    );
+    let mut screen = Screen::Main(MainScreenRenderer::new());
+    let (input_tx, _input_rx) = std::sync::mpsc::channel::<String>();
+    let (resize_tx, _resize_rx) = std::sync::mpsc::channel::<()>();
+    let mut aborted = false;
+
+    // Solarized Dark's background, as `OSC 11 ; rgb:00/2b/36 ST`.
+    let reply = "\x1b]11;rgb:00/2b/36\x1b\\";
+    let _ = handle_input(
+        reply,
+        &mut chat,
+        &mut screen,
+        &mut term,
+        &input_tx,
+        &resize_tx,
+        None,
+        &None,
+        &mut aborted,
+    );
+
+    // The palette moved to the probed background's family, not the scheme base.
+    let band = chat.theme.palette.get(crate::theme::Role::UserMessageBg);
+    let crate::theme::Color::Rgb(r, g, b) = band else {
+        panic!("the user band is a concrete colour after the reply: {band:?}");
+    };
+    assert_ne!(
+        (r, g, b),
+        (0x34, 0x35, 0x41),
+        "the scheme base's #343541 is what the old code painted; a probed \
+         background must replace it"
+    );
+    assert_ne!(
+        (r, g, b),
+        (0x00, 0x2b, 0x36),
+        "and the band is not the probed background itself (the invisible-card bug)"
+    );
+    // The reference background is genuinely Solarized: the derived band is
+    // stepped lighter than it.
+    let probed = RgbColor {
+        r: 0x00,
+        g: 0x2b,
+        b: 0x36,
+    };
+    assert!(
+        crate::theme::panels::oklab_lightness(RgbColor { r, g, b })
+            > crate::theme::panels::oklab_lightness(probed),
+        "a dark background steps the panel lighter"
+    );
+}

@@ -69,6 +69,26 @@ Dates are UTC.
   record, which stays `/mcp disable`'s job.
 
 ### Fixed
+- **`system` message and tool panels are visible, and `COLORFGBG` 7/8 is no
+  longer inverted** (gh #387 gaps 1 and 2). With `ui.theme = "system"` the
+  user-message band and the custom band were set *equal to* the terminal's
+  reported background, and the tool panels and selection wash inherited the
+  same flatness from the scheme base — so a user message, a tool card, and the
+  transcript all looked alike. Each panel is now derived from the probed
+  background: the family's hue, the background's lightness stepped one
+  perceptual notch away (lighter on dark, darker on light), and a floor of the
+  background's own chroma so Solarized surfaces stay Solarized and Tokyo Night
+  stays Tokyo Night. The step is identical for every family, so text contrast is
+  equal across cards and the state reads by hue alone; the pending card is
+  deliberately neutral, so it cannot collide with your own band. A terminal that
+  reports no background keeps every panel transparent, so a translucent terminal
+  is not painted over. Separately, `COLORFGBG` classified ANSI 7 (white) as dark
+  and ANSI 8 (bright black — Solarized Dark's own background) as light, exactly
+  backwards; indices now classify the way Vim and pi do, both `fg;bg` and
+  `fg;xpm;bg` shapes are read, and an unusable value falls back rather than
+  guessing. Also fixed: the default `ui.theme = "auto"` never rebuilt the theme
+  from a reported background (the check tested the literal string `system`),
+  so the panel derivation would not have run on an unconfigured install.
 - **Typing works while startup finishes, and `Ctrl+C` is honoured from the
   first frame** (gh #400, type-while-loading slice). The terminal entered raw
   mode and started reading only *after* the extension registry, config, and
