@@ -38,6 +38,7 @@ fn chat(border: CodeBlockBorder) -> Chat {
             initial_messages: Vec::new(),
             open_resume_picker: false,
             yolo: false,
+            early_input: None,
             thinking_visibility: Default::default(),
             codeblock_border: border,
             plain: true,

@@ -95,6 +95,7 @@ fn options(hooks: UiHooks) -> UiOptions {
         initial_messages: Vec::new(),
         open_resume_picker: false,
         yolo: false,
+        early_input: None,
         thinking_visibility: Default::default(),
         codeblock_border: Default::default(),
         plain: true,

@@ -862,6 +862,15 @@ pub struct UiOptions {
     /// Permission prompts are auto-approved this session (ADR-0042); the
     /// footer says so every frame.
     pub yolo: bool,
+    /// Input captured before this loop existed (gh #400, type-while-loading).
+    ///
+    /// The host starts raw mode and its reader *before* the expensive startup
+    /// load, so a keystroke typed in the first few hundred milliseconds is
+    /// captured rather than interpreted by the shell's line discipline. The
+    /// loop adopts the terminal this owns (no second reader, no handover) and
+    /// replays the buffer in arrival order through its own handler. `None`
+    /// keeps the old behaviour: the loop makes its own terminal.
+    pub early_input: Option<crate::run_early_input::EarlyInput>,
     /// How much of a thinking run the transcript shows by default (R6).
     pub thinking_visibility: crate::transcript::ThinkingVisibility,
     /// How fenced code blocks are framed (gh #32): `full` keeps the

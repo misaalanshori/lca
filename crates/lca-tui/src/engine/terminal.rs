@@ -328,6 +328,20 @@ impl Default for ProcessTerminal {
 }
 
 impl ProcessTerminal {
+    /// Point resize notifications at a new handler, without restarting the
+    /// reader (gh #400).
+    ///
+    /// `start` installs both handlers, but the startup path claims the
+    /// terminal before the layout exists, so its resize handler has nowhere
+    /// to send a size. Re-pointing afterwards lets the loop own resizes
+    /// without a stop/start cycle — and a stop/start would drop keys, which is
+    /// the very thing the early claim exists to prevent.
+    pub fn set_resize_handler(&mut self, on_resize: ResizeHandler) {
+        if let Ok(mut handler) = self.shared.resize.lock() {
+            *handler = on_resize;
+        }
+    }
+
     /// Create a terminal bound to the process stdin/stdout.
     pub fn new() -> Self {
         let (cols, rows) = sys::terminal_size().unwrap_or((80, 24));

@@ -17,7 +17,7 @@
 //! is there, so it cannot offer to remove it.
 //!
 //! This reader is deliberately dumb — it flattens the file's scalars to dotted
-//! keys and validates nothing. Validation is [`Config::load`]'s job, at the
+//! keys and validates nothing. Validation is [`super::Config::load`]'s job, at the
 //! layer that knows the vocabulary; a row only needs to know whether a key is
 //! present and what it spells.
 

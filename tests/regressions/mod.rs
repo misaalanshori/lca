@@ -712,3 +712,8 @@ mod tri_state_project_override;
 // nothing by itself - a manifest without `[capabilities.net]` still refuses.
 #[path = "302-tool-world-net-import.rs"]
 mod tool_world_net_import;
+
+// Gh #400 (type-while-loading): the terminal is claimed before the startup
+// load, so typing and quit keys work from the first frame.
+#[path = "400-type-while-loading.rs"]
+mod type_while_loading;
