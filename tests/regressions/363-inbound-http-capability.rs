@@ -107,15 +107,43 @@ fn serial() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// Bind a listener over one stub and return it with the stub.
+/// Bind a listener, retrying briefly if the whole port range is taken.
+///
+/// `nextest` runs each test as its **own process**, so `PORT_LOCK` serialises the
+/// rows inside one binary but cannot serialise them against a sibling *test
+/// binary* running at the same time — and this repo builds several. A row that
+/// found all ten ports occupied failed on macOS CI for exactly that reason
+/// (batch-22's `PORT_LOCK` was process-local, and a neighbouring binary held the
+/// range for a few milliseconds).
+///
+/// So the retry is the fix rather than a longer lock: the range is a shared
+/// machine resource, contention is legitimate, and `serve_http::bind` is itself
+/// a bounded retry loop — the test models the same thing it tests. A row that
+/// still cannot bind after a second of retries is a real failure, not a race.
 fn start(extension: &str, session: &str) -> (Listener, Arc<Stub>) {
     let stub = Stub::new(extension, session);
-    let listing: Arc<Mutex<Vec<Arc<dyn ServeHttpNamespace>>>> =
-        Arc::new(Mutex::new(
-            vec![stub.clone() as Arc<dyn ServeHttpNamespace>],
-        ));
     let token = SessionToken::from_known("test-token-0123456789");
-    let listener = serve_http::bind(listing, token).expect("the listener binds a free port");
+    // `bind` takes the listing by value, so a retry rebuilds it; the stub is an
+    // `Arc`, so the rebuilt listing drives the same recorded state.
+    let mut attempt = 0;
+    let listener = loop {
+        let listing: Arc<Mutex<Vec<Arc<dyn ServeHttpNamespace>>>> =
+            Arc::new(Mutex::new(
+                vec![stub.clone() as Arc<dyn ServeHttpNamespace>],
+            ));
+        match serve_http::bind(listing, token.clone()) {
+            Ok(listener) => break listener,
+            Err(err) if attempt < 20 => {
+                assert!(
+                    format!("{err}").contains("no free loopback port"),
+                    "a bind failure that is not port exhaustion is a real defect: {err}"
+                );
+                attempt += 1;
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(err) => panic!("the listener never found a free port: {err}"),
+        }
+    };
     (listener, stub)
 }
 
