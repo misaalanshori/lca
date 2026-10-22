@@ -98,6 +98,14 @@ pub enum Entry {
     Error(String),
     /// A pre-rendered line from a resumed session (displayed verbatim).
     Raw(String),
+    /// The startup key-hint line (gh #23), rendered from the **live**
+    /// keybindings each frame so a rebind reaches it (gh #410).
+    ///
+    /// It was a `Raw` string and therefore baked: `/reload` rebound the keys and
+    /// the first line a user reads kept naming the old ones. Keeping the *shape*
+    /// as an entry rather than a string is the whole fix - the keys are resolved
+    /// at render time, like every other hint.
+    StartupHint,
     /// An image the terminal renders through the graphics ladder, or as a
     /// placeholder when it has no graphics support (FR-UI-13, R5).
     Image {
@@ -111,7 +119,11 @@ pub enum Entry {
 /// One entry's cached render: the width it was rendered at, its styled
 /// lines, and how many leading lines belong to its reasoning run (gh
 /// #11's hit map - `None` means the entry must be re-rendered).
-type CachedRender = Option<(u16, Vec<String>, usize)>;
+/// One entry's cached frame: the width it was rendered at, its rows, how many of
+/// them are reasoning, and the input epoch they belong to (gh #410 - the key
+/// hints inside those rows depend on the live keybindings, which are not a
+/// function of the width).
+type CachedRender = Option<(u16, u64, Vec<String>, usize)>;
 
 /// How a thinking run renders (R6, pi's `thinkingVisibility`): a per-run
 /// override on top of this default.
@@ -180,6 +192,20 @@ pub struct Transcript {
     /// The live display tunables (gh #82): margin, image display,
     /// mermaid mode, and code indent, synced from the config hook.
     tuning: crate::state::DisplayTuning,
+    /// The live keybindings, so a hint names the key the interface will accept
+    /// (gh #410). Always present: a transcript with no interface around it (a unit
+    /// test, an export) holds a default manager, so there is exactly one code path
+    /// and no per-hint fallback to keep in step.
+    keybindings: std::sync::Arc<lca_tui::engine::keybindings::KeybindingsManager>,
+    /// Bumped whenever a render input that is not the width changes, so a cached
+    /// frame cannot outlive a rebind or a settings change.
+    ///
+    /// The cache key used to be the width alone. That was sound while every input
+    /// was either immutable or width-dependent; the live keybindings are neither,
+    /// so a `/reload` rebind would have repainted from stale rows and the
+    /// acceptance row for gh #410 would have passed only while the cache was
+    /// cold. Cheap to keep honest: an integer compare per entry.
+    cache_epoch: u64,
     /// Per-entry render cache (R15): `None` means the entry must be
     /// rendered; a streaming append invalidates only the last entry, so a
     /// long transcript is not re-rendered from scratch on every delta.
@@ -208,6 +234,32 @@ impl Transcript {
     /// Toggle tool-card expansion (Ctrl+O; pi's `app.tools.expand`).
     pub fn toggle_tools_expanded(&mut self) {
         self.tools_expanded = !self.tools_expanded;
+        self.invalidate_cache();
+    }
+
+    /// Install the interface's live keybindings, so every hint this transcript
+    /// paints names the key the interface will actually accept (gh #410).
+    ///
+    /// Called once at construction and again on `/reload`, which is the
+    /// acceptance case: the next frame shows the rebound key. The cache is
+    /// dropped because a hint's text is part of a cached frame.
+    pub fn set_keybindings(
+        &mut self,
+        keybindings: std::sync::Arc<lca_tui::engine::keybindings::KeybindingsManager>,
+    ) {
+        self.keybindings = keybindings;
+        self.invalidate_cache();
+    }
+
+    /// The live keybindings a hint renders from.
+    pub fn keybindings(&self) -> &std::sync::Arc<lca_tui::engine::keybindings::KeybindingsManager> {
+        &self.keybindings
+    }
+
+    /// Drop every cached frame and bump the epoch, so nothing rendered under the
+    /// previous inputs can be served again.
+    fn invalidate_cache(&mut self) {
+        self.cache_epoch = self.cache_epoch.wrapping_add(1);
         self.cache.borrow_mut().clear();
     }
 
@@ -354,13 +406,8 @@ impl Transcript {
         self.invalidate_cache();
     }
 
-    /// Drop every cached render (a mutation that is not a streaming append).
-    fn invalidate_cache(&mut self) {
-        self.cache.borrow_mut().clear();
-    }
-
-    /// Drop the render cache from outside (the theme changed, so every
-    /// cached line carries the old palette's bytes).
+    /// Drop every cached render (a mutation that is not a streaming append, or a
+    /// theme change, so every cached line carries the old palette's bytes).
     pub fn invalidate(&mut self) {
         self.invalidate_cache();
     }
@@ -568,6 +615,13 @@ impl Transcript {
     /// Append a pre-rendered resume line, displayed verbatim.
     pub fn push_raw(&mut self, text: impl Into<String>) {
         self.entries.push(Entry::Raw(text.into()));
+    }
+
+    /// Append the startup key-hint line (gh #23). Its keys resolve at render time,
+    /// so a `/reload` rebind reaches it (gh #410).
+    pub fn push_startup_hint(&mut self) {
+        self.entries.push(Entry::StartupHint);
+        self.invalidate_cache();
     }
 
     /// Drop every entry (R3's session switch): the new session starts its
@@ -851,8 +905,9 @@ impl Transcript {
             if i > 0 {
                 out.push(String::new());
             }
-            if let Some((cached_width, lines, _)) = &cache[i]
+            if let Some((cached_width, cached_epoch, lines, _)) = &cache[i]
                 && *cached_width == width
+                && *cached_epoch == self.cache_epoch
             {
                 out.extend(lines.iter().cloned());
                 continue;
@@ -867,10 +922,11 @@ impl Transcript {
                 self.codeblock_border,
                 &self.markdown_transformers,
                 &self.tuning,
+                self.keybindings.as_ref(),
                 &mut lines,
             );
             out.extend(lines.iter().cloned());
-            cache[i] = Some((width, lines, thinking_rows));
+            cache[i] = Some((width, self.cache_epoch, lines, thinking_rows));
         }
         out
     }
@@ -893,7 +949,7 @@ impl Transcript {
                 }
                 line += 1;
             }
-            let Some((_, lines, thinking_rows)) = slot.as_ref() else {
+            let Some((_, _, lines, thinking_rows)) = slot.as_ref() else {
                 continue;
             };
             if row >= line && row < line + lines.len() {
@@ -940,6 +996,7 @@ impl Transcript {
                 self.codeblock_border,
                 &self.markdown_transformers,
                 &self.tuning,
+                self.keybindings.as_ref(),
                 &mut tmp,
             );
             line += tmp.len();
@@ -966,6 +1023,10 @@ pub fn image_label(media_type: &str, bytes: &[u8]) -> String {
 mod preview;
 mod render;
 use render::*;
+// gh #410: the hint formatter is the one thing a sibling module's rows assert on,
+// so it crosses the seam. Everything else in `render` stays private.
+#[cfg(test)]
+pub(crate) use render::render_key_hint;
 
 #[cfg(test)]
 #[path = "preview_tests.rs"]

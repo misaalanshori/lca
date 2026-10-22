@@ -167,3 +167,56 @@ fn yolo_badge_hover_explains_itself() {
         "no badge, no tip"
     );
 }
+
+// Verifies: gh #410 - a hover tooltip names the **live** key, not the default.
+//
+// `chat_mouse.rs` owns four of the fourteen hint sites (the scrollbar steppers,
+// the jump indicator, and the thinking run), and they build plain strings rather
+// than going through the transcript's renderer - so the transcript rows cannot
+// cover them. This is the mouse surface's own row: rebind `app.prompt.previous`
+// and hover the scrollbar's top stepper, which names it.
+#[test]
+fn a_rebound_key_reaches_the_mouse_tooltip() {
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    let mut chat = chat();
+    chat.screen_mode = true;
+    // Content taller than the window, so the scrollbar and its steppers exist.
+    for index in 0..40 {
+        chat.transcript.push_raw(format!("row {index}"));
+    }
+    let (w, h) = (80u16, 24u16);
+    let _ = chat.render(h);
+
+    // Baseline: the top stepper names the default key.
+    let default_tip = (0..w)
+        .find_map(|col| chat.tooltip_at(col, 0, w, h, 20))
+        .filter(|tip| tip.contains("Previous prompt"))
+        .expect("the top stepper has a tip");
+    assert!(
+        default_tip.contains("shift+up") || default_tip.contains("ctrl+p"),
+        "the baseline names a default key: {default_tip:?}"
+    );
+
+    // Rebind it; the same hover must name the new key.
+    let mut user = BTreeMap::new();
+    user.insert(
+        "app.prompt.previous".to_string(),
+        vec!["ctrl+y".to_string()],
+    );
+    chat.keybindings =
+        Arc::new(lca_tui::engine::keybindings::KeybindingsManager::with_user_bindings(user));
+    let rebound_tip = (0..w)
+        .find_map(|col| chat.tooltip_at(col, 0, w, h, 20))
+        .filter(|tip| tip.contains("Previous prompt"))
+        .expect("the top stepper still has a tip");
+    assert!(
+        rebound_tip.contains("ctrl+y"),
+        "the mouse tip names the rebound key: {rebound_tip:?}"
+    );
+    assert!(
+        !rebound_tip.contains("shift+up") && !rebound_tip.contains("ctrl+p"),
+        "and never the dead default: {rebound_tip:?}"
+    );
+}

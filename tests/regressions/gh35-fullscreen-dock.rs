@@ -159,7 +159,11 @@ fn the_indicator_shows_while_scrolled_and_hides_at_the_bottom() {
         scrolled.contains("Jump to latest message"),
         "while scrolled:\n{scrolled}"
     );
-    let key = lca_tui::engine::keybindings::key_text("tui.altScreen.bottom");
+    // gh #410: this row pins the **default** key, so it asks for the default
+    // explicitly - the free function that used to stand here promised live labels
+    // and returned defaults.
+    let key = lca_tui::engine::keybindings::KeybindingsManager::new()
+        .display_keys("tui.altScreen.bottom");
     assert!(
         scrolled.contains(&key),
         "named for the key that returns: {scrolled}"
