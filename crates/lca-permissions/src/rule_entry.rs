@@ -287,7 +287,26 @@ fn compile_path(path: &str, project_dir: &Path, verb: RuleVerb) -> Result<String
         return Ok(path.to_string());
     }
     // An absolute path is compared as written; no directory to span.
-    if Path::new(path).is_absolute() {
+    //
+    // `Path::is_absolute` is platform-truth (`/etc/hostname` is **not** absolute
+    // on Windows, where only `C:\...` and `\\server\share` are), but a rule's
+    // path is a *pattern*, not a filesystem path: a leading `/` means "from the
+    // root" to the person who typed it on every platform, and a pattern the user
+    // anchored must never be re-anchored to `*/etc/hostname`. So the shape check
+    // is explicit rather than delegated. This is what made the gh #261 rows red
+    // on the Windows leg: they compiled `/etc/hostname` to `*/etc/hostname`,
+    // which matched nothing.
+    if path.starts_with('/') || path.starts_with('\\') || Path::new(path).is_absolute() {
+        return Ok(path.to_string());
+    }
+    // A Windows drive path (`C:\x`, `C:/x`): absolute there, and a pattern
+    // written that way must survive on any platform that reads the rule.
+    if path
+        .chars()
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic())
+        && path.get(1..2).is_some_and(|colon| colon == ":")
+    {
         return Ok(path.to_string());
     }
     // A relative path: `*` spans the directory the action resolved against, so
