@@ -1159,22 +1159,26 @@ pub fn oauth_idp_host() -> ScriptedHost {
     })
 }
 
-/// Write the `mcp.json` an OAuth CLI row needs: one HTTP server whose 401
-/// challenge points at `idp_base`.
+/// Write the `mcp.json` an OAuth CLI row needs: one HTTP server whose
+/// authorization server is named explicitly by `authServerMetadataUrl`.
+///
+/// gh #467: discovery has three steps (the configured document, the 401
+/// challenge's RFC 9728 pointer, then the MCP origin as its own issuer), and
+/// this row used to depend on **which one happened to win** - it reached the
+/// third on macOS and the second on Linux. That made it a platform-divergent
+/// row, which is how a dead fallback stayed invisible. Naming the document here
+/// pins the documented first step, so the row takes the same path on every OS.
+///
+/// The 401 still carries its challenge (the row's scope merge reads it); the
+/// configured document simply wins, which is the documented precedence.
 pub fn write_oauth_mcp_config(home: &std::path::Path, url: &str, idp_base: &str) {
     let path = home.join(".lca/mcp.json");
     std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
     std::fs::write(
         &path,
-        format!(r#"{{"mcpServers": {{"remote": {{"url": "{url}", "oauth": {{}}}}}}}}"#),
+        format!(
+            r#"{{"mcpServers": {{"remote": {{"url": "{url}", "oauth": {{"authServerMetadataUrl": "{idp_base}/.well-known/oauth-authorization-server"}}}}}}}}"#
+        ),
     )
     .expect("write mcp.json");
-    // The challenge the 401 carries is what discovery follows, so the config
-    // records the IdP's protected-resource document.
-    let challenge = idp_base.to_string();
-    std::fs::write(
-        home.join(".lca/idp.txt"),
-        format!("{challenge}/.well-known/oauth-protected-resource"),
-    )
-    .expect("write idp hint");
 }

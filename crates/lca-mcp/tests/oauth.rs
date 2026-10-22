@@ -31,6 +31,13 @@ fn drive_sign_in(
         if let Some(url) = caps.oauth_opened().last().cloned() {
             break url;
         }
+        // A sign-in that fails before publishing (a discovery error, an
+        // unreachable IdP) leaves no URL to wait for. Report *its* reason
+        // instead of the harness's timeout: "never published" is the symptom,
+        // and the flow already knows the cause.
+        if let Some(Err(err)) = result.lock().expect("slot").as_ref() {
+            return Err(format!("the sign-in failed before publishing: {err}"));
+        }
         if std::time::Instant::now() > deadline {
             return Err("the sign-in never published an authorization URL".to_string());
         }
@@ -248,4 +255,75 @@ fn step_up_scopes_merge_on_re_sign_in() {
         4,
         "echo plus the resource trio"
     );
+}
+
+/// A remote server with **no** configured metadata document, so discovery has to
+/// find the authorization server some other way.
+fn unconfigured_server(mock: &common::Mock) -> lca_mcp::HttpServerConfig {
+    let mut server = remote_server(mock, "/mcp");
+    server.oauth = Some(lca_mcp::OAuthConfig {
+        client_name: Some("lca-test".to_string()),
+        scope: Some("base".to_string()),
+        auth_server_metadata_url: None,
+        client_id: None,
+        client_secret: None,
+    });
+    server
+}
+
+// Verifies: gh #467 design point 3 - **the branch the issue is really about**.
+//
+// `discover` has three steps: the configured metadata document, the challenge's
+// RFC 9728 `resource_metadata` pointer, then the MCP server's own origin as its
+// own issuer. Every existing row started at one of the first two, so the third
+// was never exercised - which is how a function that cannot succeed survived, and
+// why the same commit passed on Linux and failed on macOS: on Linux the earlier
+// steps covered the row, on macOS the fallback was actually reached.
+//
+// Here the config names no document and the challenge carries no pointer, so the
+// fallback is the only path left. The mock serves RFC 8414 metadata at
+// `/.well-known/oauth-authorization-server` on its own origin, which is precisely
+// what the fallback asks for.
+#[test]
+fn discovery_falls_back_to_the_servers_own_origin() {
+    let mock = mock_server();
+    let caps = sandbox("oauth-fallback", lca_mcp::manifest_grants());
+    let server = unconfigured_server(&mock);
+
+    // The 401 challenge names the IdP as a bare `Bearer` - no `resource_metadata`
+    // pointer, which is the deployment the issue described: an IdP that
+    // advertises no RFC 9728 document and a user who configured nothing.
+    mock.guard(None, Some("Bearer"));
+    drive_sign_in(&caps, &server).expect("the fallback sign-in completes");
+
+    // It asked this server's own origin for the RFC 8414 document ...
+    let fallback_fetches: Vec<String> = mock
+        .requests_of("/.well-known/oauth-authorization-server")
+        .into_iter()
+        .collect();
+    assert!(
+        !fallback_fetches.is_empty(),
+        "the fallback fetched the origin's own metadata: {:?}",
+        mock.requests
+    );
+
+    // ... and the sign-in completed against it: a token is stored and it opens
+    // the server. Before the fix this errored with
+    // `cannot take the origin of "http://127.0.0.1:NNNNN/mcp"`.
+    let store = lca_mcp::TokenStore::new(caps.clone(), &server);
+    let token = store
+        .load()
+        .expect("store reads")
+        .expect("the fallback stored a token");
+    assert_eq!(token.access_token, "mock-access");
+    assert_eq!(
+        mock.requests_of("/register").len(),
+        1,
+        "registration happened against the discovered IdP"
+    );
+
+    mock.guard(Some("mock-access"), None);
+    let bridge = lca_mcp::McpBridge::connect_http(caps.clone(), vec![server])
+        .expect("the fallback's token opens the server");
+    assert_eq!(bridge.tool_specs().expect("specs").len(), 4);
 }

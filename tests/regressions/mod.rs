@@ -757,6 +757,11 @@ mod deny_rule_actually_matches;
 #[path = "459-stderr-tail-never-blocks.rs"]
 mod stderr_tail_never_blocks;
 
+// Gh #467: the discovery origin fallback parses instead of pattern-matching, so
+// the last resort can succeed, and its branch is covered by a row.
+#[path = "467-origin-fallback-reachable.rs"]
+mod origin_fallback_reachable;
+
 // Gh #412: `/persona` applies a bundle of model, thinking, loadout and
 // instructions atomically, or nothing at all.
 #[path = "412-persona-bundle-atomic.rs"]

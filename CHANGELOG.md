@@ -7,6 +7,20 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **OAuth discovery's last-resort fallback works, so a server with no RFC 9728
+  document can still sign in** (gh #467). `origin_of` split a URL with
+  `splitn(4, '/')` and rejected the second piece — the empty string *between the two
+  slashes of `//`*, empty for every well-formed URL — so it could never succeed. It
+  is the third step of discovery: configured metadata document, then the challenge's
+  `resource_metadata` pointer, then the MCP server's own origin as its own issuer. So
+  every server whose IdP advertises no RFC 9728 metadata, with no
+  `authServerMetadataUrl` configured, got `cannot take the origin of …` instead of a
+  sign-in. It now parses (scheme, then the authority cut at the path/query/fragment,
+  userinfo stripped, IPv6 brackets kept), and the fallback branch has its own row —
+  the branch nothing covered, which is how a function that cannot succeed survived.
+  The cross-host sign-in row no longer depends on which discovery step happens to win
+  on a given OS.
+
 - **A silent MCP server that fails the handshake no longer hangs on `connecting`**
   (gh #459). `lca mcp list`, `/mcp`, and the startup wait all reported `connecting`
   until the 10-second budget expired and then still reported `connecting`, with the
