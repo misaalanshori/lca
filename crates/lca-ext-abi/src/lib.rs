@@ -683,3 +683,107 @@ pub mod host {
         wasmtime::component::bindgen!({ path: "../../wit", world: "hooks-trust" });
     }
 }
+
+/// Every world's manifest spelling, in vocabulary order.
+///
+/// **One source for the string↔[`World`] mapping.** Before gh #288 the mapping
+/// lived in three places that could disagree without anything noticing: the
+/// `match` in `lca-ext-host`'s `WasmExtension::worlds`, the hand-copied
+/// `enum` in `schemas/extension-manifest.schema.json`, and the `==` chain in the
+/// loader. A world added to one and not the others gave exactly the bug that
+/// issue filed — a manifest the schema accepts, the loader accepts, and the
+/// dispatcher silently drops.
+///
+/// The entries are a plain table rather than a `World::name()`/`World::parse()`
+/// pair because the validator needs to *enumerate* the vocabulary (to list it in
+/// an error and to suggest the nearest match), which a match arm cannot do.
+pub const WORLDS: &[(&str, World)] = &[
+    ("tool", World::Tool),
+    ("tool-catalog", World::ToolCatalog),
+    ("command", World::Command),
+    ("hooks", World::Hooks),
+    ("hooks-message", World::HooksMessage),
+    ("hooks-tool-call", World::HooksToolCall),
+    ("hooks-tool-result", World::HooksToolResult),
+    ("hooks-stream", World::HooksStream),
+    ("hooks-settle", World::HooksSettle),
+    ("hooks-compaction", World::HooksCompaction),
+    ("hooks-cache", World::HooksCache),
+    ("hooks-trust", World::HooksTrust),
+    ("provider", World::Provider),
+    ("compaction", World::Compaction),
+    ("context-transform", World::ContextTransform),
+    ("ui", World::Ui),
+];
+
+/// The manifest spelling of `world`.
+#[must_use]
+pub fn world_name(world: World) -> &'static str {
+    WORLDS
+        .iter()
+        .find(|(_, candidate)| *candidate == world)
+        .map(|(name, _)| *name)
+        .unwrap_or("unknown")
+}
+
+/// The [`World`] a manifest spelling names, or `None` when it names none.
+///
+/// Exact match only: a typo is not a synonym. Callers that want a suggestion
+/// use [`nearest_world`].
+#[must_use]
+pub fn parse_world(name: &str) -> Option<World> {
+    WORLDS
+        .iter()
+        .find(|(candidate, _)| *candidate == name)
+        .map(|(_, world)| *world)
+}
+
+/// The vocabulary entry closest to `name`, when one is close enough to be worth
+/// suggesting.
+///
+/// Edit distance, capped: a suggestion the author cannot see the relationship to
+/// is noise, so a name more than a third of the way from its nearest neighbour
+/// gets no hint. That keeps the hint useful for the case this issue is about (one
+/// transposed letter) and quiet for a name that is simply something else.
+#[must_use]
+pub fn nearest_world(name: &str) -> Option<&'static str> {
+    let mut best: Option<(usize, &'static str)> = None;
+    for (candidate, _) in WORLDS {
+        let distance = edit_distance(name, candidate);
+        // Allow a third of the longer name's length: enough for a transposition
+        // or one wrong character, not enough to suggest an unrelated world.
+        let budget = candidate.len().max(name.len()) / 3 + 1;
+        if distance <= budget && best.is_none_or(|(best_distance, _)| distance < best_distance) {
+            best = Some((distance, candidate));
+        }
+    }
+    best.map(|(_, candidate)| candidate)
+}
+
+/// Levenshtein distance, two rows, iterative.
+///
+/// Written out rather than pulled in: it is fifteen lines and the workspace does
+/// not carry a string-distance crate.
+fn edit_distance(left: &str, right: &str) -> usize {
+    let left: Vec<char> = left.chars().collect();
+    let right: Vec<char> = right.chars().collect();
+    if left.is_empty() {
+        return right.len();
+    }
+    if right.is_empty() {
+        return left.len();
+    }
+    let mut previous: Vec<usize> = (0..=right.len()).collect();
+    let mut current = vec![0usize; right.len() + 1];
+    for (i, left_char) in left.iter().enumerate() {
+        current[0] = i + 1;
+        for (j, right_char) in right.iter().enumerate() {
+            let cost = usize::from(left_char != right_char);
+            current[j + 1] = (previous[j] + cost)
+                .min(previous[j + 1] + 1)
+                .min(current[j] + 1);
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+    previous[right.len()]
+}
