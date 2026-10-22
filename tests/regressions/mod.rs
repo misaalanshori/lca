@@ -722,6 +722,12 @@ mod type_while_loading;
 // probed background (not copied from it), and COLORFGBG 7/8 classifies like pi.
 #[path = "387-system-panels-and-scheme.rs"]
 mod system_panels_and_scheme;
+
+// Gh #288: `Manifest::parse` validates every `worlds` entry against one
+// vocabulary table, so a typo is refused with a suggestion instead of installing
+// as an extension that matches no world.
+#[path = "288-unknown-world-is-refused.rs"]
+mod unknown_world_is_refused;
 // GitHub #449: two `conformance_diff` rows compiled the WASM fixture more than
 // once, so they sat at ~1.6x nextest's default cap and timed out on a loaded
 // runner. The measurement put the cost in `wasmtime::component::Component::new`

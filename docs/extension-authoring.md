@@ -99,6 +99,50 @@ impl Guest for Component {
 bindings::export!(Component with_types_in bindings);
 ```
 
+### The `worlds` list
+
+`worlds` must name worlds that exist. An unknown name is refused at parse,
+before anything is installed, and the error names what you wrote, lists the
+vocabulary, and suggests the nearest match:
+
+```
+unknown world `contxt-transform` - did you mean `context-transform`?
+Known worlds: `tool`, `tool-catalog`, `command`, `hooks`, `hooks-message`, ...
+```
+
+This is deliberate and load-bearing. A typo that is accepted silently installs an
+extension that matches no world: the install succeeds, nothing errors, and the
+extension does nothing — which costs far more to diagnose than a refusal costs to
+fix. The vocabulary is:
+
+| World | What it does |
+|---|---|
+| `tool` | one callable tool (`get-schema`, `run-tool`) |
+| `tool-catalog` | a suite of tools with exposure and namespaces (gh #77) |
+| `command` | one slash command |
+| `hooks` | the six frozen hook points |
+| `hooks-message` | observe and replace finalized messages |
+| `hooks-tool-call` | mutate or block tool calls compositionally |
+| `hooks-tool-result` | mutate tool results compositionally |
+| `hooks-stream` | observe normalized provider stream events |
+| `hooks-settle` | append entries and continue once before settling |
+| `hooks-compaction` | veto compaction, observe its failure |
+| `hooks-cache` | vote on prompt-cache warming |
+| `hooks-trust` | vote on project trust |
+| `provider` | models, streamed completions, account identity |
+| `compaction` | replace a record range with a summary |
+| `context-transform` | reshape or reject the outgoing message list |
+| `ui` | render a widget tree into the four regions |
+
+The `hooks-*` names are a **fixed set**, not a `hooks-` prefix: `hooks-tpyo` is
+refused exactly like any other typo, because a prefix rule would accept it.
+
+Each world may appear once; `worlds = ["tool", "tool"]` is refused rather than
+silently deduplicated. `worlds = []` is legal only alongside `resources`, and
+means a data-only extension (ADR-0030). The same vocabulary is published as an
+`enum` in [`schemas/extension-manifest.schema.json`](../schemas/extension-manifest.schema.json)
+for editor autocompletion, and a test keeps the two in step.
+
 Write the manifest as `extension.toml` next to `Cargo.toml`.
 
 ```toml
