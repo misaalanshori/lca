@@ -873,6 +873,22 @@ impl Chat {
         }
     }
 
+    /// The `ui.theme` setting currently in force.
+    ///
+    /// Exposed for `/reload` (gh #387 gap 5), which must re-apply whatever is
+    /// active rather than the picker default.
+    pub(crate) fn theme_setting(&self) -> &str {
+        &self.theme_setting
+    }
+
+    /// Whether the theme currently follows terminal detection.
+    ///
+    /// A `system` theme is rebuilt from the OSC 11 answer, so re-applying it by
+    /// name on reload would drop a background the terminal already reported.
+    pub(crate) fn theme_follows_detection(&self) -> bool {
+        self.theme_auto
+    }
+
     /// Apply a theme by name and remember it (S5: built-in or custom file).
     /// Picking `system` re-arms detection-following (gh #10); any other
     /// explicit pick clears it.
