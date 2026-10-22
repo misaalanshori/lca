@@ -179,6 +179,9 @@ impl Ui {
                     as Arc<dyn Fn() -> bool + Send + Sync>)
             },
             settings_rows: super::display::settings_rows(self, self.data.clone()),
+            persona_list: self.persona_list_hook(),
+            persona_check: self.persona_check_hook(),
+            persona_apply: self.persona_apply_hook(),
             cycle_model: {
                 let ui = self.clone();
                 Some(Arc::new(move |forward: bool| ui.cycle_model(forward)))
@@ -276,6 +279,16 @@ impl Ui {
                     }
                 }))
             },
+            // Gh #412: `/persona`. Three seams, and the split is the atomic
+            // guarantee:
+            //
+            // - `persona_list` reads the config's bundles that apply here (an
+            //   untrusted project's never loaded, so they cannot be listed).
+            // - `persona_check` answers "is every field reachable **in this
+            //   session**" - the model in the offered set, the level offered by
+            //   *that* model, every tool registered. It writes nothing.
+            // - `persona_apply` runs only after a clean check, and writes through
+            //   the same paths `/model`, `/thinking` and the tool gate use.
             save_default_model: Some(Arc::new(|id: &str| {
                 // One key: `model` is the startup default
                 // (`resolve_model_id`), the provider extension is the

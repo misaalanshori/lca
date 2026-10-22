@@ -166,6 +166,15 @@ impl Chat {
                 }
                 return Action::Continue;
             }
+            // Gh #412: `/persona` is the bundle, not a new interaction. With no
+            // argument it lists what each persona carries; with a name it validates
+            // the **whole** bundle against this session and applies only if every
+            // field is reachable. A half-applied persona is worse than a refusal,
+            // because the user believes they are in a persona they are not in.
+            "persona" => {
+                self.dispatch_persona(&argument);
+                return Action::Continue;
+            }
             "hotkeys" => {
                 self.push_output(crate::chat_notices::hotkeys_notice(&self.keybindings));
                 return Action::Continue;
@@ -938,6 +947,8 @@ pub(crate) fn provider_for(options: &UiOptions) -> CombinedAutocompleteProvider 
 /// reads it without reaching the network or the filesystem.
 pub(crate) const CHANGELOG_TEXT: &str = include_str!("../../../CHANGELOG.md");
 
+/// The latest released section: the first `## [` block that is not
+/// `[Unreleased]`, through the next `## [` or the end.
 /// The `/help` text: the commands the interface offers, then the keys.
 fn help_notice(commands: &[String]) -> String {
     let mut sorted: Vec<&String> = commands.iter().collect();

@@ -76,6 +76,14 @@ impl Config {
                     }
                     this.apply(key.to_string(), TypedValue::ThinkingLevels(map), source)?;
                 }
+                "personas" => {
+                    // Gh #412: shape-validated here; whether one may *apply* is a
+                    // session fact (the model, the level for that model, the tool
+                    // registry) and an untrusted project's personas never apply at
+                    // all - both belong to the caller, not the loader.
+                    let personas = crate::persona::parse_personas(&value).map_err(&invalid)?;
+                    this.apply(key.to_string(), TypedValue::Personas(personas), source)?;
+                }
                 "extensions.catalogs" => {
                     let list = value.as_array().ok_or_else(|| {
                         invalid(format!(
@@ -547,6 +555,10 @@ impl Config {
             "model",
             "models.enabled",
             "models.thinking_levels",
+            // Gh #412: the persona bundles. Two allowlists exist (this one and
+            // `Config::load`'s), and a key missing from either loads as silence -
+            // the gh #272 lesson. Both list it.
+            "personas",
             "thinking.budgets",
             "compaction.threshold",
             "compaction.enabled",

@@ -14,7 +14,7 @@ A key this build does not know is an **error**, naming the key and the layer tha
 * **This diverges from pi by design.** pi's settings loader says so in its own source ("Settings files are not validated; a malformed value replaces instead of throwing here"): an unknown JSON key is simply carried along, and a malformed value is stored as-is. LCA refuses both, at the layer that knows the vocabulary. The choice follows from the rest of LCA's model - a capability that was never granted is a refusal, not a silent default - and the cost is the compat trade above.
 * **The untrusted project file stays inert, junk keys included.** FR-PERM-9 means the file is not read at all until the project is trusted, so a repository cannot brick startup by shipping a bad key. The trust prompt is the boundary: files the user opted into are validated, the one they did not is ignored wholesale.
 
-Table-valued keys (`thinking.budgets`, `models.thinking_levels`, `extensions.catalogs`, `permissions.proposals`) own their subtrees: their children are that key's vocabulary (level names, model ids, catalog entries), validated by the key's own parser rather than by the key walk.
+Table-valued keys (`thinking.budgets`, `models.thinking_levels`, `extensions.catalogs`, `permissions.proposals`, `personas`) own their subtrees: their children are that key's vocabulary (level names, model ids, catalog entries), validated by the key's own parser rather than by the key walk.
 
 The project file is read only after the user marks the project as trusted. An untrusted project file cannot enable extensions or change permission defaults (FR-PERM-9).
 
@@ -152,6 +152,71 @@ Network and retry inventory (gh #83, pi's "Network and retries"): attempts, base
 | `trust.default_project` | `ask`, `always`, or `never` | `ask` | The fallback project-trust behavior when no stored decision exists (gh #80, pi's `defaultProjectTrust`): `always` trusts for the session at startup, `never` skips the trust prompt and stays untrusted, `ask` prompts as before. User file or `LCA_TRUST_DEFAULT_PROJECT` only - a project file that granted its own trust would defeat FR-PERM-9, so one that tries is refused at load. `-a`/`--approve` (trust for the run) and `--no-approve`/`--na` (untrusted for the run) beat the fallback; the two refuse each other. An explicit `/trust` answer mid-run still wins.
 | `permissions.mode` | `ask` or `yolo` | `ask` | How permission prompts are answered (ADR-0042). `yolo` answers every prompt "always, for this exact pattern": the pattern is persisted and a `permission` record is written exactly as a human answer would write it. Explicit deny rules still deny. `--yolo` sets it for one process, beating any file. While it is on, the footer carries a `YOLO` line in the error role. Reads outside the workspace never prompt in either mode. |
 | `permissions.proposals` | table | empty | Project file only. Proposals with no force; see ADR-0006. |
+| `personas` | table: name -> bundle | empty | Named bundles for `/persona` (gh #412): a model, a thinking level, a tool loadout, and optional instructions, applied as one command. See [Personas](#personas). |
+
+## Personas
+
+`[personas.<name>]` defines a bundle that `/persona <name>` applies in one
+step (gh #412). The point is gear-shifting: a `plan` persona is a read-only
+loadout at a high reasoning level with a planning prologue, and switching to it
+should not cost four commands and a pasted paragraph.
+
+```toml
+[personas.plan]
+model = "opus"
+thinking = "high"
+tools = ["read", "grep", "glob"]
+instructions = "You are planning. Read and reason; do not modify files."
+
+[personas.fast]
+model = "local-model"
+thinking = "off"
+tools = []
+```
+
+The four fields:
+
+The four fields:
+
+- **model** - the model id (or pattern) to switch to. Omitted leaves the model
+  alone.
+- **thinking** - a level from the `thinking` vocabulary, or `""` for the provider
+  default. Omitted leaves the level alone.
+- **tools** - a list of tool names to keep. `[]` means **no tools**, which is a
+  real persona. Omitted leaves the loadout alone.
+- **instructions** - a prologue injected as a **conversational** message,
+  attributed to the persona. Never a `System` message: a trailing `System` message
+  mutates the root prompt and busts the prompt cache (gh #299). They land **once, at
+  apply time** - they are not re-sent every turn, so a persona's framing does not
+  quietly outlive the persona or pay a cache cost for the session. A lasting
+  standing instruction belongs in `AGENTS.md`, which is read as project context.
+
+`/persona` with no argument lists every persona with what it carries, because a
+bundle whose contents you cannot see is a bundle you cannot trust. `/persona
+<name>` validates the **whole** bundle against the running session - does the
+model exist, does *that model* accept that thinking level, is every tool
+registered - and applies only if all of it holds. **A persona that fails any check
+applies nothing**, not even the fields that would have worked: a half-applied
+persona leaves you believing you are in one you are not in.
+
+Applying writes through the same paths `/model` and `/thinking` use, so the
+footer, the thinking border ramp, and the per-model thinking overrides are in sync
+without a second thing to keep in step. There is no separate "active persona"
+state: the three settings it sets *are* the state.
+
+**Precedence.** A persona is a bundle, not a set of individually-mergeable
+values, so a `[personas.plan]` in a project file replaces a same-named one in the
+user file **wholesale** - fields are not combined, because a merged bundle is a
+persona nobody wrote.
+
+**Trust.** A persona names a model, a tool loadout, and instructions, which is a
+config-driven behaviour switch - exactly what an untrusted project must not be able
+to set (FR-PERM-9). An untrusted project file is not read at all, so its personas
+do not exist for the session rather than existing-but-blocked.
+
+**Not `[preset]`.** *Preset* is reserved for provider endpoint entries
+(`~/.lca/provider-presets.toml` and an extension's own `resources/`). This feature
+is `[personas]` and `/persona` everywhere, so the two vocabularies do not collide.
 
 ## Theme fallbacks
 

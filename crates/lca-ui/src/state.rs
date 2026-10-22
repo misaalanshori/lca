@@ -9,6 +9,8 @@
 use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::sync::Arc;
+
+use crate::state_persona::{PersonaApply, PersonaCheck, PersonaList};
 use std::sync::mpsc::SyncSender;
 
 use lca_protocol::CommandEffect;
@@ -763,6 +765,17 @@ pub struct UiHooks {
     /// `/thinking`'s Enter: clamp the chosen level to the current model's
     /// set, store it, and return the notice.
     pub set_thinking: Option<ThinkingSetter>,
+    /// `/persona`: validate a bundle against this session before applying any of it
+    /// (gh #412). Absent means the host cannot reach the model set or the tool
+    /// registry, so `/persona` refuses rather than applying blind.
+    pub persona_check: Option<PersonaCheck>,
+    /// `/persona`: apply an already-validated bundle.
+    pub persona_apply: Option<PersonaApply>,
+    /// `/persona`: every persona that applies in this session, in name order. An
+    /// untrusted project's personas are **absent** here rather than listed as
+    /// unusable - the loader does not parse an untrusted file, so there is nothing
+    /// to list (FR-PERM-9).
+    pub persona_list: Option<PersonaList>,
     /// The levels the `/thinking` picker offers (gh #41): the current
     /// model's allowed set in canonical order. Absent means every
     /// level (a host without per-model sets); unsupported levels are

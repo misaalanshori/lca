@@ -18,6 +18,7 @@ mod editor;
 mod extman;
 mod hooks;
 mod hub;
+mod persona;
 pub(crate) use hub::OFFICIAL_CATALOG_URL;
 mod label_hooks;
 pub mod login;
