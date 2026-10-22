@@ -637,6 +637,18 @@ impl Transcript {
         self.entries.push(Entry::Notice(text.into()));
     }
 
+    /// Every notice line, oldest first (gh #462: the tab-move refusals are
+    /// notices, and a callerasserting one should not have to parse the frame).
+    pub fn notices(&self) -> Vec<String> {
+        self.entries
+            .iter()
+            .filter_map(|entry| match entry {
+                Entry::Notice(text) => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Append an error.
     pub fn push_error(&mut self, text: impl Into<String>) {
         self.entries.push(Entry::Error(text.into()));

@@ -67,6 +67,34 @@ nothing is sent without you. `Alt+Up` does the same on demand while
 the turn keeps running. Typing during `/compact` queues the message
 for the moment compaction finishes instead of being refused.
 
+## Work in more than one tab
+
+`Ctrl+T` opens another conversation in the same folder, and each tab
+keeps its own session, its own draft, and its own place in the scroll.
+`Alt+1`..`Alt+9` jump straight to a tab, `Ctrl+Tab`/`Shift+Ctrl+Tab`
+cycle, and `Ctrl+W` closes one (the session stays on disk; only the
+unsent draft goes).
+
+**A tab switch does not stop a running turn.** Start a long
+`cargo test`, switch to another tab, and keep working: the first tab
+keeps streaming, its item in the tab bar pulses `◌`, and when it
+settles it shows an unread `•` until you look at it again. Switching
+back finds the turn exactly where it was.
+
+Three things follow from that, and they are deliberate:
+
+- `Ctrl+C` cancels the turn of the tab you are **looking at**. A turn
+  running in a background tab is not cancelled by a keystroke you
+  cannot see the effect of — switch to that tab first, then `Ctrl+C`.
+- Closing a tab whose own turn is still running refuses and says so:
+  the stream is landing in the row about to disappear, so the work
+  would be lost. Cancel it or switch away first.
+- Opening a new tab (`Ctrl+T`) also waits for the turn to finish.
+  Creating a session makes it the host's current one, and the running
+  turn is still writing to the one it started in; switching tabs is
+  deferred for exactly that reason, but there is nothing to defer a
+  brand-new session to. Switch tabs to work elsewhere in the meantime.
+
 ## Change the model or settings
 
 Type `/` to search every command; `/help` lists them, one line each. The

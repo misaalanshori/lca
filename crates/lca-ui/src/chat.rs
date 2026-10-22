@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use lca_protocol::{Record, StopReason, TurnEvent, TurnStatus, Usage};
+use lca_protocol::{Record, TurnEvent, Usage};
 use lca_tui::engine::keybindings::KeybindingsManager;
 use lca_tui::engine::keys;
 use lca_tui::widgets::editor::{Editor, EditorEvent};
@@ -26,7 +26,7 @@ use crate::footer::Footer;
 use crate::separator::Separator;
 use crate::state::{Action, LoginNext, TurnStatusLine, UiOptions, UiState};
 use crate::theme::Theme;
-use crate::transcript::{ToolStatus, Transcript};
+use crate::transcript::Transcript;
 
 /// One queued message (steering, ADR-0038). Carried by `Chat`; the agent
 /// semantics live in `lca-core`. A queued *command* (a slash command
@@ -93,9 +93,26 @@ pub struct Chat {
     /// The turn's generation-time meter (the footer's tok/s reading). It adds
     /// up the spans `lca-core` stamped where the stream was consumed (gh
     /// #464); it holds no clock of its own.
-    meter: crate::footer::meter::StreamMeter,
+    ///
+    /// `pub(crate)` since gh #462: a background turn's meter travels with its
+    /// tab, so the swap in `chat_tabs` moves this field.
+    pub(crate) meter: crate::footer::meter::StreamMeter,
     /// Whether a turn is running.
     pub turn_running: bool,
+    /// Which tab the running turn belongs to (gh #462). A turn is started by
+    /// the visible tab, so this is set in `begin_turn`; it is what routes the
+    /// stream into the right transcript once the reader has switched away.
+    pub(crate) turn_tab: Option<usize>,
+    /// A session id the host must be switched to once the running turn settles
+    /// (gh #462).
+    ///
+    /// The host's `switch_session` rewrites a shared "current session" cell
+    /// that the turn worker reads on its own thread, lazily. Two tabs cannot
+    /// both be that cell's answer, so a switch during a turn is deferred: the
+    /// *display* moves now (each tab carries its own transcript), and the
+    /// host's binding follows at settle. Moving it early would append the
+    /// running turn's records to a different session's log.
+    pub(crate) deferred_host_session: Option<String>,
     /// Whether a background `/compact` is summarizing (the interface stays
     /// responsive while it does; the separator says `Working`).
     pub compacting: bool,
@@ -343,6 +360,8 @@ impl Chat {
             usage: Usage::default(),
             turn_usage: Usage::default(),
             turn_running: false,
+            turn_tab: None,
+            deferred_host_session: None,
             compacting: false,
             turn_status: None,
             separator: Separator::new(),
@@ -504,154 +523,37 @@ impl Chat {
     }
 
     /// Consume a turn event into the transcript and the counters.
+    ///
+    /// Gh #462: the event belongs to a *tab*, not to the interface. When the
+    /// reader has switched away from the tab that owns the running turn, the
+    /// event is applied to that tab's own state (`with_tab_state`) - so the
+    /// stream keeps landing where it started, and the visible tab stays
+    /// untouched. On the owning tab this is a plain call with no swap.
     pub fn on_turn_event(&mut self, event: TurnEvent) {
-        match event {
-            // Reconstruction events for headless/rpc; rendered elsewhere.
-            TurnEvent::TurnStarted | TurnEvent::MessageStarted { .. } => {}
-            TurnEvent::MessageEnded { .. } | TurnEvent::RetryFinished { .. } => {}
-            TurnEvent::CompactionStarted { .. } | TurnEvent::CompactionEnded { .. } => {}
-            TurnEvent::TextDelta(delta) => self.transcript.append_text(&delta),
-            TurnEvent::ReasoningDelta(delta) => self.transcript.append_reasoning(&delta),
-            TurnEvent::ToolStarted(call) => {
-                // gh #404 gap 1: the parent link rides along so an orphaned
-                // child (a parent card that is not on screen) still renders as a
-                // top-level card instead of vanishing.
-                self.transcript.start_tool_with_id(
-                    call.name,
-                    call.arguments,
-                    call.parent_call_id,
-                    Some(call.call_id),
-                );
-            }
-            TurnEvent::ToolFinished(result) => {
-                let status = match result.status {
-                    lca_protocol::ToolResultStatus::Ok => ToolStatus::Ok,
-                    lca_protocol::ToolResultStatus::Error => ToolStatus::Error,
-                    lca_protocol::ToolResultStatus::Denied => ToolStatus::Denied,
-                    lca_protocol::ToolResultStatus::Timeout => ToolStatus::Timeout,
-                };
-                // gh #9: the tool's structured diff rides into the card
-                // (`extras` is the carrier; display text is never
-                // re-parsed to recover a change).
-                // gh #404 gap 1: the nested calls ride into the parent's card as
-                // a checklist. `ToolResult.nested` is the only place they exist -
-                // a nested call is never its own record - so this is the one
-                // wiring point that closes the flood.
-                // gh #404 gap 1: the children arrive by two paths (the live
-                // start/finish pairs, and the bounded record on the parent's
-                // result). `finish_tool_with_id` keeps whichever came first.
-                let children: Vec<crate::transcript::ChildCall> = result
-                    .nested
-                    .iter()
-                    .map(|nested| crate::transcript::ChildCall {
-                        name: nested.name.clone(),
-                        status: nested.status.into(),
-                        head: nested.content_head.clone(),
-                    })
-                    .collect();
-                self.transcript.finish_tool_with_id(
-                    status,
-                    Some(result.content.clone()),
-                    result.extras.get("diff").cloned(),
-                    result.duration_ms,
-                    children,
-                    Some(result.call_id.clone()),
-                );
-                // R5: a tool that read an image shows it through the ladder.
-                for image in &result.images {
-                    let info =
-                        lca_tui::widgets::image::ImageInfo::new(&image.media_type, &image.bytes);
-                    self.transcript.push_image(info, image.bytes.clone());
-                }
-            }
-            TurnEvent::ToolOutputChunk { chunk, .. } => {
-                self.transcript.append_tool_output(&chunk);
-            }
-            TurnEvent::Usage(usage) => {
-                // FR-UI-20: the live prompt size is this call's input side.
-                self.footer.context_used = usage.input + usage.cache_read + usage.cache_write;
-                // The turn's own output side, for the tok/s reading at its end.
-                // Gh #464: the meter takes the whole record and uses only the
-                // calls that stamped a generation span, so an unstamped call's
-                // tokens can never pad the numerator.
-                self.meter.note_usage(&usage);
-                // gh #327: this is display state only. The session total is
-                // folded once at the turn boundary; growing it here would
-                // count the turn twice (the stream, then `reap`) and would
-                // also double-count a provider that refines its totals
-                // across events (gh #276). The turn-local view absorbs each
-                // report instead, which is the correct merge.
-                self.turn_usage.absorb(&usage);
-            }
-            TurnEvent::RetryScheduled {
-                attempt,
-                max,
-                error,
-                delay_ms,
-                ..
-            } => {
-                // The separator counts the backoff down (chrome.md's
-                // `RetryStatusIndicator`); the error text stays a notice.
-                self.separator.retrying(attempt, max, delay_ms);
-                self.say(format!("retry {attempt}/{max} after: {error}"));
-            }
-            TurnEvent::Error { message, .. } => {
-                self.transcript.push_error(message);
-            }
-            TurnEvent::AssistantText(_) => {}
-            TurnEvent::UserInjected { text, mode } => {
-                // A steered message crossed the boundary: it leaves the
-                // pending band and joins the transcript (ADR-0038).
-                if let Some(pos) = self.pending.iter().position(|p| p.text == text) {
-                    self.pending.remove(pos);
-                }
-                let _ = mode;
-                self.transcript.push_user(text);
-            }
-            TurnEvent::ExtensionEvent {
-                extension,
-                event,
-                detail,
-            } => {
-                // Host diagnostics (cache divergence, sync notes)
-                // float and fade; they are not conversation.
-                self.toast(format!("[{extension}] {event}: {detail}"));
-            }
-            TurnEvent::TurnEnded {
-                status,
-                stop_reason,
-            } => {
-                // The footer's throughput reading (owner ask): output tokens
-                // over the generation span core stamped where the stream was
-                // consumed, summed over the turn's calls (gh #464).
-                self.meter.finish_turn(&mut self.footer);
-                self.transcript.finish_assistant();
-                self.turn_running = false;
-                // gh #209: a turn can land the session's first
-                // message, which is what tab titles resolve from.
-                self.refresh_active_tab_title();
-                // pi clears the indicator on stop; the transcript's error
-                // line and the footer's status carry a stop that was not
-                // clean (chrome.md has no error kind).
-                self.separator.idle();
-                self.turn_status = Some(TurnStatusLine {
-                    text: match (status, stop_reason) {
-                        (TurnStatus::Ok, StopReason::Stop) => "done".to_string(),
-                        (TurnStatus::Ok, StopReason::Cancelled) => "cancelled".to_string(),
-                        (TurnStatus::Error, StopReason::IterationLimit) => {
-                            "stopped: iteration limit".to_string()
-                        }
-                        (TurnStatus::Error, _) => "done with errors".to_string(),
-                        (TurnStatus::Ok, _) => "done".to_string(),
-                    },
-                });
-            }
+        let ends_turn = matches!(event, TurnEvent::TurnEnded { .. });
+        let owner = self.turn_tab.unwrap_or(self.active_tab);
+        // The tab flags are interface-wide facts about a tab, so they are set
+        // outside the swap (they live on the tab itself, not on `Chat`).
+        if ends_turn && let Some(tab) = self.tabs.get_mut(owner) {
+            tab.running = false;
+            // Unread only when the settle happened off-screen: a turn the
+            // reader is watching needs no reminder.
+            tab.unread = owner != self.active_tab;
         }
+        self.with_tab_state(owner, |chat| chat.apply_turn_event(event, owner));
     }
 
     /// Mark a turn as started, with the queue it drains at each boundary.
     pub fn begin_turn(&mut self, steer: lca_protocol::SteerQueue) {
         self.turn_running = true;
+        // Gh #462: the turn belongs to the tab that submitted it, for the rest
+        // of its life. This single line is what every later event is routed
+        // by, and what `Ctrl+C` consults.
+        self.turn_tab = Some(self.active_tab);
+        if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+            tab.running = true;
+            tab.unread = false;
+        }
         self.separator.working();
         self.current_steer = Some(steer);
         self.turn_status = Some(TurnStatusLine {
@@ -777,7 +679,12 @@ impl Chat {
         // picker owns the keyboard - the owner's own words in the row
         // that guards this ("not even ctrl-c is able to close it"). The
         // modal dispatch above keeps its own keys: this is pickers only.
-        if self.turn_running && self.keybindings.matches(data, "app.clear") {
+        //
+        // Gh #462: only a turn the reader can see is cancellable here. A
+        // background tab's turn is not - silently killing work nobody is
+        // looking at is how a `cargo test` gets thrown away. Switch to that
+        // tab and cancel there.
+        if self.cancellable_turn_visible() && self.keybindings.matches(data, "app.clear") {
             return Action::CancelTurn;
         }
 
@@ -1010,7 +917,7 @@ impl Chat {
             return Action::Continue;
         }
         if self.keybindings.matches(data, "app.clear") {
-            return if self.turn_running {
+            return if self.cancellable_turn_visible() {
                 Action::CancelTurn
             } else if !self.editor.text().is_empty() {
                 // gh #225: the hint promises `clear/exit` - text
@@ -1042,7 +949,7 @@ impl Chat {
             return self.double_escape();
         }
         if self.keybindings.matches(data, "app.interrupt") {
-            return if self.turn_running {
+            return if self.cancellable_turn_visible() {
                 Action::CancelTurn
             } else {
                 self.world.ctrl_c_armed = false;

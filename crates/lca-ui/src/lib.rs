@@ -32,6 +32,7 @@ mod chat_search;
 mod chat_shell;
 mod chat_tabs;
 mod chat_tree;
+mod chat_turn_events;
 mod command_help_table;
 pub mod dialogs;
 pub mod ext_widgets;

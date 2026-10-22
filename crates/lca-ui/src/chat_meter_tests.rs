@@ -16,7 +16,7 @@
 use super::tests::chat;
 use super::tests::strip;
 use super::*;
-use lca_protocol::{ToolCall, ToolResult};
+use lca_protocol::{StopReason, ToolCall, ToolResult, TurnStatus};
 
 // Verifies: the owner's "can we add tok/s to the footer?" ask, under gh
 // #464's measurement rule - a finished turn reports output tokens over the
