@@ -325,7 +325,11 @@ fn manifest_parses_identity_fields() {
             "provider".to_string(),
             "compaction".to_string(),
             "context-transform".to_string(),
-            "ui".to_string()
+            "ui".to_string(),
+            // Gh #363: the fixture exercises every world, so the list grows
+            // with each one. Asserted as a list rather than a count so a
+            // dropped world cannot hide behind an added one.
+            "serve-http".to_string()
         ]
     );
     assert!(

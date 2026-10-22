@@ -130,3 +130,32 @@ fn the_env_consent_line_names_every_key() {
         "an empty declaration grants nothing and says so: {lines:?}"
     );
 }
+
+/// Gh #363 / ADR-0049: the `serve-http` consent line must state the reach
+/// honestly.
+///
+/// "On this machine" is not "private to LCA": any program on the machine can
+/// connect to a loopback port, and a web page the user has open can POST to it.
+/// A line that implied otherwise would be a consent screen that understates what
+/// is being approved, which is worse than no line at all - the whole capability
+/// model depends on people reading these.
+#[test]
+fn the_serve_http_consent_line_names_the_reach_and_leads_with_the_reason() {
+    let manifest = "name = \"p\"\nversion = \"1.0.0\"\nabi = \"0.6\"\nworlds = [\"serve-http\"]\ndescription = \"x\"\n\n[capabilities.serve-http]\nreason = \"Serves the browser mirror of this session.\"\n";
+    let lines = lca_registry::consent_lines(manifest).expect("a consent line exists");
+    let line = lines
+        .iter()
+        .find(|line| line.contains("web interface"))
+        .unwrap_or_else(|| panic!("the serve-http capability has a line: {lines:?}"));
+    // The reason leads, so the user reads what it is FOR before what it reaches.
+    assert!(
+        line.starts_with("Serves the browser mirror of this session."),
+        "the reason must lead the line: {line}"
+    );
+    // The reach, in words a user can evaluate: not "local" but "on this
+    // machine, reachable by any program on it".
+    assert!(
+        line.contains("on this machine") && line.contains("any program"),
+        "the line must not imply the port is private to LCA: {line}"
+    );
+}

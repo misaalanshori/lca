@@ -50,7 +50,8 @@
           "hooks-settle",
           "hooks-compaction",
           "hooks-cache",
-          "hooks-trust"
+          "hooks-trust",
+          "serve-http"
         ]
       },
       "minItems": 1,
@@ -112,6 +113,9 @@
         },
         "env": {
           "$ref": "#/$defs/envCapability"
+        },
+        "serve-http": {
+          "$ref": "#/$defs/serveHttpCapability"
         }
       }
     },
@@ -384,6 +388,33 @@
         "reason"
       ],
       "additionalProperties": false
+    },
+    "serveHttpCapability": {
+      "type": "object",
+      "description": "The right to answer HTTP requests that arrive on the host's own loopback listener. The extension never binds a socket, holds no port, and never sees a connection: the host owns the listener, requires a per-process token, checks that the `Host` header names itself (which is what refuses a DNS-rebinding attempt), and only then calls the extension's handler with a request whose path has had `/<session-id>/<extension-name>` stripped from it. Loopback only - there is no address field, because a capability that could be told to bind a routable address is a different capability with a different consent.",
+      "required": [
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "type": "string",
+          "description": "Shown verbatim at install time, leading the consent line. A bare capability name gives the user nothing to evaluate.",
+          "minLength": 10,
+          "maxLength": 200
+        },
+        "path_prefix": {
+          "type": "string",
+          "description": "The path prefix this extension answers for, relative to its own namespace. Defaults to `/`, which is the whole namespace; a prefix may not contain `..`, because it is a mount point rather than a path.",
+          "pattern": "^/[^.]*$",
+          "default": "/"
+        },
+        "websocket": {
+          "type": "boolean",
+          "description": "Whether the extension asked to receive WebSocket upgrades. Declaring it is honest about intent even though this ABI line refuses upgrades cleanly rather than bridging them (ADR-0049 names the deferral); a later phase turns the declaration on without changing this key's meaning.",
+          "default": false
+        }
+      }
     }
   },
   "allOf": [

@@ -30,6 +30,8 @@ use std::sync::{Arc, Mutex};
 
 use lca_protocol::CapabilityError;
 
+use super::Capabilities;
+
 /// The port the listener tries first (the issue's default).
 pub const DEFAULT_PORT: u16 = 8080;
 
@@ -754,4 +756,32 @@ pub fn host_matches_for_test(host: &str, authority: &str) -> bool {
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+impl Capabilities {
+    /// Record a `serve-http` refusal (gh #363). The listener owns the socket
+    /// and the gate; this is how a refusal or a failed handler reaches the
+    /// extension's own denial journal, which is what `ext info` counts.
+    pub fn note_serve_http(&self, parameter: &str, reason: &str) {
+        self.record("serve-http", parameter, reason);
+    }
+
+    /// Whether this extension declared `serve-http` at all (gh #363). The
+    /// listener mounts a namespace only when this is true, so an ungranted
+    /// extension has no route to be reached on rather than a route that
+    /// refuses.
+    pub fn serves_http(&self) -> bool {
+        self.grants.serve_http.is_some()
+    }
+
+    /// [`Capabilities::refused`] for callers outside this module (the host's
+    /// `serve-http` mount records through the engine, not around it).
+    pub fn refused_for(
+        &self,
+        capability: &str,
+        parameter: &str,
+        err: CapabilityError,
+    ) -> CapabilityError {
+        self.refused(capability, parameter, err)
+    }
 }

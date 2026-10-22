@@ -23,6 +23,23 @@ use std::sync::{Arc, Mutex};
 use lca_protocol::http::ServeHttpNamespace;
 use lca_tools::serve_http::{self, Listener, SessionToken};
 
+/// Collect the mounts from a registry's handles and start the session's
+/// listener (gh #363, ADR-0049).
+///
+/// Lives here rather than inline in `tui/mod.rs` because that file is at the
+/// 1,200-line ceiling and because this is the whole lifecycle in one place: the
+/// caller gets a started-or-degraded listener plus the notice to show, and
+/// nothing else has to know how the two are related.
+#[must_use]
+pub fn start_for_session(registry: &lca_core::ExtensionRegistry, session: &str) -> SessionHttp {
+    let mounts: Vec<std::sync::Arc<dyn lca_protocol::http::ServeHttpNamespace>> = registry
+        .handles()
+        .iter()
+        .filter_map(|handle| handle.serve_http_mount(session))
+        .collect();
+    SessionHttp::start(mounts)
+}
+
 /// Why the listener is not running, when it is not.
 ///
 /// Both variants are *degradations*: the session runs either way, and the

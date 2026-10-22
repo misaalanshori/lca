@@ -136,11 +136,9 @@ pub(crate) struct Ui {
     /// #130) can swap in a fresh discovery while turns hold their own
     /// clone - a swap never disturbs a running turn.
     registry: Mutex<Arc<ExtensionRegistry>>,
-    /// The session's inbound HTTP listener (gh #363, ADR-0049). One per
-    /// process, shared by every extension that declared `serve-http`. Behind a
-    /// lock because `Ui` is shared through an `Arc` and the listener needs
-    /// `&mut` to stop; `Drop` also stops it, so an exiting session leaves no
-    /// bound port either way.
+    /// The session's inbound HTTP listener (gh #363, ADR-0049), behind a lock
+    /// because `Ui` is shared via `Arc` and stopping needs `&mut`. `Drop` also
+    /// stops it, so an exiting session leaves no bound port.
     session_http: Mutex<crate::session_http::SessionHttp>,
     /// The terminal taken before this load, with what was typed into it
     /// (gh #400). Behind a lock because `options` takes `&Arc<Self>` and the
@@ -742,19 +740,11 @@ impl Ui {
             initial_head.push(warning);
         }
 
-        // Gh #363 / ADR-0049: start the session's inbound HTTP listener.
-        //
-        // Mounts come from the handles that declared `serve-http`, so an
-        // extension without the grant has no route rather than a route that
-        // refuses. A listener that cannot start degrades: the notice says why
-        // and the session continues, because a web UI is a convenience and a
-        // port collision must not cost the user their agent.
-        let mounts: Vec<Arc<dyn lca_protocol::http::ServeHttpNamespace>> = registry
-            .handles()
-            .iter()
-            .filter_map(|handle| handle.serve_http_mount(&session_id))
-            .collect();
-        let session_http = crate::session_http::SessionHttp::start(mounts);
+        // Gh #363 / ADR-0049: start the inbound HTTP listener. It mounts only
+        // the handles that declared `serve-http`, so an ungranted extension has
+        // no route rather than a route that refuses; and a listener that cannot
+        // start degrades to a notice instead of costing the user their agent.
+        let session_http = crate::session_http::start_for_session(&registry, &session_id);
         // The notice names the URL and the port actually bound, never the
         // default: a user told 8080 while the listener is on 8083 has been told
         // something false. It is also the only place the token is rendered.
