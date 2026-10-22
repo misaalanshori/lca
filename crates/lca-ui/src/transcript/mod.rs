@@ -91,6 +91,18 @@ pub enum Entry {
         /// The editor's `!!` run (gh #391 gap 3): output withheld from the
         /// model's context. Draws quiet where `!` draws in `bashMode`.
         excluded: bool,
+        /// The calls this one nested (gh #404 gap 1). Rendered as a checklist
+        /// **inside** this card, never as sibling cards: a tool that greps
+        /// twenty times is one card with twenty rows, not twenty-one cards.
+        ///
+        /// The data arrives on `ToolResult.nested` (gh #77), which the turn
+        /// fills where the child finishes - nested calls never become their own
+        /// records, so this is the only place they exist.
+        children: Vec<ChildCall>,
+        /// The parent link the call itself carried, kept so an **orphan** - a
+        /// child whose parent card is absent - is still drawn as a top-level
+        /// card rather than silently dropped (gh #404's fallback).
+        parent_link: Option<String>,
     },
     /// A transient notice (command output, info).
     Notice(String),
@@ -510,6 +522,8 @@ impl Transcript {
             // gh #391 gap 2: a live card times itself from here.
             started_at: Some(std::time::Instant::now()),
             excluded: false,
+            children: Vec::new(),
+            parent_link: None,
         });
     }
 
@@ -538,7 +552,88 @@ impl Transcript {
             duration_ms: None,
             started_at: Some(std::time::Instant::now()),
             excluded,
+            children: Vec::new(),
+            parent_link: None,
         });
+    }
+
+    /// Record a tool call that carries a parent link (gh #404 gap 1).
+    ///
+    /// The link is kept so an **orphan** - a child whose parent card is absent -
+    /// is still drawn as a top-level card. Dropping it would make a broken
+    /// linkage silently hide a call, which is worse than the flood this cycle
+    /// fixes.
+    pub fn start_tool_with_parent(
+        &mut self,
+        name: impl Into<String>,
+        args: impl Into<String>,
+        parent_link: Option<String>,
+    ) {
+        self.entries.push(Entry::Tool {
+            name: name.into(),
+            args: args.into(),
+            status: ToolStatus::Running,
+            result: None,
+            diff: None,
+            manual: false,
+            expanded: None,
+            duration_ms: None,
+            started_at: Some(std::time::Instant::now()),
+            excluded: false,
+            children: Vec::new(),
+            parent_link,
+        });
+    }
+
+    /// Attach children to the most recent running card (gh #404 gap 1).
+    ///
+    /// Used by the live path while a parent is still running - its children land
+    /// one at a time as each nested call finishes.
+    pub fn push_children(&mut self, children: Vec<ChildCall>) {
+        self.invalidate_last();
+        for entry in self.entries.iter_mut().rev() {
+            if let Entry::Tool { children: slot, .. } = entry {
+                slot.extend(children);
+                return;
+            }
+        }
+    }
+
+    /// Finish the most recent running tool call, carrying the nested calls it
+    /// made (gh #404 gap 1).
+    ///
+    /// A separate method rather than a wider `finish_tool_full`: the nested set
+    /// is only ever attached from the one place that has it (`ToolResult.nested`
+    /// on the turn event), and a caller that has no children should not have to
+    /// pass `Vec::new()`.
+    pub fn finish_tool_with_children(
+        &mut self,
+        status: ToolStatus,
+        result: Option<String>,
+        diff: Option<String>,
+        duration_ms: Option<u64>,
+        children: Vec<ChildCall>,
+    ) {
+        self.invalidate_cache();
+        for entry in self.entries.iter_mut().rev() {
+            if let Entry::Tool {
+                status: s,
+                result: r,
+                diff: d,
+                duration_ms: ms,
+                children: kids,
+                ..
+            } = entry
+                && *s == ToolStatus::Running
+            {
+                *s = status;
+                *r = result;
+                *d = diff;
+                *ms = duration_ms;
+                kids.extend(children);
+                return;
+            }
+        }
     }
 
     /// Finish the most recent running tool call.
@@ -754,6 +849,11 @@ impl Transcript {
                         self.finish_assistant();
                     }
                 }
+                // A nested call is never its own record (gh #77): the turn
+                // files it under the parent's result, so a replay only ever
+                // sees top-level calls here. No parent link to consult, and
+                // none needed - the checklist arrives on `ToolResult.nested`
+                // below.
                 Record::ToolCall {
                     name, arguments, ..
                 } => self.start_tool(name.clone(), arguments.clone()),
@@ -761,6 +861,7 @@ impl Transcript {
                     status,
                     content,
                     duration_ms,
+                    nested,
                     ..
                 } => {
                     let status = match status {
@@ -769,9 +870,28 @@ impl Transcript {
                         lca_protocol::ToolResultStatus::Denied => ToolStatus::Denied,
                         lca_protocol::ToolResultStatus::Timeout => ToolStatus::Timeout,
                     };
-                    // Gh #214: replays show the recorded duration;
-                    // old lines without one show no timing line.
-                    self.finish_tool_full(status, content.clone(), None, *duration_ms);
+                    // Gh #214: replays show the recorded duration; old lines
+                    // without one show no timing line.
+                    //
+                    // Gh #404 gap 1: the bounded nested record rides along, so a
+                    // resumed session shows the same checklist the live one did.
+                    // It is the *persisted* shape (a head, no id), which is all a
+                    // checklist needs.
+                    let children: Vec<ChildCall> = nested
+                        .iter()
+                        .map(|entry| ChildCall {
+                            name: entry.name.clone(),
+                            status: entry.status.into(),
+                            head: entry.content_head.clone(),
+                        })
+                        .collect();
+                    self.finish_tool_with_children(
+                        status,
+                        content.clone(),
+                        None,
+                        *duration_ms,
+                        children,
+                    );
                 }
                 Record::Compaction {
                     summary, strategy, ..
@@ -814,6 +934,8 @@ impl Transcript {
             duration_ms: None,
             started_at: Some(std::time::Instant::now()),
             excluded: false,
+            children: Vec::new(),
+            parent_link: None,
         });
     }
 
@@ -851,6 +973,8 @@ impl Transcript {
             duration_ms: Some(duration_ms),
             started_at: None,
             excluded: false,
+            children: Vec::new(),
+            parent_link: None,
         });
     }
 
@@ -1020,6 +1144,8 @@ pub fn image_label(media_type: &str, bytes: &[u8]) -> String {
     format!("[image {media_type}, {dimensions}, {} bytes]", bytes.len())
 }
 
+mod nested;
+pub use nested::{COLLAPSED_CHILDREN, ChildCall, ChildStatus};
 mod preview;
 mod render;
 use render::*;
@@ -1028,6 +1154,9 @@ use render::*;
 #[cfg(test)]
 pub(crate) use render::render_key_hint;
 
+#[cfg(test)]
+#[path = "nested_tests.rs"]
+mod nested_tests;
 #[cfg(test)]
 #[path = "preview_tests.rs"]
 mod preview_tests;

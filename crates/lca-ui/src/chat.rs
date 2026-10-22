@@ -520,7 +520,14 @@ impl Chat {
                 // A tool run is not generation: the meter closes so its
                 // latency never lands in the tok/s reading.
                 self.meter.close();
-                self.transcript.start_tool(call.name, call.arguments);
+                // gh #404 gap 1: the parent link rides along so an orphaned
+                // child (a parent card that is not on screen) still renders as a
+                // top-level card instead of vanishing.
+                self.transcript.start_tool_with_parent(
+                    call.name,
+                    call.arguments,
+                    call.parent_call_id,
+                );
             }
             TurnEvent::ToolFinished(result) => {
                 let status = match result.status {
@@ -532,11 +539,25 @@ impl Chat {
                 // gh #9: the tool's structured diff rides into the card
                 // (`extras` is the carrier; display text is never
                 // re-parsed to recover a change).
-                self.transcript.finish_tool_full(
+                // gh #404 gap 1: the nested calls ride into the parent's card as
+                // a checklist. `ToolResult.nested` is the only place they exist -
+                // a nested call is never its own record - so this is the one
+                // wiring point that closes the flood.
+                let children: Vec<crate::transcript::ChildCall> = result
+                    .nested
+                    .iter()
+                    .map(|nested| crate::transcript::ChildCall {
+                        name: nested.name.clone(),
+                        status: nested.status.into(),
+                        head: nested.content_head.clone(),
+                    })
+                    .collect();
+                self.transcript.finish_tool_with_children(
                     status,
                     Some(result.content.clone()),
                     result.extras.get("diff").cloned(),
                     result.duration_ms,
+                    children,
                 );
                 // R5: a tool that read an image shows it through the ladder.
                 for image in &result.images {
