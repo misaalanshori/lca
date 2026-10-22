@@ -33,6 +33,11 @@ use lca_tui::engine::text::wrap_text_with_ansi;
 pub(super) fn preview_lines(name: &str) -> usize {
     match name {
         "bash" | "shell" => 5,
+        // gh #404 gap 1: a codemode script's own output is a *result*, like a
+        // shell's - the script ran and printed something. Before this it took
+        // the `_ => 0` arm, so a codemode card showed only its checklist and a
+        // `… to expand` hint, which read as "no result".
+        "codemode" => 5,
         "list" | "ls" => 20,
         "grep" => 15,
         _ => 0,
@@ -44,7 +49,9 @@ pub(super) fn preview_lines(name: &str) -> usize {
 /// Shells answer "did it pass?" at the bottom, so they keep the end. Every
 /// other previewed tool (`ls`, `grep`) reads top-down, so it keeps the start.
 pub(super) fn keeps_tail(name: &str) -> bool {
-    matches!(name, "bash" | "shell")
+    // A codemode script answers "what did it find?" at whatever line it printed
+    // last, the same as a shell.
+    matches!(name, "bash" | "shell" | "codemode")
 }
 
 /// What a collapsed preview shows, and where its omission marker goes.

@@ -859,3 +859,17 @@ mod inbound_http_capability;
 // and the scriptable verbs still answer with a notice rather than a widget.
 #[path = "418-mcp-manager-modal.rs"]
 mod mcp_manager_modal;
+// GitHub #404 gap 1: nested calls must not flood the transcript. A tool that
+// makes ten nested calls produced eleven cards: gh #77 delivered the linkage
+// (`ToolCall.parent_call_id`, `ToolResult.nested`) but nothing in the interface
+// read it, so a codemod script that greps twenty times buried its own result
+// under twenty cards.
+//
+// The rendering rows live beside the code (`transcript::nested_tests`). These
+// guard the part a single crate cannot see: that the interface *consumes* both
+// halves of the linkage at all (a perfect checklist fed by nothing is the state
+// the tree was in for the issue's whole life), that the collapsed bound exists
+// and keeps the tail (#391's rule reused, not re-derived), and that every child
+// state has a glyph as well as a colour (NFR-28).
+#[path = "404-nested-call-flood.rs"]
+mod nested_call_flood;
