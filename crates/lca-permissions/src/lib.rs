@@ -126,7 +126,8 @@ pub trait PermissionPrompt: Send {
     fn ask(&mut self, action: &Action) -> Decision;
     /// Ask about one action with tool hints attached (#78): the prompt
     /// may show them; the decision path never reads them (a hint is
-    /// not a bypass, ADR-0045). The default keeps old behavior.
+    /// not a bypass, ADR-0047, which superseded ADR-0045). The default
+    /// keeps old behavior for a prompt with no annotated surface.
     fn ask_annotated(
         &mut self,
         action: &Action,
@@ -190,7 +191,7 @@ impl PermissionPrompt for SharedPrompt {
     /// object every engine holds, so the default silently flattened every
     /// hinted action on its way to the real prompt. Forwarding keeps the
     /// hints a *display* concern - the decision still comes from the
-    /// installed prompt's own rules (a hint is not a bypass, ADR-0045).
+    /// installed prompt's own rules (a hint is not a bypass, ADR-0047).
     fn ask_annotated(
         &mut self,
         action: &Action,
