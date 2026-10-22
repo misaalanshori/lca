@@ -173,6 +173,87 @@ whole turn through a recording permission prompt.
 subcommand and misses `install`). It was out of scope for the gh #345
 batch and is noted for a follow-up rather than fixed speculatively.
 
+## Addendum (2026-10-23, gh #458)
+
+The line did not move this time; a **second spelling** of the same class was
+closed. gh #347 drew it at inline code and gh #365 extended it to program text
+carried positionally. Both are code in no file. gh #458 reached the same place
+through a *flag whose value is a program* — recorded in the gh #365 addendum
+above as reported-not-fixed, and worked here as a decision rather than a
+mechanical extension, because the four forms are different languages.
+
+### Measured first
+
+The enumeration ran each form through `workspace_scoped` in a trusted folder,
+then each was executed for real to confirm it runs a program. All auto-approved
+before this change:
+
+| form | invocation | what runs |
+|---|---|---|
+| editor `-c` | `vim -c ':!id' f` | `:!cmd`, and `:r !cmd`, `:g/x/!cmd`, `:python`, `:terminal` |
+| editor `+` | `vim '+!id' f` | the same, and it is **not** the "safe alternative" |
+| `ex -c` | `ex -c '!id' f` | the same, non-visual |
+| `ed` | `ed f.txt`, and `printf '!id\nq\n' \| ed -s f` | everything: its language is on stdin |
+| `tar` | `--to-command=id` | a command per extracted file, **through a shell** |
+| `tar` siblings | `-I`/`--use-compress-program`, `-F`/`--info-script`/`--new-volume-script`, `--rsh-command`, `--checkpoint-action=exec=` | a program, found by enumerating rather than taking the issue's one example |
+
+Two measurements decided the shape. `tar --to-command='id; echo PWNED'` runs
+**both**, so the value is not a program name but a shell string — inline code, and
+refused on #347's rule rather than as a new kind of rule.
+`--checkpoint-action=echo=hi` prints `hi` and runs nothing, so that flag is
+narrowed to `exec=` rather than refused wholesale.
+
+### The decision, per form
+
+- **`tar` — refused, and it is a set.** Five flags, not one. The value being
+  shell-interpreted makes this closer to `python3 -c` than to `timeout 5 curl`.
+  `-I` is also scanned character-wise, because it glues (`-Iid`), clusters
+  (`cIf gzip`), and classic tar accepts flag clusters with no leading dash.
+- **Editor `-c`/`--cmd`/`+cmd` — refused wholesale.** This is option **B** in the
+  brief, and the cost is stated: scripted `vim -c` reviews. The reason it is not
+  option A is that the argument is a command language, not a flag: `:!`, `:r !`,
+  `:g//!`, `:python`, `:lua`, `:terminal`. Enumerating which ex commands shell out
+  is not a set an auditor can check — it is a parser, and a partially-parsed `-c`
+  that lets `:g/x/!id` through is worse than a prompt on `:wq`. gh #365's own
+  rejection of a "does this parse as a program?" heuristic applies unchanged.
+- **`ed` — refused, structurally.** Not a weighing of costs: `ed`'s entire
+  command language arrives on stdin, so there is no argument to inspect and no
+  configuration in which the analyzer could prove what runs. An interactive `ed`
+  in an agent's non-interactive `run` call cannot be typed at, so the only useful
+  `ed` is a piped script — exactly what must review. This is option **C**'s
+  reasoning applied where it actually holds.
+
+**`+cmd` was going to be the recommended alternative, and the measurement killed
+it.** `vim '+!id' f` prints uid, so recommending `+wq` would have moved the hole
+into the advice. The reviewable form named instead is `-S`, a script file in the
+folder, which the trust model already accepts as the folder's own code.
+
+### The false-positive cost, honestly
+
+Zero for the ordinary case, and this is the measurement that mattered: `vim
+file.txt`, `vim` alone, `vim -R`, `vim -S script.vim`, `ex file.txt`, `tar xf
+a.tar`, `tar czf b.tgz dir`, `tar tvf a.tar`, `tar xf a.tar -C out`, and `tar
+--exclude=` all still auto-approve. The cost falls only on **scripted** editor
+use — `vim -c 'set nu'`, `vim -c ':wq'` — and on `ed` entirely, which an agent
+had no way to drive usefully anyway. Interactive editing is untouched: the
+`$EDITOR` handoff (FR-UI-15) is a host-side path that never reaches this analyzer.
+
+### Residual, named rather than implied
+
+An editor driven entirely by a **piped script** (`printf ':!id\n:q\n' | vim -es
+-`) still auto-approves: the analyzer sees `printf` and a `vim` with no command
+argument. Closing it would mean refusing `vim` in a pipeline, which refuses
+ordinary `git diff | vim -`. Recorded in `docs/threat-model.md` as a named
+residual rather than bought with a rule that costs more than it gains.
+
+Not an ABI change. The refusal copy is exposed as
+`lca_permissions::shell::reviewable_alternative`, with a row asserting the
+suggested form is not itself refused. Guards: the analyzer's own matrices
+(`program_valued_flag_tests`, `reviewable_alternative_tests`), the wiring row
+`rules.rs::program_valued_flags_review_in_a_trusted_folder` (which goes through
+the real `GrantStore` and is the only one that fails if the call is removed), and
+`tests/regressions/458-*.rs`.
+
 ## Revisit conditions
 
 - A real command the analyzer refuses that a user reasonably expects to be

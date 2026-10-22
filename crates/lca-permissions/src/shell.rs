@@ -19,8 +19,17 @@ mod grammar;
 
 use grammar::{
     denied_program_behind_indirection, multi_call_applet, positional_program_text,
-    sed_script_executes,
+    program_valued_flag, sed_script_executes,
 };
+
+/// The reviewable form of an invocation refused for carrying a program in a
+/// flag's value (gh #458), or `None` when it is not one of those refusals.
+///
+/// Re-exported here so it is reachable as `lca_permissions::shell::…` - the
+/// refusal copy lives in the interface crates, and ADR-0039's rule is that the
+/// copy tells the user what to DO. A row asserts the advice is not itself a
+/// bypass.
+pub use grammar::reviewable_alternative;
 
 /// Executable extensions stripped from a program name before matching
 /// (gh #347 fix-up). Windows spellings carry one; a file genuinely named
@@ -232,6 +241,12 @@ fn segment_ok(segment: &str, cwd: &Path, workspace: &Path) -> bool {
         return false;
     }
     if name == "sed" && sed_script_executes(&toks[i + 1..]) {
+        return false;
+    }
+    // GH #458: a flag whose *value* is a program (or a shell string) is the
+    // gh #347 class reached another way - `vim -c ':!id'`, `tar
+    // --to-command=id`, and four sibling tar flags the enumeration found.
+    if program_valued_flag(&name, &toks[i + 1..]) {
         return false;
     }
     if name == "git" {
