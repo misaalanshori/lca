@@ -7,6 +7,24 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **`@` completion reaches the file a query names, even beside a wide directory**
+  (gh #502). The fuzzy walk capped itself on `out.len() > 200` - the number of
+  **matches** found - so a wide shallow directory at the root spent the whole
+  budget on scattered-letter hits and the walk never descended to the nested file.
+  The issue's repro is exact: a tree of `src/main.rs`, `README.md` and a populated
+  `~/.lca/private/` answered `@mai` with `mcp`/`openai-compatible`/
+  `compaction-default` and never `main.rs`, while bare `@` *did* list it - so the
+  matcher was right and the walk order was wrong. The budget now bounds **work**
+  (2,000 visited entries, 256 directories, and at most 200 from any one directory)
+  rather than discovery, which is what the fix needed to be: the cap limits what
+  the walker looks at, not which candidates it is allowed to find. The walk is also
+  **breadth-first with each level sorted**, so a nested file competes with its
+  siblings instead of with everything the filesystem listed first. That second half
+  matters as much as the first: the old walk was depth-first in `read_dir` order,
+  which made the bug intermittent across machines, and the sorted queue is what
+  turns it into a reproducible result. The scorer is untouched - reaching the
+  candidate was the fix, and re-tuning ranking at the same time would have made the
+  result unattributable.
 - **`!vim`, `!git add -p` and `!… | less` no longer hang** (gh #407). Every `!`/`!!`
   command went through `spawn_direct`, which pipes all three stdio for a worker
   thread to drain - so a fullscreen program either refused outright (`vim: output
