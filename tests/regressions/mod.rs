@@ -1007,3 +1007,15 @@ mod clipboard_through_the_linked_backend;
 // pins replay so the working half cannot be traded away.
 #[path = "496-live-compaction-marker.rs"]
 mod live_compaction_marker;
+
+// GitHub #409's first slice: a plan-mode badge over the regions that already
+// exist. The issue is three features (badge, live todo widget, parallel subagent
+// fleet capsules) with an `abi-0.7-breakage` label for a possible dedicated dock
+// region; this takes the badge alone, driven by an extension through the
+// existing `ui` world, because that is the smallest thing that proves the
+// pattern. The guard here is the repo-level half - no ABI change, no new widget
+// kind - because a behaviour row cannot see a region being added to make a badge
+// nicer. The render rows live in `extensions/ui-example/tests/plan_badge.rs`,
+// where the extension is first-class.
+#[path = "409-plan-mode-badge.rs"]
+mod plan_mode_badge;

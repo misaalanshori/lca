@@ -329,6 +329,25 @@ Dates are UTC.
   the tab bar finally shows the `◌` and `•` markers #209 asked for.
 
 ### Added
+- **The reference `ui` extension carries a plan-mode badge**, the first slice of
+  gh #409 and the proof that the extension-held-HUD pattern works over the regions
+  that already exist (gh #409). `ui-example` now holds plan mode as its own state
+  and renders `plan 2/5` as a single segment in `status-line`; `p` in the panel
+  toggles it. **No ABI change** — no new region, no new widget kind, no WIT edit —
+  which is the point of taking the badge first: the todo widget and the subagent
+  fleet capsules can now follow the same route, and the dedicated dock region the
+  issue labels `abi-0.7-breakage` stays undecided. Two details the slice
+  established. The host **pulls** `render(region)` once per frame, so a badge
+  needs no push at all and `ui-example` calls `request-redraw()` nowhere — a
+  notification per update is the per-frame-redraw bug (#389) waiting to happen.
+  And `footer`/`status-line` are **display-only** by contract (their rows pack
+  native and other extensions' statuses, so a cell cannot name one owner), which
+  means a badge cannot own a key: the toggle lives in the `panel`, the region the
+  extension already receives input in, and the badge renders that state. The
+  visible cue is in the words rather than the role colour, so a plain theme still
+  reads `plan` (NFR-28). Verified in a real pane: `plan | ui-example ok` appears
+  when toggled on, disappears when toggled off, and renders unchanged under
+  `LCA_THEME=plain`.
 - **`/persona` sets a model, thinking level, tool loadout, and instructions in one
   command** (gh #412). A persona is a named bundle under `[personas.<name>]` in the
   config, so gear-shifting from "planning with read-only tools at high reasoning" to
