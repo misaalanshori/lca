@@ -28,6 +28,20 @@ The agent's own data lives under **`~/.lca`** (R7), like every other platform. T
 
 The loopback listener binds `127.0.0.1` for the same reason as Linux. Process group cancellation uses the same `setsid`-equivalent approach as Linux, since macOS shares the POSIX process model there.
 
+**Screenshot paths resolve by shape, not by one template** (gh #405). macOS has named screenshot files at least four ways, and a user pastes whichever one Finder shows them:
+
+| shape | notes |
+|---|---|
+| `Screen Shot 2024-01-01 at 10.00.00.png` | classic: a space in the stem, ` at ` before the time |
+| `Screenshot 2024-01-01 at 10.00.00.png` | newer macOS drops the space |
+| `Screenshot 2024-01-01 10.00.00.png` | and sometimes the ` at ` too |
+| `Screen Recording …` / `ScreenRecording …` | same four shapes with a `.mov` extension |
+| `Capture d'écran …` | the French stem, accents in NFC or NFD |
+
+The folder is localised while the *display* name is not: `~/Desktop` is on disk `Bureau`, `Schreibtisch`, or `Escritorio`. All spellings are searched, and `~/Pictures` is a **fallback** after every Desktop spelling — so turning the fallback on never changes which of two real files a user gets. A path whose name matches no screenshot shape is never reinterpreted (an existing file resolves to itself; a missing one stays not-found rather than becoming a guess). A miss reports every location tried rather than suggesting a file that is not there.
+
+These rows are unit tests over a scratch home (`crates/lca-tools/src/paths/screenshot_tests.rs`); the resolver is driven directly rather than through a real macOS Desktop, so what is proven is the variant set and the precedence, not that a specific macOS release writes one of these names.
+
 ## Windows
 
 Release targets are `x86_64-pc-windows-msvc` and `aarch64-pc-windows-msvc`, the MSVC ABI rather than the GNU one, since MSVC is the target the platform's own toolchain and most native dependencies assume, and is what `cargo-xwin` is built to cross-compile against from the release pipeline's Linux runners per the release policy.

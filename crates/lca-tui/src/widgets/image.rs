@@ -201,21 +201,29 @@ pub enum ImageProtocol {
 /// screen are always `None`: pi's ladder calls images "unreliable under
 /// tmux", and a wrong guess is invisible data loss.
 pub fn detect_image_protocol() -> ImageProtocol {
-    let term = std::env::var("TERM").unwrap_or_default();
-    if std::env::var_os("TMUX").is_some()
-        || std::env::var_os("STY").is_some()
+    detect_image_protocol_with(|key| std::env::var(key).ok())
+}
+
+/// [`detect_image_protocol`] with an injected environment, so the
+/// multiplexer-unsafety rule can be pinned without mutating the test process's
+/// env (gh #405: this behaviour is **at parity with pi** and gets a guard, not a
+/// re-file).
+pub fn detect_image_protocol_with(env: impl Fn(&str) -> Option<String>) -> ImageProtocol {
+    let term = env("TERM").unwrap_or_default();
+    if env("TMUX").is_some()
+        || env("STY").is_some()
         || term.starts_with("tmux")
         || term.starts_with("screen")
     {
         return ImageProtocol::None;
     }
-    if std::env::var_os("KITTY_WINDOW_ID").is_some()
-        || std::env::var_os("GHOSTTY_RESOURCES_DIR").is_some()
-        || std::env::var_os("WEZTERM_PANE").is_some()
+    if env("KITTY_WINDOW_ID").is_some()
+        || env("GHOSTTY_RESOURCES_DIR").is_some()
+        || env("WEZTERM_PANE").is_some()
     {
         return ImageProtocol::Kitty;
     }
-    if std::env::var_os("ITERM_SESSION_ID").is_some() {
+    if env("ITERM_SESSION_ID").is_some() {
         return ImageProtocol::Iterm2;
     }
     ImageProtocol::None

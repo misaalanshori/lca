@@ -7,6 +7,23 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **macOS screenshot paths resolve across the name and folder variants it has used**
+  (gh #405). `Screen Shot … at …`, `Screenshot … at …`, `Screenshot … …` (no `at`),
+  the `Screen Recording` forms, and the French `Capture d'écran` stem all resolve, in
+  either Unicode normalisation; a localised Desktop (`Bureau`, `Schreibtisch`,
+  `Escritorio`) is searched, and `~/Pictures` is a *fallback* after every Desktop
+  spelling so it never shadows a real Desktop file. A path matching no screenshot
+  shape is never reinterpreted, and a miss lists the locations tried instead of
+  suggesting a file that does not exist.
+
+- **A truncated escape sequence no longer reaches the terminal** (gh #405). The
+  renderer parses the whole accumulated string, so a chunk boundary slicing
+  `\x1b[38;5` / `;196m` or a multi-byte character was already safe — but an escape
+  that never completed (a truncated CSI at end of stream, a lone `ESC`, an
+  unterminated OSC) was emitted as literal characters, i.e. raw control bytes on the
+  user's screen. Such a tail is now dropped, bounded to a 4 KiB look-back. Complete
+  sequences, including OSC 8 links, still render untouched.
+
 - **A prompt-cache miss now names what caused it** (gh #402). With
   `cache.miss_notices` on, the notice used to say only "*N* tokens re-billed"; a user
   watching the footer's `CH%` fall had no way to learn that a skill had matched or

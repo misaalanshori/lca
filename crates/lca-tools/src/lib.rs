@@ -41,7 +41,9 @@ pub use capabilities::{
 };
 pub use open::{UrlLauncher, open_url, url_launchers, windows_url_launcher};
 pub use ops::{Entry, ExecOutcome, NativeOps, SKIP_DIRS, SessionEnv, Stat, ToolOps};
-pub use paths::{is_inside, resolve_target, sha256_hex};
+pub use paths::{
+    ScreenshotLookup, ScreenshotMiss, is_inside, resolve_target, screenshot_candidates, sha256_hex,
+};
 pub use process::{TreeChild, read_buffered, read_up_to, spawn_direct, write_all};
 pub use pty::PtyChild;
 pub use shell::{Kind as ShellKind, Os as ShellOs, Probe as ShellProbe, Shell, Transport};
@@ -587,13 +589,17 @@ impl ToolExecutor {
         let Some(path) = args.get("path").and_then(|v| v.as_str()) else {
             return ToolResult::error(call.call_id.clone(), "path is required");
         };
-        let target = resolve_target(&self.cwd, Path::new(path));
+        // gh #405 gap 1: resolve a macOS screenshot by shape, and only when nothing
+        // is at the literal path - an ordinary read is never second-guessed.
+        let (target, miss) =
+            crate::paths::screenshot_or_literal(resolve_target(&self.cwd, Path::new(path)));
         let bytes = match self.ops.read(&target) {
             Ok(bytes) => bytes,
             Err(err) => {
+                let hint = miss.as_ref().map(|m| format!("\n{m}")).unwrap_or_default();
                 return ToolResult::error(
                     call.call_id.clone(),
-                    format!("cannot read {path}: {err}"),
+                    format!("cannot read {path}: {err}{hint}"),
                 );
             }
         };
