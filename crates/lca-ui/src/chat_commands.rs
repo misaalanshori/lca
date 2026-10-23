@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use lca_tui::engine::keybindings::KeybindingsManager;
 use lca_tui::engine::keys;
+use lca_tui::widgets::autocomplete::trigger::TriggerChain;
 use lca_tui::widgets::autocomplete::{
     ArgumentCompletions, AutocompleteItem, CombinedAutocompleteProvider, SlashCommand,
 };
@@ -870,8 +871,31 @@ pub(crate) fn paste_text(data: &str) -> Option<String> {
     lca_tui::widgets::paste::bracketed_paste_content(data).map(lca_tui::widgets::paste::flatten)
 }
 
-/// Build the autocomplete chain: commands, arguments, and file paths.
-pub(crate) fn provider_for(options: &UiOptions) -> CombinedAutocompleteProvider {
+/// Build the autocomplete chain: the built-in provider (commands, arguments, paths)
+/// with the first-party `#`-issue trigger wrapped over it (gh #408).
+///
+/// The trigger is registered *outside* the built-in provider, so the inner provider
+/// keeps owning `/`, `@`, and paths by construction — a decorator cannot shadow a
+/// token it never sees first.
+pub(crate) fn provider_for(options: &UiOptions) -> TriggerChain {
+    let inner = Arc::new(inner_provider_for(options));
+    let mut chain = TriggerChain::new(inner, std::time::Duration::from_secs(3));
+    // Gh #408: the failure to register would be a programming error, not a user
+    // condition — `#` is a legal trigger by construction. Recording it as a notice
+    // would be noise, so the `Result` is consumed and the chain stays valid either
+    // way (an unregistered trigger simply delegates).
+    let _ = chain.register(
+        "#",
+        "issues",
+        Arc::new(crate::autocomplete_issues::IssueQuery::new(
+            options.workspace.clone(),
+        )),
+    );
+    chain
+}
+
+/// The built-in provider: command names, their arguments, and file paths.
+fn inner_provider_for(options: &UiOptions) -> CombinedAutocompleteProvider {
     let models = options.models.clone();
     let providers: Vec<String> = options
         .slash_commands
@@ -898,6 +922,8 @@ pub(crate) fn provider_for(options: &UiOptions) -> CombinedAutocompleteProvider 
                                 value: id.clone(),
                                 label: label.clone(),
                                 description: None,
+                                origin: None,
+                                dim: false,
                             })
                             .collect()
                     }))
@@ -912,6 +938,8 @@ pub(crate) fn provider_for(options: &UiOptions) -> CombinedAutocompleteProvider 
                                 value: p.clone(),
                                 label: p.clone(),
                                 description: None,
+                                origin: None,
+                                dim: false,
                             })
                             .collect()
                     }))
