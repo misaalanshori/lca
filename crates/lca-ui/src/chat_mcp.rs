@@ -30,9 +30,10 @@ use crate::state::{Action, McpServerDetail, McpServerRow};
 pub const STDERR_VIEW_ROWS: usize = 12;
 
 /// Which screen the modal is showing.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum McpScreen {
     /// The server list (§3.4 item 1).
+    #[default]
     List,
     /// One server's detail and actions (§3.4 item 2).
     Detail {
@@ -125,7 +126,7 @@ impl McpActionRow {
 }
 
 /// The open modal.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct McpManager {
     /// The screen being shown.
     pub screen: McpScreen,

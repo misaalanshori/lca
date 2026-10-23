@@ -636,7 +636,12 @@ impl Chat {
         // so a session that somehow opened both shows MCP (it is the one whose
         // actions can be destructive).
         if let Some(manager) = &self.mcp_manager {
-            let (title, body, hint) = crate::chat_mcp_render::mcp_overlay(manager);
+            // Gh #398 gap 1: the sign-in screen's URL is the second wrapped-URL
+            // trap over SSH, so it gets the same copy hint (and the same in-place
+            // confirmation) as the login wait.
+            let auth_hint = self.mcp_sign_in_url().map(|url| self.auth_url_hint(&url));
+            let (title, body, hint) =
+                crate::chat_mcp_render::mcp_overlay(manager, auth_hint.as_deref());
             self.picker_overlay(
                 viewport,
                 width,
@@ -795,6 +800,83 @@ impl Chat {
         }
     }
 
+    /// The waiting screen's body rows (R4, gh #398 gap 1).
+    ///
+    /// Plain when the step shows no sign-in URL. Otherwise a URL gets the
+    /// affordances that make it usable over SSH and in tmux, where the wrapped
+    /// rows cannot be mouse-selected cleanly and `OSC 8` click-through is
+    /// unavailable:
+    ///
+    /// - a hint naming the **live** copy binding (the registry, never a
+    ///   hardcoded `ctrl+x` - a rebind must change the hint);
+    /// - the short `Cmd/Ctrl+click to open` label **only** where the terminal
+    ///   forwards `OSC 8`, and then it *is* the link, so a reader clicks one
+    ///   word instead of dragging across three wrapped rows. Rendering that
+    ///   label on a terminal that cannot click would be a stale hint, which is
+    ///   the failure this project keeps closing.
+    ///
+    /// After a copy the hint row becomes the confirmation, in place, so the
+    /// reader who pressed the key sees it worked where they were looking.
+    fn login_body(&self, label: &str) -> Vec<String> {
+        let Some(url) = self.world.auth_url.as_deref() else {
+            return vec![label.to_string(), String::new(), "esc cancels".to_string()];
+        };
+        vec![
+            label.to_string(),
+            String::new(),
+            self.auth_url_hint(url),
+            "esc cancels".to_string(),
+        ]
+    }
+
+    /// The row under the sign-in URL: the copy confirmation when fresh, else
+    /// the hint (gh #398 gap 1).
+    pub(crate) fn auth_url_hint(&self, url: &str) -> String {
+        let fresh = self.world.url_copied_at.is_some_and(|at| {
+            at.elapsed() < std::time::Duration::from_secs(super::chat::TOAST_SECS)
+        });
+        if fresh {
+            return (self.theme.role(crate::theme::Role::Success))("Copied URL to clipboard");
+        }
+        // pi's `keyHint("app.message.copy", "to copy")`: the key comes from the
+        // registry so a rebind is reflected, and the whole hint is dim.
+        let copy_key = self.keybindings.display_keys("app.message.copy");
+        let mut parts: Vec<String> = Vec::new();
+        if self.hyperlinks {
+            // pi's `auth-url.ts` labels this by platform, and wraps the label
+            // itself in the link so the short word opens the full URL.
+            let click = if cfg!(target_os = "macos") {
+                "Cmd+click to open"
+            } else {
+                // The modifier the terminal actually reports for a link click
+                // varies; `Ctrl+click` is pi's answer on Linux/Windows and the
+                // conservative one - a terminal that treats plain click as
+                // select still selects, so the copy hint beside it is the
+                // path that always works.
+                "Ctrl+click to open"
+            };
+            parts.push(format!("\x1b]8;;{url}\x07{click}\x1b]8;;\x07"));
+        }
+        // pi's `keyHint` shape (`keybinding-hints.ts`): the key in `dim`, the
+        // words in `muted`, " • " between the two halves. Matching it means the
+        // two agents' auth screens read the same way, which is the point of the
+        // parity rows.
+        let dim = self.theme.role(crate::theme::Role::Dim);
+        let muted = self.theme.role(crate::theme::Role::Muted);
+        parts.push(format!("{} {}", dim(&copy_key), muted("to copy")));
+        parts.join(&format!(" {} ", dim("•")))
+    }
+
+    /// Record that the sign-in URL was copied (gh #398 gap 1): the confirmation
+    /// shows in place for the toast window. `ok` is false when the copy ladder
+    /// could not run, so a failure never claims success.
+    pub fn note_url_copied(&mut self, ok: bool) {
+        // Either surface can be the one that copied (gh #398 gap 1): the login
+        // wait's URL or the MCP sign-in screen's. A failure records nothing, so
+        // a broken copy never shows a confirmation.
+        self.world.url_copied_at = ok.then(std::time::Instant::now);
+    }
+
     /// Draw the open login/grant/permission/extension modal, if any.
     /// Compose the extension modal over the viewport.
     fn compose_modals(&self, viewport: &mut [String], width: u16, height: u16) {
@@ -805,7 +887,11 @@ impl Chat {
         } else if let Some(label) = &self.world.login_waiting {
             // R4: a cancellable waiting state, so a slow OAuth callback is
             // visible and interruptible instead of freezing the app.
-            let body = vec![label.clone(), String::new(), "esc cancels".to_string()];
+            // Gh #398 gap 1: when the step shows a sign-in URL, the body
+            // carries the copy hint and (where OSC 8 reaches the terminal) the
+            // short clickable label, so an SSH reader never has to mouse-select
+            // a wrapped URL.
+            let body = self.login_body(label);
             overlay_box(viewport, width, height, "login", &body, &self.theme);
         } else if let Some(picker) = &self.world.picker {
             let rows = 15usize.min(height.saturating_sub(7) as usize).max(1);

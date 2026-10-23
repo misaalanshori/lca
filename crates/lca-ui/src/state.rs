@@ -291,6 +291,10 @@ pub fn display_path(path: &str) -> String {
     path.to_string()
 }
 
+// The login-step application (and the sign-in-URL capture that goes with it)
+// lives in `login_step.rs` after the ceiling split; the public path is unchanged.
+pub use crate::login_step::apply_login_next;
+
 /// A streamed `!`/`!!` shell event (R4).
 #[derive(Debug, Clone)]
 pub enum ShellEvent {
@@ -1078,71 +1082,6 @@ pub fn key_input(key: &str) -> lca_protocol::UiInput {
         other => lca_protocol::UiInput::Key {
             key: other.to_string(),
         },
-    }
-}
-
-/// Apply the CLI's next login step: one modal at a time, and a
-/// [`LoginNext::Secret`] mid-flow is the next field of a multi-field
-/// login, not a refusal. Returns a message for history when the step
-/// says something (gh #239: the dock catch-all is gone, so login
-/// progress lands in the transcript).
-pub fn apply_login_next(state: &mut UiState, next: LoginNext) -> Option<String> {
-    // One step owns the screen at a time: entering one clears the others.
-    // `Waiting` is the exception that must not clear a manual-callback
-    // secret field, so it only sets the waiting label.
-    match next {
-        LoginNext::Message(text) => {
-            state.login_waiting = None;
-            Some(sanitize_block(&text))
-        }
-        LoginNext::Secret {
-            provider,
-            label,
-            masked,
-        } => {
-            state.login_waiting = None;
-            state.secret = Some(SecretPrompt {
-                provider,
-                label,
-                input: String::new(),
-                masked,
-            });
-            None
-        }
-        LoginNext::Picker { options } => {
-            state.login_waiting = None;
-            if options.is_empty() {
-                Some("nothing to sign in to".to_string())
-            } else {
-                state.picker = Some(PickerPrompt {
-                    options,
-                    selected: 0,
-                });
-                None
-            }
-        }
-        LoginNext::ConfirmSwitch { provider, prompt } => {
-            state.login_waiting = None;
-            state.switch_confirm = Some(SwitchPrompt { provider, prompt });
-            None
-        }
-        LoginNext::Grant {
-            provider,
-            host,
-            prompt,
-        } => {
-            state.login_waiting = None;
-            state.grant = Some(GrantPrompt {
-                provider,
-                host,
-                prompt,
-            });
-            None
-        }
-        LoginNext::Waiting { label } => {
-            state.login_waiting = Some(sanitize_block(&label));
-            None
-        }
     }
 }
 

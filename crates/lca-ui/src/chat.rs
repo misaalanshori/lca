@@ -269,6 +269,12 @@ pub struct Chat {
     /// A background catalog discovery's rows (gh #232): the picker
     /// opened instantly and this fills it when the thread lands.
     pub(crate) model_refresh: Option<std::sync::mpsc::Receiver<Vec<crate::state::ModelRow>>>,
+    /// Whether this terminal forwards `OSC 8` (gh #398 gap 1): the sign-in
+    /// modal only offers a clickable label where a click can actually open
+    /// the link. Defaults to the live detection; a test overrides it, because
+    /// `lca-tui` caches the answer per process and a rendered frame must be
+    /// reproducible.
+    pub(crate) hyperlinks: bool,
 }
 impl Chat {
     /// Build the chat: widgets, theme, and the autocomplete chain.
@@ -423,6 +429,7 @@ impl Chat {
             scoped_models_picker: None,
             model_rows_cache: None,
             model_refresh: None,
+            hyperlinks: lca_tui::engine::terminal::supports_hyperlinks(),
         };
         chat.transcript.set_thinking_visibility(thinking_visibility);
         // gh #12: the host's collected pre-parse transforms ride the

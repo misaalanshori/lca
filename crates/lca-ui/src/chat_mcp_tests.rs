@@ -516,7 +516,7 @@ fn a_config_warning_is_shown_above_the_list() {
     chat.open_mcp_manager();
     let manager = chat.mcp_manager.as_ref().expect("open");
     assert_eq!(manager.warnings.len(), 1);
-    let (_, body, _) = crate::chat_mcp_render::mcp_overlay(manager);
+    let (_, body, _) = crate::chat_mcp_render::mcp_overlay(manager, None);
     let joined = body.join("\n");
     assert!(joined.contains("WARNINGS"), "{joined}");
     assert!(joined.contains("typo"), "{joined}");

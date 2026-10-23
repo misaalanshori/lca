@@ -28,6 +28,21 @@ pub struct UiState {
     /// A background login/identity step is running (R4); the label names
     /// it (and carries the auth URL once the provider has asked for one).
     pub login_waiting: Option<String>,
+    /// The sign-in URL the current step shows, if any (gh #398 gap 1).
+    ///
+    /// Kept beside `login_waiting` rather than parsed out of it at render
+    /// time, because the URL is the copy target and the label is prose: one
+    /// is bytes the user pastes into a browser, the other is a sentence. The
+    /// copy path never reads the rendered rows, so wrap padding and the
+    /// modal's borders cannot reach the clipboard.
+    pub auth_url: Option<String>,
+    /// When the in-place `Copied URL to clipboard` confirmation expires
+    /// (gh #398, `None` when nothing was copied this step).
+    ///
+    /// A timestamp rather than a bool because the confirmation is
+    /// **transient** - it reuses the toast window so the two copy notices
+    /// fade on the same clock instead of inventing a second timer.
+    pub url_copied_at: Option<std::time::Instant>,
     /// Ctrl+C seen once on an idle prompt.
     pub ctrl_c_armed: bool,
     /// The extension side panel is open.
@@ -64,6 +79,8 @@ impl UiState {
             switch_confirm: None,
             bug_review: None,
             login_waiting: None,
+            auth_url: None,
+            url_copied_at: None,
             ctrl_c_armed: false,
             panel_open: false,
             modal_open: false,

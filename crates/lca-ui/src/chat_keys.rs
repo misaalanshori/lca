@@ -38,6 +38,14 @@ impl Chat {
     /// the OAuth wait (gh #200): a waiting screen is not a question,
     /// and the copy target there is the sign-in URL itself.
     pub fn message_copy_key(&self, data: &str) -> bool {
+        // Gh #398 gap 1: the MCP sign-in screen is the *other* place a wrapped
+        // authorization URL appears, and over SSH it is the only way to reach
+        // the provider. It owns the keyboard like a picker, but the copy key
+        // has an unambiguous target there (the URL it is showing), so it is
+        // allowed through - the same exception the OAuth wait already gets.
+        if self.mcp_sign_in_url().is_some() {
+            return self.keybindings.matches(data, "app.message.copy");
+        }
         if self.picker_open() || self.search.is_some() {
             return false;
         }
@@ -45,6 +53,19 @@ impl Chat {
             return false;
         }
         self.keybindings.matches(data, "app.message.copy")
+    }
+
+    /// The authorization URL the MCP sign-in screen is showing, if any
+    /// (gh #398 gap 1): the `/mcp` modal's URL is a second wrapped-URL trap
+    /// over SSH, and it is the same bytes the login wait copies.
+    pub fn mcp_sign_in_url(&self) -> Option<String> {
+        let manager = self.mcp_manager.as_ref()?;
+        match &manager.screen {
+            crate::chat_mcp::McpScreen::SignIn { url: Some(url), .. } if !url.is_empty() => {
+                Some(url.clone())
+            }
+            _ => None,
+        }
     }
 
     /// Whether this key is pi's jump-to-bottom with the fullscreen
@@ -71,9 +92,16 @@ impl Chat {
     /// What reaches the clipboard, and with what honesty, is the loop's
     /// ladder in `run`.
     pub fn message_copy_text(&self) -> Option<String> {
-        if let Some(label) = self.world.login_waiting.as_deref()
-            && let Some(url) = Self::http_url(label)
-        {
+        // Gh #398 gap 1: the waiting screen's URL is captured when the step
+        // arrives (`apply_login_next`), not re-parsed here. The label is prose
+        // with the URL inside it, and the clipboard needs the URL alone.
+        if let Some(url) = self.world.auth_url.as_deref() {
+            return Some(url.to_string());
+        }
+        // Gh #398 gap 1: the MCP sign-in screen's URL, before the last
+        // assistant message (which is what a reader is *not* trying to copy
+        // while a sign-in is waiting).
+        if let Some(url) = self.mcp_sign_in_url() {
             return Some(url);
         }
         self.transcript
@@ -88,6 +116,10 @@ impl Chat {
     /// (gh #178) into literal `\x1b` / `\x07` text - so a backslash
     /// ends the URL too, else the copy carries wrapper bytes (gh #200).
     /// Raw ESC/BEL end it as well, for labels that never sanitized.
+    pub(crate) fn http_url_of(text: &str) -> Option<String> {
+        Self::http_url(text)
+    }
+
     fn http_url(text: &str) -> Option<String> {
         let start = text.find("https://").or_else(|| text.find("http://"))?;
         let rest = &text[start..];

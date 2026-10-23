@@ -16,7 +16,11 @@
 use super::chat_mcp::{McpManager, McpScreen, STDERR_VIEW_ROWS, exposure_options, stderr_rows};
 
 /// The overlay's `(title, body, hint)` for the current screen.
-pub fn mcp_overlay(manager: &McpManager) -> (String, Vec<String>, String) {
+///
+/// `auth_hint` is the sign-in screen's copy affordance (gh #398 gap 1): the
+/// caller builds it because it needs the live key binding and the copy
+/// confirmation, both of which live on `Chat`, not on the modal's own state.
+pub fn mcp_overlay(manager: &McpManager, auth_hint: Option<&str>) -> (String, Vec<String>, String) {
     match &manager.screen {
         McpScreen::List => list_screen(manager),
         McpScreen::Detail { server } => detail_screen(manager, server),
@@ -27,7 +31,7 @@ pub fn mcp_overlay(manager: &McpManager) -> (String, Vec<String>, String) {
             url,
             pasted,
             status,
-        } => signin_screen(server, url.as_deref(), pasted, status),
+        } => signin_screen(server, url.as_deref(), pasted, status, auth_hint),
     }
 }
 
@@ -226,6 +230,7 @@ fn signin_screen(
     url: Option<&str>,
     pasted: &str,
     status: &str,
+    hint: Option<&str>,
 ) -> (String, Vec<String>, String) {
     let mut body = vec![String::new()];
     match url {
@@ -233,6 +238,15 @@ fn signin_screen(
             body.push("  Open this URL in a browser on any machine:".to_string());
             body.push(String::new());
             // Unwrapped on purpose: a wrapped authorization URL is unusable.
+            // Gh #398 gap 1: the hint sits **above** the URL, not below it.
+            // The body is windowed (`▼ N more`) and a 5-row wrapped URL eats the
+            // visible rows, so a hint underneath is the first thing scrolled out
+            // - which is the state where a reader most needs it. Above the URL
+            // it is always on screen (found in a live 30-row pane).
+            if let Some(hint) = hint {
+                body.push(format!("  {hint}"));
+                body.push(String::new());
+            }
             body.push(format!("  {url}"));
             body.push(String::new());
             body.push(
