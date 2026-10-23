@@ -548,23 +548,28 @@ async fn a_cross_origin_redirect_does_not_forward_the_bearer() {
     );
 }
 
-/// The environment reader itself (not just the pure decision): a set variable
-/// reaches `endpoint_for`, and `NO_PROXY` clears it. This row runs in its own
-/// process because it mutates the environment — hence `--test-threads=1` is
-/// *not* needed: the mutation is scoped to this one test and the crate's other
-/// proxy rows build their configuration explicitly.
+/// The variable-name reader itself (not just the pure decision): a set variable
+/// reaches `endpoint_for`, and `NO_PROXY` clears it.
+///
+/// Driven through `Proxies::from_lookup` rather than `set_var`. The old version
+/// mutated the **process** environment, and `http_client()` reads it too - so under
+/// CI's `--test-threads=2` this row and `plain_get_bounds` ran concurrently in one
+/// binary and the bounds row was routed through a proxy that did not exist, failing
+/// with `client error (Canceled)` in 15 ms. The seam existed and says so in its own
+/// doc; this row now uses it.
 #[test]
 fn proxy_environment_is_read_into_the_route_decision() {
-    // SAFETY: single-threaded mutation of a process-global for this test only;
-    // other proxy rows never read the environment.
-    unsafe {
-        std::env::set_var("HTTPS_PROXY", "http://env-proxy:3128");
-        std::env::remove_var("NO_PROXY");
-        std::env::remove_var("no_proxy");
-        std::env::remove_var("ALL_PROXY");
-        std::env::remove_var("all_proxy");
-    }
-    let proxies = lca_registry::Proxies::from_env();
+    let lookup = |vars: &'static [(&'static str, &'static str)]| {
+        move |name: &str| {
+            vars.iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| (*value).to_string())
+        }
+    };
+
+    // `HTTPS_PROXY` alone reaches the decision.
+    let proxies =
+        lca_registry::Proxies::from_lookup(lookup(&[("HTTPS_PROXY", "http://env-proxy:3128")]));
     assert_eq!(
         proxies
             .endpoint_for("https", "ghcr.io", 443)
@@ -574,16 +579,20 @@ fn proxy_environment_is_read_into_the_route_decision() {
     );
 
     // And `NO_PROXY` clears it for a matching host.
-    unsafe {
-        std::env::set_var("NO_PROXY", "ghcr.io");
-    }
-    let proxies = lca_registry::Proxies::from_env();
+    let proxies = lca_registry::Proxies::from_lookup(lookup(&[
+        ("HTTPS_PROXY", "http://env-proxy:3128"),
+        ("NO_PROXY", "ghcr.io"),
+    ]));
     assert!(
         proxies.endpoint_for("https", "ghcr.io", 443).is_none(),
         "NO_PROXY bypasses"
     );
-    unsafe {
-        std::env::remove_var("HTTPS_PROXY");
-        std::env::remove_var("NO_PROXY");
-    }
+
+    // A host `NO_PROXY` does not name still routes.
+    assert!(
+        proxies
+            .endpoint_for("https", "api.github.com", 443)
+            .is_some(),
+        "NO_PROXY is a list, not a switch"
+    );
 }
