@@ -641,6 +641,35 @@ fn handle_input(
                 }
             }
         }
+        Action::InteractiveShell(command) => {
+            // Gh #407 pattern 3: the same handoff `$EDITOR` uses, because it is
+            // the same problem - a child that needs the terminal the interface is
+            // holding. Stop, run with inherited stdio, restart, re-render. Doing
+            // it a second way here is how the two drift.
+            if let Some(run) = chat.world.options.hooks.run_interactive.clone() {
+                screen.leave(terminal, true);
+                terminal.stop();
+                let outcome = run(&command);
+                // A restarted reader must feed the stream the loop actually
+                // reads (the gh #121 lesson above): the early channel when the
+                // terminal was adopted, `input_tx` otherwise.
+                let tx =
+                    early_receiver.map_or_else(|| input_tx.clone(), |stream| stream.sender.clone());
+                let rtx = resize_tx.clone();
+                terminal.start(
+                    Box::new(move |d| {
+                        let _ = tx.send(d);
+                    }) as InputHandler,
+                    Box::new(move || {
+                        let _ = rtx.send(());
+                    }) as ResizeHandler,
+                );
+                screen.enter(terminal);
+                chat.finish_interactive_shell(outcome);
+            } else {
+                chat.say("this host cannot hand the terminal to a command".to_string());
+            }
+        }
         Action::Exit => return InputResult::Exit,
     }
     InputResult::Continue
