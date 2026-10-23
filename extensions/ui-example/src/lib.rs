@@ -61,6 +61,61 @@ pub fn manifest_grants() -> lca_tools::CapabilityGrants {
 /// The four regions, in catalog order.
 pub const REGIONS: [&str; 4] = ["status-line", "footer", "panel", "modal"];
 
+/// Plan mode's badge state (gh #409's first slice).
+///
+/// **Extension state, not host state.** A `plan_mode` flag in the host would be
+/// the core growing a feature that belongs to an extension (ADR-0013's
+/// taxonomy), and the `ui` world exists exactly so an extension can hold state
+/// and be pulled for it. This struct is that state, and `render` reads it.
+///
+/// The badge needs no push: the host's `RegionRenderer` calls `render(region)`
+/// per frame (`crates/lca-cli/src/tui/mod.rs`), so mutating this on a key is
+/// enough for the next frame to show it. `lca:host/ui.request-redraw()` stays
+/// the documented push for a guest whose async work lands outside a frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PlanBadge {
+    /// Whether plan mode is on.
+    pub active: bool,
+    /// `(current, total)` when the extension has parsed a plan's steps.
+    /// `None` while the mode is on but no plan exists yet, because a
+    /// half-formed `0/0` would be worse than no fraction.
+    pub step: Option<(u32, u32)>,
+}
+
+impl PlanBadge {
+    /// The one line the `status-line` region shows, or `None` when plan mode is
+    /// off - "nothing at all" rather than an empty segment, because the region
+    /// is shared and an empty segment still costs a separator.
+    #[must_use]
+    pub fn text(&self) -> Option<String> {
+        if !self.active {
+            return None;
+        }
+        Some(match self.step {
+            Some((current, total)) => format!("plan {current}/{total}"),
+            None => "plan".to_string(),
+        })
+    }
+}
+
+/// The badge's widget tree, in the arena shape the `ui` world uses (node0 is
+/// the root, children are indices).
+///
+/// The vocabulary is the existing one on purpose (gh #409): a `text` node with
+/// the `accent` role. A new widget kind here would be an ABI change, and the
+/// issue labels that possibility for the 0.7 batch rather than this slice. The
+/// words carry the meaning so a plain theme still reads "plan 2/5" (NFR-28).
+#[must_use]
+pub fn plan_badge_nodes(badge: &PlanBadge) -> Vec<lca_protocol::Widget> {
+    match badge.text() {
+        Some(text) => vec![lca_protocol::Widget::Text {
+            content: text,
+            role: "accent".to_string(),
+        }],
+        None => Vec::new(),
+    }
+}
+
 /// The program the panel session runs: a real interactive shell, so
 /// the demo is the tmux-shaped case rather than a scripted pipe.
 pub fn demo_program() -> &'static str {
@@ -82,13 +137,32 @@ pub fn render_region(
     region: &str,
     session: Option<&PanelSession>,
 ) -> Option<Vec<lca_protocol::Widget>> {
+    render_region_with(region, session, &PlanBadge::default())
+}
+
+/// [`render_region`] with plan-mode state (gh #409): the status line is the
+/// badge's slot, and every other region is identical whether or not plan mode is
+/// on.
+pub fn render_region_with(
+    region: &str,
+    session: Option<&PanelSession>,
+    badge: &PlanBadge,
+) -> Option<Vec<lca_protocol::Widget>> {
     use lca_protocol::Widget;
     let text = |content: &str, role: &str| Widget::Text {
         content: content.to_string(),
         role: role.to_string(),
     };
     let nodes = match region {
-        "status-line" => vec![text("ui-example ok", "accent")],
+        // Gh #409: the plan-mode badge rides the existing status-line region.
+        // While plan mode is on it leads, so the mode is the first thing read;
+        // while it is off the line is exactly what it was before this slice.
+        "status-line" => vec![match badge.text() {
+            // Gh #409: plan mode leads, so the mode is the first thing read. The
+            // mode word is in the text, not only the colour (NFR-28).
+            Some(plan) => text(&format!("{plan} | ui-example ok"), "accent"),
+            None => text("ui-example ok", "accent"),
+        }],
         "footer" => vec![
             Widget::Column(vec![1, 2]),
             text("press m in a region for the modal, q to close it", "muted"),
@@ -182,6 +256,10 @@ mod native {
     pub struct UiExample {
         cap: ArcSession,
         session: Mutex<Option<PanelSession>>,
+        /// Gh #409: plan-mode state, held here because it is the extension's
+        /// (ADR-0013's taxonomy). The host pulls `render` per frame, so this
+        /// needs no notification when it changes.
+        badge: Mutex<PlanBadge>,
     }
 
     /// The engine behind the demo's process and pty grants.
@@ -194,6 +272,7 @@ mod native {
             UiExample {
                 cap,
                 session: Mutex::new(None),
+                badge: Mutex::new(PlanBadge::default()),
             }
         }
 
@@ -303,11 +382,40 @@ mod native {
                 }
             }
             drop(session);
-            Ok(render_region(region, lock(&self.session).as_ref())
-                .map(|nodes| WidgetTree { nodes }))
+            Ok(
+                render_region_with(region, lock(&self.session).as_ref(), &lock(&self.badge))
+                    .map(|nodes| WidgetTree { nodes }),
+            )
         }
 
         fn on_ui_event(&self, region: &str, input: &UiInput) -> Result<UiEffect, DispatchError> {
+            // Gh #409: `p` in the **panel** toggles plan mode.
+            //
+            // Not the status line, and that is a host contract rather than a
+            // choice here: `footer` and `status-line` are display-only
+            // (`chat_mouse.rs`: "their rows pack native and extension statuses
+            // together, so a cell cannot name one owner"), so no key ever
+            // reaches a handler for them. The panel is the region this extension
+            // already owns and already receives keys in, so the toggle lives
+            // there and the resulting state shows up in the badge.
+            //
+            // The badge still needs no notification: the host pulls `render`
+            // per frame, so the next pull in `status-line` sees the new value.
+            if region == "panel"
+                && let UiInput::Key { key } = input
+                && key == "p"
+            {
+                let mut badge = lock(&self.badge);
+                *badge = if badge.active {
+                    PlanBadge::default()
+                } else {
+                    PlanBadge {
+                        active: true,
+                        step: badge.step,
+                    }
+                };
+                return Ok(UiEffect::None);
+            }
             // Keys the modal and status branches do not handle reach the
             // live session: typing into the panel types into the program.
             if region == "panel"
@@ -428,16 +536,66 @@ mod wasm_mode {
         }
     }
 
+    /// The state key plan mode lives under (gh #409).
+    ///
+    /// The `state` bag is the right home for it and the only one that survives
+    /// this delivery mode: a WASM guest here is instantiated per call (the panel
+    /// docs say so), so a `static` would be reset every time. ADR-0030's bag is
+    /// exactly "the extension's own mutable, non-secret data", which is what a
+    /// mode toggle is.
+    const PLAN_KEY: &str = "plan-mode";
+
+    /// Read plan mode from the bag. A missing key, a refused read, or a value
+    /// that is not the two bytes this writes all mean "off" - the bag is storage
+    /// the extension owns, so an unexpected value is a state to recover from, not
+    /// an error to show.
+    fn read_plan() -> PlanBadge {
+        match lca::host::state::read(PLAN_KEY) {
+            Some(bytes) if bytes.len() == 2 => PlanBadge {
+                active: bytes[0] == b'1',
+                step: None,
+            },
+            // A missing key and an unexpected value both mean "off": the bag is
+            // storage this extension owns, so an unknown value is a state to
+            // recover from rather than an error to show.
+            _ => PlanBadge::default(),
+        }
+    }
+
+    /// Persist plan mode. A failed write leaves the mode off for the next call,
+    /// which is the safe direction: better to lose a toggle than to show a mode
+    /// the extension cannot prove is on.
+    fn write_plan(badge: &PlanBadge) {
+        let value = if badge.active { b"1\0" } else { b"0\0" };
+        let _ = lca::host::state::write(PLAN_KEY, value);
+    }
+
     pub struct UiExampleWasm;
 
     impl RenderGuest for UiExampleWasm {
         fn render(region: String) -> Option<Vec<WasmWidget>> {
-            render_region(&region, None).map(|nodes| nodes.into_iter().map(to_wit).collect())
+            render_region_with(&region, None, &read_plan())
+                .map(|nodes| nodes.into_iter().map(to_wit).collect())
         }
     }
 
     impl InteractionGuest for UiExampleWasm {
         fn handle(region: String, input: WasmInput) -> WasmEffect {
+            // Gh #409: `p` toggles plan mode in the status line. The toggle is
+            // the whole mechanism - the host pulls `render` per frame, so the
+            // next pull reads the new value from the bag. No redraw request, and
+            // in particular none per frame: the #389 footer lesson.
+            // The panel owns keys; `status-line`/`footer` are display-only in
+            // the host, so a toggle there would never be delivered.
+            if region == "panel"
+                && let WasmInput::Key(key) = &input
+                && key == "p"
+            {
+                let mut badge = read_plan();
+                badge.active = !badge.active;
+                write_plan(&badge);
+                return WasmEffect::None;
+            }
             let input = match input {
                 WasmInput::Key(key) => lca_protocol::UiInput::Key { key },
                 WasmInput::Submit(text) => lca_protocol::UiInput::Submit { text },
