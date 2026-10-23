@@ -1024,3 +1024,14 @@ mod live_compaction_marker;
 // where the extension is first-class.
 #[path = "409-plan-mode-badge.rs"]
 mod plan_mode_badge;
+
+// GitHub #407 pattern 3: `!vim`, `!git add -p` and `!... | less` hung, because
+// every `!`/`!!` command went through `spawn_direct`'s pipes. A fullscreen
+// program on a pipe either refuses or blocks for keystrokes that never arrive -
+// a hang, with the interface still drawing so the user cannot tell slow from
+// wedged. The fix is detection (a small explicit list, a `!i` opt-in, and a
+// pipe-tail check, per pi's `isInteractiveCommand`) plus a handoff that reuses
+// `$EDITOR`'s stop/run/start rather than growing a second one. Patterns 1 and 2
+// of the issue stay open.
+#[path = "407-interactive-shell-tty.rs"]
+mod interactive_shell_tty;

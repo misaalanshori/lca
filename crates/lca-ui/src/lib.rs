@@ -29,7 +29,7 @@ mod chat_project_override;
 mod chat_queue;
 mod chat_render;
 mod chat_search;
-mod chat_shell;
+pub mod chat_shell;
 mod chat_tabs;
 mod chat_tree;
 mod chat_turn_events;

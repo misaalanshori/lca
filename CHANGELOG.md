@@ -7,6 +7,27 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **`!vim`, `!git add -p` and `!… | less` no longer hang** (gh #407). Every `!`/`!!`
+  command went through `spawn_direct`, which pipes all three stdio for a worker
+  thread to drain - so a fullscreen program either refused outright (`vim: output
+  is not to a terminal`) or blocked waiting for keystrokes that never arrived.
+  Both failure shapes are a **hang**, and the worst kind: the interface is still
+  drawing, so there is nothing to tell you whether the command is slow or wedged.
+  `!` now detects the commands that need a terminal and hands it over - the
+  interface stops, the child runs with inherited stdio, the interface restarts and
+  re-renders, and a card records the exit code. Detection is a short explicit list
+  (editors, pagers, fullscreen TUIs, REPLs, the prompting `git` subcommands,
+  `docker`/`kubectl` with an explicit TTY flag) plus a pipe-tail check, matching
+  pi's `isInteractiveCommand` shape, and it deliberately errs towards staying
+  piped: `grep vim notes.md` is a search, not an editor, and `less notes.md | head`
+  ends in `head` so its output is captured. `!i <command>` forces the handoff for
+  anything the list does not know, which is the escape from every gap in it. The
+  re-render reuses `$EDITOR`'s stop/run/start rather than growing a second one -
+  and a live pane proved the point: the first version of the marker strip used
+  `trim_start_matches('!')`, which ate the `i` as well, so `!i vim` ran as
+  `i vim` and failed with 127. Inside a handed-over command `Ctrl+C` reaches the
+  command, which is correct; a child that ignores signals is killed from another
+  shell, and that limit is documented rather than papered over.
 - **macOS screenshot paths resolve across the name and folder variants it has used**
   (gh #405). `Screen Shot … at …`, `Screenshot … at …`, `Screenshot … …` (no `at`),
   the `Screen Recording` forms, and the French `Capture d'écran` stem all resolve, in
