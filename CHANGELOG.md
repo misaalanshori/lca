@@ -6,6 +6,15 @@ Dates are UTC.
 
 ## [Unreleased]
 
+### Changed
+- **A compaction summary is now one collapsed card, not a wall of text** (gh #393).
+  Each compaction renders as a single line naming its strategy, the record range it
+  replaced and, when known, how many entries — `ctrl+o` (the existing expand action)
+  reveals the full summary and collapses it again. Expansion is per card: it
+  survives a streaming delta, and a new compaction always arrives collapsed. A
+  branch summary gets the same card; it previously rendered nowhere at all on
+  resume. The stored session log is unchanged — this is presentation only.
+
 ### Added
 - **`#` completes issue numbers from `gh` inline in the prompt** (gh #408). This is
   the first consumer of a new trigger seam: an autocomplete provider declares the

@@ -109,6 +109,23 @@ pub enum Entry {
         /// assume the most recent running card is the one being answered.
         call_id: Option<String>,
     },
+    /// A compaction summary, collapsed to one self-describing line (gh #393).
+    ///
+    /// It was an `Entry::Raw` string - the fully expanded summary, every time -
+    /// so a long session's transcript was mostly summary the reader had already
+    /// watched happen. The card keeps the *fact* visible (strategy, record range,
+    /// counts) and hides the prose until asked.
+    ///
+    /// `expanded` follows the tool card's per-entry override over the global
+    /// default (gh #166's lifecycle), so there is one collapse mechanism in the
+    /// transcript rather than a second one for this entry.
+    Compaction {
+        /// What the card knows.
+        card: Card,
+        /// This card's expansion, when the reader toggled it; `None` follows
+        /// [`Transcript::tools_expanded`].
+        expanded: Option<bool>,
+    },
     /// A transient notice (command output, info).
     Notice(String),
     /// An error.
@@ -189,6 +206,9 @@ pub enum EntryHit {
     /// A row inside an expanded tool card's output (by entry index,
     /// gh #247): clicks here toggle like header clicks.
     ToolBody(usize),
+    /// Any row of a compaction card (by entry index, gh #393): the whole card
+    /// is the target, because the card is the thing being opened.
+    Compaction(usize),
 }
 
 /// The transcript: an ordered list of entries.
@@ -840,10 +860,38 @@ impl Transcript {
                         children,
                     );
                 }
+                // Gh #393: a card, not a wall of prose. The record still holds
+                // the full summary - this is the view.
+                //
+                // No count: the display view has already **suppressed** the
+                // records this compaction replaced (`lca_session::view::
+                // suppress_compacted`), so the range's ends are not in this slice
+                // and the number is not derivable here. Pi shows "Compacted from N
+                // tokens" because its message carries `tokensBefore`; LCA's record
+                // carries no pre-compaction token count (its `usage` is the
+                // summarization call's own cost), so the card names the record
+                // range instead of inventing a figure.
                 Record::Compaction {
-                    summary, strategy, ..
+                    summary,
+                    strategy,
+                    replaced_from,
+                    replaced_to,
+                    ..
                 } => {
-                    self.push_raw(format!("[compaction] {summary} (via {strategy})"));
+                    self.entries.push(Entry::Compaction {
+                        card: Card::replay(strategy, summary, replaced_from, replaced_to, None),
+                        expanded: None,
+                    });
+                }
+                // Gh #393 gap 2: a branch summary is the same wall-of-text
+                // problem in a different record. Before this it rendered
+                // **nowhere** - `BranchSummary` fell into the `_ => {}` arm below,
+                // so a resumed fork silently lost the text that explained it.
+                Record::BranchSummary { summary, .. } => {
+                    self.entries.push(Entry::Compaction {
+                        card: Card::branch(summary),
+                        expanded: None,
+                    });
                 }
                 // Permission decisions, extension events, fork points, and
                 // the end marker are transient or structural: the live path
@@ -851,6 +899,16 @@ impl Transcript {
                 _ => {}
             }
         }
+    }
+
+    /// Append a compaction card (gh #393). A *new* card always starts collapsed:
+    /// the reader's expansion belongs to the card they opened, not to the next
+    /// summary that arrives.
+    pub fn push_compaction_card(&mut self, card: Card) {
+        self.entries.push(Entry::Compaction {
+            card,
+            expanded: None,
+        });
     }
 
     /// Append an image (FR-UI-13, R5): rendered through the graphics ladder.
@@ -1040,6 +1098,11 @@ impl Transcript {
                     }
                     return Some(EntryHit::ToolBody(i));
                 }
+                // Gh #393: the whole compaction card is the target, because the
+                // card is the thing being opened.
+                if matches!(self.entries.get(i), Some(Entry::Compaction { .. })) {
+                    return Some(EntryHit::Compaction(i));
+                }
                 return None;
             }
             line += lines.len();
@@ -1093,6 +1156,8 @@ pub fn image_label(media_type: &str, bytes: &[u8]) -> String {
     format!("[image {media_type}, {dimensions}, {} bytes]", bytes.len())
 }
 
+mod compaction_card;
+pub use compaction_card::Card;
 mod nested;
 pub use nested::{COLLAPSED_CHILDREN, ChildCall, ChildStatus};
 mod preview;
@@ -1102,6 +1167,10 @@ use render::*;
 // so it crosses the seam. Everything else in `render` stays private.
 #[cfg(test)]
 pub(crate) use render::render_key_hint;
+
+#[cfg(test)]
+#[path = "compaction_card_tests.rs"]
+mod compaction_card_tests;
 
 #[cfg(test)]
 #[path = "nested_tests.rs"]

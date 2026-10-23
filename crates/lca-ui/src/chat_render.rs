@@ -395,6 +395,9 @@ impl Chat {
             {
                 ClickOutcome::ToolToggled
             }
+            Some(EntryHit::Compaction(index)) if self.transcript.toggle_entry_compaction(index) => {
+                ClickOutcome::ToolToggled
+            }
             _ => ClickOutcome::Ignored,
         }
     }

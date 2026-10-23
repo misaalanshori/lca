@@ -135,17 +135,57 @@ None: the #36 epic is complete. The symmetrical head-preservation
 proposal (`keep_initial_tokens`, raised in review) stays out of
 scope: it is not pi behavior.
 
-## What the interface shows, live and on replay (gh #496)
+## What the interface shows, live and on replay (gh #496, #393)
 
-Two views of the same compaction, and they say different things on purpose.
+Two views of the same compaction, and they say different things on purpose. Both
+render as the same **collapsed card** (gh #393): a summary is prose the reader has
+already watched happen, so printing it in full every time filled the transcript
+with walls of text nobody re-reads.
 
-**Live.** When a compaction finishes while the user is in the session, the
-transcript gains a marker at the point in the turn's entries where it happened:
+### The card (collapsed)
 
 ```
-[compaction] summarised (threshold)
-[compaction] summarised (overflow)
-[compaction] failed (manual) - the context is unchanged
+ [compaction]
+ summarised via llm · 00000002-430c..00000009-430c (ctrl+o to expand)
+```
+
+The label is its own row and the key hint rides inline, which is pi's shape
+(`compaction-summary-message.ts`): `[compaction]` over
+`Compacted from 48,213 tokens (ctrl+o to expand)`.
+
+**What differs from pi, and why.** pi prints a token count because its message
+carries `tokensBefore`. LCA's `compaction` record has no pre-compaction token count
+— its `usage` field is the *summarization call's* own cost — and the display view
+suppresses the records the compaction replaced, so a count is not derivable at
+render time either. The card therefore names the **record range**, which a reader can
+grep in the session log, instead of a figure it would have to invent.
+
+The card names its strategy and the record range it replaced, so **collapsed is
+not gone**: a reader who never expands still knows their context was rewritten and
+roughly what was cut. Hiding that would be a worse bug than the wall.
+
+`ctrl+o` (the existing `app.tools.expand` action - no second keybinding) expands
+this card to the full summary, and collapses it again. Expansion is **per card**:
+opening one does not open the others, it survives a streaming delta on the same
+transcript, and a *new* compaction always arrives collapsed.
+
+A branch summary (`Record::BranchSummary`) gets the same card, labelled
+`branch summary` - pi's wording. Before gh #393 it rendered nowhere at all - the
+replay matched a catch-all and dropped it - so a resumed fork silently lost the text
+explaining it.
+
+The stored record is untouched: the summary text, strategy, range and file lists
+all stay in the session log. Only the view is collapsed.
+
+**Live.** When a compaction finishes while the user is in the session, the
+transcript gains the card at the point in the turn's entries where it happened:
+
+```
+ [compaction]
+ summarised (threshold) (ctrl+o to expand)
+
+ [compaction failed]
+ compaction failed (manual) - the context is unchanged
 ```
 
 It names the reason (`manual` / `threshold` / `overflow`, the same words the
@@ -154,26 +194,27 @@ failure is **not** rendered as a neutral marker: `success: false` means no recor
 was written and the context is exactly as it was, so a neutral line would tell the
 user the opposite of the truth about their session.
 
-The marker carries no summary text. `TurnEvent::CompactionEnded` is
+The live card carries no summary text. `TurnEvent::CompactionEnded` is
 `{ reason, success }`; the summary lives in the `Compaction` *record*, and
 `lca-ui` has no `lca-session` dependency to read it. Adding one to fetch text the
 user sees again on replay is a seam bought for cosmetics, so the live view states
 the event and the replay states the content.
+
+Consequently a live card offers **no expand key**: there is nothing to reveal, and
+advertising a key that does nothing would be a trap. Live and replay therefore
+agree on *shape* (one band card, one label, one collapsed line) and differ on
+*content*, which is the split #496 recorded.
 
 `CompactionStarted` deliberately adds no row. The separator already reads
 `Compacting (reason)` while it runs (#388 gap 2), and a second live indicator in
 the scrollback would be two views of one fact - with the transcript's being a
 spinner in a place that is supposed to be a record.
 
-**Replay.** `Transcript::replay_records` places the record's own summary at its own
-position:
+**Replay.** `Transcript::replay_records` places the card at the record's own
+position, holding the record's summary behind the same expand key.
 
-```
-[compaction] {summary} (via {strategy})
-```
-
-So a user who leaves and resumes gets the content in the right chronological slot,
-and a user who stays gets the fact when it happens. One compaction produces one
+So a user who leaves and resumes gets the content (one key away, in the right
+chronological slot), and a user who stays gets the fact when it happens. One compaction produces one
 row in each view however many end events arrive (a retried attempt does not
 duplicate the marker), and a `CompactionStarted` clears that dedupe so a genuine
 second compaction in the same session gets its own row.
