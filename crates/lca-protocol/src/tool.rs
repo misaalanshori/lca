@@ -73,19 +73,52 @@ pub struct ToolNamespace {
 /// Hints about what a tool does (MCP tool annotations, gh #77): the
 /// model sees them; the host's permission layer never decides on
 /// them. A hint is not a bypass.
+///
+/// **The spelling (gh #454).** The field names on the wire are MCP's, which are
+/// camelCase (`readOnlyHint`), and that is what every real sender uses - an MCP
+/// server's `annotations` object, and a WIT guest's `extras["annotations"]` JSON.
+/// This type used to derive `Deserialize` with no rename, so serde expected
+/// `read_only_hint` and every real payload decoded to **all-`None`** without an
+/// error: the hints were dropped, not rejected, which is why gh #303's
+/// measurement saw "hints arrive" while nothing arrived.
+///
+/// So: camelCase **out** (the interop spelling), and camelCase **or** snake_case
+/// **in** (the old shape this tree's own fixtures wrote, kept accepted so a
+/// widening never breaks an existing reader). Tolerance is deliberate - an
+/// unknown key is ignored rather than fatal, because a hint is display metadata
+/// that the permission layer never decides on (ADR-0047), so a hint MCP adds
+/// later must not break decoding for a peer that sends it. A typo is silently
+/// ignored as the price; `annotation_spelling_tests` pins that choice.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ToolAnnotations {
     /// The tool only reads.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        alias = "read_only_hint",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub read_only_hint: Option<bool>,
     /// The tool may destroy.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        alias = "destructive_hint",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub destructive_hint: Option<bool>,
     /// Repeated calls are safe.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        alias = "idempotent_hint",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub idempotent_hint: Option<bool>,
     /// The tool reaches the open world.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        alias = "open_world_hint",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub open_world_hint: Option<bool>,
 }
 
@@ -287,5 +320,139 @@ impl ToolResult {
             nested: Vec::new(),
             duration_ms: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod annotation_spelling_tests {
+    //! gh #454: the annotations everyone sends are camelCase, and this type
+    //! decoded them to all-`None`.
+    //!
+    //! **Every row here starts from JSON text**, which is the whole point. The
+    //! existing coverage built the struct in Rust (or wrote the snake_case
+    //! spelling), so it passed while every real payload decoded to nothing. A
+    //! guard that constructs the value it is checking cannot catch a decode bug.
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code
+
+    use super::{ToolAnnotations, ToolSpec};
+
+    // Verifies: gh #454 - **the defect.** This is the MCP spelling, and the
+    // spelling a WIT guest puts in `extras["annotations"]`. Before the fix this
+    // decoded to all-`None` **without an error** - the hints were dropped, not
+    // rejected, which is why gh #303's measurement saw "hints arrive" while
+    // nothing arrived.
+    #[test]
+    fn the_camel_case_payload_everyone_sends_decodes() {
+        let hints: ToolAnnotations = serde_json::from_str(
+            r#"{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}"#,
+        )
+        .expect("the MCP spelling decodes");
+        assert_eq!(hints.read_only_hint, Some(true));
+        // `false` is a claim, not an absence: the difference between
+        // "not destructive" and "unknown" is exactly what a hint is for.
+        assert_eq!(hints.destructive_hint, Some(false));
+        assert_eq!(hints.idempotent_hint, Some(true));
+        assert_eq!(hints.open_world_hint, Some(false));
+    }
+
+    // Verifies: gh #454 design point 1 - **snake_case still decodes.** This
+    // tree's own fixtures and guests written against the old shape must keep
+    // working; acceptance is widened, not moved.
+    #[test]
+    fn the_snake_case_spelling_still_decodes() {
+        let hints: ToolAnnotations = serde_json::from_str(
+            r#"{"read_only_hint":true,"destructive_hint":false,"idempotent_hint":true,"open_world_hint":false}"#,
+        )
+        .expect("the old spelling still decodes");
+        assert_eq!(hints.read_only_hint, Some(true));
+        assert_eq!(hints.destructive_hint, Some(false));
+        assert_eq!(hints.idempotent_hint, Some(true));
+        assert_eq!(hints.open_world_hint, Some(false));
+    }
+
+    // Verifies: gh #454 design point 1 - **serialization emits one spelling,
+    // and it is camelCase** (the interop spelling). Pinned as text rather than
+    // through a round-trip, so a change to either direction is visible.
+    #[test]
+    fn serialization_emits_camel_case() {
+        let hints = ToolAnnotations {
+            read_only_hint: Some(true),
+            destructive_hint: Some(true),
+            idempotent_hint: Some(true),
+            open_world_hint: Some(true),
+        };
+        let json = serde_json::to_string(&hints).expect("serializes");
+        assert_eq!(
+            json,
+            r#"{"readOnlyHint":true,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}"#
+        );
+        // Absent hints stay absent: an "unknown" claim is not a `false` one.
+        let bare = serde_json::to_string(&ToolAnnotations::default()).expect("serializes");
+        assert_eq!(bare, "{}", "an empty hint set is an empty object");
+    }
+
+    // Verifies: gh #454 - a round-trip through this tree is stable, whichever
+    // spelling the input used. This is the row that would catch the two
+    // directions drifting apart.
+    #[test]
+    fn a_round_trip_is_stable_from_either_spelling() {
+        for input in [
+            r#"{"readOnlyHint":true,"openWorldHint":false}"#,
+            r#"{"read_only_hint":true,"open_world_hint":false}"#,
+        ] {
+            let hints: ToolAnnotations = serde_json::from_str(input).expect("decodes");
+            let text = serde_json::to_string(&hints).expect("serializes");
+            assert_eq!(
+                text, r#"{"readOnlyHint":true,"openWorldHint":false}"#,
+                "input {input} normalises to the camelCase shape"
+            );
+            let again: ToolAnnotations = serde_json::from_str(&text).expect("re-decodes");
+            assert_eq!(again, hints, "and re-decoding changes nothing");
+        }
+    }
+
+    // Verifies: gh #454 design point 2 - **an unknown key is ignored**, and
+    // that is deliberate.
+    //
+    // The house bias is a loud failure at a *trust* boundary and tolerance
+    // elsewhere. A hint is display metadata the permission layer never decides
+    // on (ADR-0047), so a future MCP hint must not break decoding for a peer
+    // that sends it - and `deny_unknown_fields` would do exactly that. The cost
+    // is that a typo is silently ignored; it is paid knowingly, and this row is
+    // where a change of mind becomes visible.
+    #[test]
+    fn an_unknown_hint_key_is_ignored_not_fatal() {
+        let hints: ToolAnnotations =
+            serde_json::from_str(r#"{"readOnlyHint":true,"someFutureHint":true,"title":"A tool"}"#)
+                .expect("an unknown key does not break decoding");
+        assert_eq!(hints.read_only_hint, Some(true));
+    }
+
+    // Verifies: gh #454 - **the extras path**, which is what gh #303 depends on:
+    // a guest's `extras["annotations"]` JSON reaches the real field.
+    #[test]
+    fn a_guest_camel_case_extras_payload_reaches_the_struct() {
+        let spec = ToolSpec {
+            name: "guest_tool".to_string(),
+            description: String::new(),
+            parameters: serde_json::json!({"type": "object"}),
+            exposure: super::ToolExposure::Direct,
+            namespace: None,
+            annotations: None,
+            extras: [(
+                "annotations".to_string(),
+                r#"{"readOnlyHint":true,"openWorldHint":true}"#.to_string(),
+            )]
+            .into_iter()
+            .collect(),
+        }
+        .with_annotations_from_extras();
+        let hints = spec.annotations.expect("the guest's hints were lifted");
+        assert_eq!(
+            hints.read_only_hint,
+            Some(true),
+            "a guest's camelCase hint survives the extras decode"
+        );
+        assert_eq!(hints.open_world_hint, Some(true));
     }
 }

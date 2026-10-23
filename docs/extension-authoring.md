@@ -191,10 +191,16 @@ verbatim, including on error results, which keep their data. The
 host carries both keys opaquely and validates nothing; a declared
 schema for the wire format itself is a later ABI train's job.
 Single-tool guests declare hints the same way: a JSON object under
-the `annotations` extras key (`read_only_hint`, `destructive_hint`,
-`idempotent_hint`, `open_world_hint`) lands on the registered spec
-where the permission prompt can show it. Suite (`tool-catalog`)
-guests declare both structurally.
+the `annotations` extras key lands on the registered spec, where the
+permission prompt can show it. **The keys are MCP's camelCase** —
+`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint` —
+which is the spelling every MCP server and every real payload uses. The
+older snake_case spelling (`read_only_hint`, …) is still accepted, so a guest
+written against the previous documentation keeps working, but camelCase is what
+to write and the only spelling emitted. An unknown key is ignored rather than
+fatal: a hint is display metadata the permission layer never decides on, so a
+hint MCP adds later cannot break your guest. Suite (`tool-catalog`) guests
+declare both structurally.
 
 ## Tool suites, exposure, and namespaces
 

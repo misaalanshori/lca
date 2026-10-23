@@ -573,22 +573,25 @@ fn a_guest_annotations_json_reaches_the_prompt_through_the_one_decode() {
     .with_annotations_from_extras();
     let hints = spec.annotations.expect("an object was lifted from extras");
 
-    // **Finding (gh #303 supply half, recorded not fixed):** the JSON above
-    // uses the camelCase spelling MCP servers and guests actually send
-    // (`destructiveHint`), and `ToolAnnotations` derives `Deserialize` with no
-    // `rename_all`, so serde expects `destructive_hint`. A camelCase payload
-    // therefore decodes to an all-`None` object *silently* - the guest's hints
-    // are dropped, not rejected. `lca-mcp` is unaffected because it hand-reads
-    // the camelCase keys (`crates/lca-mcp/src/lib.rs`), which is exactly why
-    // nobody noticed.
+    // **Finding (gh #303 supply half), fixed in gh #454.** The JSON above uses
+    // the camelCase spelling MCP servers and guests actually send
+    // (`destructiveHint`), and `ToolAnnotations` used to derive `Deserialize`
+    // with no `rename_all`, so serde expected `destructive_hint` and a camelCase
+    // payload decoded to an all-`None` object *silently*. That is what this row
+    // used to assert as a recorded gap.
     //
-    // So this row asserts the snake_case shape, which is what the extras path
-    // genuinely understands, and the camelCase gap is named here for the
-    // follow-up on `crates/lca-protocol` (outside this cycle's boundary).
-    assert!(
-        hints.destructive_hint.is_none() && hints.open_world_hint.is_none(),
-        "a camelCase extras payload decodes to no claims (the recorded gap)"
+    // It is asserted the other way now, because the gap is closed: the payload
+    // the world sends decodes, and the prompt renders what it says. The row is
+    // **sanctioned to change by gh #454's brief** - it pinned the defect, so it
+    // had to move with the fix.
+    assert_eq!(
+        hints.destructive_hint,
+        Some(true),
+        "a camelCase extras payload now decodes (gh #454)"
     );
+    assert_eq!(hints.open_world_hint, Some(true));
+    assert_eq!(hints.read_only_hint, Some(false));
+    // The snake_case shape still decodes too (acceptance widened, not moved).
     assert_eq!(
         ToolAnnotations {
             destructive_hint: Some(true),
@@ -598,15 +601,12 @@ fn a_guest_annotations_json_reaches_the_prompt_through_the_one_decode() {
         serde_json::from_str::<ToolAnnotations>(
             r#"{"destructive_hint":true,"open_world_hint":true}"#
         )
-        .expect("the snake_case shape the extras path understands"),
-        "the extras path decodes the serialized (snake_case) shape"
+        .expect("the old spelling still decodes"),
+        "the snake_case shape keeps working"
     );
 
-    // And what a prompt renders for a payload it *does* understand names both.
-    let understood = serde_json::from_str::<ToolAnnotations>(
-        r#"{"destructive_hint":true,"open_world_hint":true}"#,
-    )
-    .expect("snake_case hints");
+    // And what a prompt renders for a payload now names both.
+    let understood = hints.clone();
     let rendered = outside_write().display_annotated(Some(&understood));
     assert!(
         rendered.contains("destructive") && rendered.contains("open-world"),

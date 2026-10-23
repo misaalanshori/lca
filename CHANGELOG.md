@@ -7,6 +7,20 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **Tool annotations decode in the spelling everyone actually sends** (gh #454).
+  `ToolAnnotations` derived `Deserialize` with no rename, so serde expected
+  `read_only_hint` while every real payload says `readOnlyHint` — the MCP spelling,
+  and the spelling a WIT guest puts in `extras["annotations"]`. A camelCase payload
+  decoded to **all-`None`** without an error: the hints were dropped, not rejected.
+  That is why an earlier measurement saw "hints arrive" while nothing arrived, and
+  why the permission modal never showed them. The type now emits camelCase (the
+  interop spelling) and accepts camelCase or the older snake_case, so a guest
+  written against the previous documentation keeps working. An unknown key is
+  ignored rather than fatal, deliberately: a hint is display metadata the permission
+  layer never decides on, so a hint MCP adds later cannot break a peer. The new rows
+  all **start from JSON text** — the previous ones built the struct in Rust, which
+  is why a decode bug survived them.
+
 - **The `openai-compatible` provider now declares the environment it reads, so the
   sandboxed build can see it** (gh #461, follow-up to gh #170). A WASM component is
   instantiated with an empty `WasiCtx`, so `std::env::var` inside it answers

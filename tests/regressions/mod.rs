@@ -757,6 +757,11 @@ mod deny_rule_actually_matches;
 #[path = "459-stderr-tail-never-blocks.rs"]
 mod stderr_tail_never_blocks;
 
+// Gh #454: `ToolAnnotations` decodes the camelCase spelling every real payload
+// uses, and still accepts the snake_case one this tree's fixtures wrote.
+#[path = "454-annotations-decode-in-the-spelling-they-are-sent.rs"]
+mod annotations_decode_in_the_spelling_they_are_sent;
+
 // Gh #461: the provider declares the environment it reads, so the WASM guest sees
 // it - and the hardcoded workaround that existed without it stays gone.
 #[path = "461-workaround-deleted-capability-took-over.rs"]
