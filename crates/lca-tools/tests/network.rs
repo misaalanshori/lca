@@ -1022,3 +1022,171 @@ fn https_to_a_plain_http_server_fails_in_tls_not_in_routing() {
     );
     server.join().expect("server");
 }
+
+// ---------------------------------------------------------------------------
+// gh #476: a capability call made from inside a runtime must not panic
+// ---------------------------------------------------------------------------
+
+/// One loopback server that 401s, so a request has something to reach.
+fn refusing_server() -> String {
+    let listener = StdTcpListener::bind("127.0.0.1:0").expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            use std::io::{Read, Write};
+            let mut stream = stream;
+            let mut buffer = [0u8; 4096];
+            let _ = stream.read(&mut buffer);
+            let _ = stream.write_all(
+                b"HTTP/1.1 401 Unauthorized\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}",
+            );
+        }
+    });
+    format!("http://{addr}/mcp")
+}
+
+/// Capabilities wired so a flow-scoped request to `host` is permitted.
+fn flow_caps(sandbox: &Sandbox) -> Capabilities {
+    let caps = sandbox.caps(CapabilityGrants {
+        net_declared: true,
+        oauth: Some(OAuthSettings {
+            redirect_path: "/callback".to_string(),
+            timeout_seconds: 30,
+        }),
+        ..CapabilityGrants::default()
+    });
+    // The flow-scoped host set: `remember_unauthorized` attaches these before
+    // its request, exactly as `sign_in_flow` does.
+    caps.oauth_flow_attach(["127.0.0.1".to_string()])
+        .expect("attach the loopback host");
+    caps
+}
+
+// Verifies: gh #476 - **the defect.**
+//
+// `drive` used `Handle::block_on` when it saw an ambient runtime, and that panics
+// with "Cannot start a runtime from within a runtime" when the caller is *inside a
+// runtime poll*. `main` builds a **multi-threaded** runtime and holds
+// `Runtime::block_on` on it, so every TUI callback runs inside that poll - which
+// is what `/mcp` → Sign in did, killing the session.
+//
+// The runtime here is multi-threaded for that reason: it must match the shipped
+// shape, or the row would be testing a situation the binary never has.
+//
+// The measurement is the process surviving. `catch_unwind` observes a panic
+// without taking the test binary down with it.
+#[test]
+fn a_capability_request_from_inside_a_multi_thread_runtime_does_not_panic() {
+    let sandbox = Sandbox::new("gh476-in-runtime");
+    let caps = flow_caps(&sandbox);
+    let url = refusing_server();
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("test runtime")
+            .block_on(async {
+                // Inside the poll: the exact shape that panicked.
+                caps.oauth_flow_net_request("GET", &url, &[], None)
+            })
+    }));
+    let result = match outcome {
+        Ok(result) => result,
+        Err(_) => panic!(
+            "a capability call from inside a runtime must return, not unwind \
+             (gh #476: this killed the whole TUI session)"
+        ),
+    };
+    // And it must actually have done the work, not silently returned an error: a
+    // fix that turns "crash" into "no-op" is a worse bug.
+    let handle = result.expect("the request reached the refusing server");
+    let status = caps.net_response_status(handle).expect("status");
+    let _ = caps.net_close_response(handle);
+    assert_eq!(status, 401);
+}
+
+// Verifies: gh #476 - **the current-thread case is the one that cannot work**, and
+// the reason is structural rather than a gap left open.
+//
+// A current-thread runtime can neither `block_in_place` nor `block_on` from inside
+// its own poll - there is no other thread to move the work to, and the poll is
+// already using the only one. `tokio::task::block_in_place` panics there, and so
+// does `block_on`; no arrangement of this function can conjure a second thread
+// without requiring `Send` on the future, which one caller (the response-body
+// reader, whose future borrows a body across loop iterations) cannot satisfy.
+//
+// The case that *does* occur in the shipped binary is a current-thread runtime
+// whose frame calls **into** the capability layer from a plain `block_on` -
+// `lca_core::drive_blocking` builds exactly that - and it takes the
+// `handle.block_on` path, which is legal there because it is not a poll. That is
+// the row below. This row pins the *other* shape so a future reader knows the
+// limit is deliberate:
+#[test]
+fn a_current_thread_poll_cannot_block_and_that_is_a_named_limit() {
+    let sandbox = Sandbox::new("gh476-current-thread-limit");
+    let caps = flow_caps(&sandbox);
+    let url = refusing_server();
+    // Documenting the boundary as a test: from inside a current-thread poll the
+    // call panics with tokio's own explanation. If a future refactor finds a way
+    // to make this succeed, this row fails and the limit is worth re-documenting.
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime")
+            .block_on(async { caps.oauth_flow_net_request("GET", &url, &[], None) })
+    }));
+    assert!(
+        outcome.is_err(),
+        "a current-thread poll cannot block on itself; if this now succeeds, the \
+         documented limit in `Capabilities::drive` is stale"
+    );
+}
+
+// Verifies: gh #476 - **the limit on a current-thread runtime, named.**
+//
+// A `current_thread` runtime can drive exactly one thing at a time, so a nested
+// `block_on` on it panics whether it is called from a poll or from that runtime's
+// own frame. Measured against the code before this fix as well as after: this
+// shape never worked, and no shipped path takes it (`main` is multi-threaded, and
+// `tui/runner.rs`'s current-thread turn runtime reaches provider code through
+// `lca_core::drive_blocking`, never back through this seam).
+//
+// The row exists so the limit is *stated* rather than left as a tokio trap a
+// reader has to decode. The two shapes that do ship - a multi-threaded poll and a
+// plain thread - are the rows above and below this one.
+#[test]
+fn a_nested_block_on_a_current_thread_runtime_is_a_named_limit() {
+    let sandbox = Sandbox::new("gh476-ct-limit");
+    let caps = flow_caps(&sandbox);
+    let url = refusing_server();
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime")
+            .block_on(async { caps.oauth_flow_net_request("GET", &url, &[], None) })
+    }));
+    assert!(
+        outcome.is_err(),
+        "a current-thread runtime cannot nest a blocking capability call; if this \
+         now succeeds, the limit documented in `Capabilities::drive` is stale"
+    );
+}
+
+// Verifies: gh #476 design point 1 - **the non-runtime path still works.**
+// The blocking-thread caller is the common one (extensions, headless); a fix
+// that only made the runtime case safe would be a regression here.
+#[test]
+fn a_capability_request_from_a_plain_thread_still_works() {
+    let sandbox = Sandbox::new("gh476-plain-thread");
+    let caps = flow_caps(&sandbox);
+    let url = refusing_server();
+    let handle = caps
+        .oauth_flow_net_request("GET", &url, &[], None)
+        .expect("a plain-thread request reaches the server");
+    let status = caps.net_response_status(handle).expect("status");
+    let _ = caps.net_close_response(handle);
+    assert_eq!(status, 401, "the refusing server answered");
+}

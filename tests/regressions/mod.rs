@@ -757,6 +757,11 @@ mod deny_rule_actually_matches;
 #[path = "459-stderr-tail-never-blocks.rs"]
 mod stderr_tail_never_blocks;
 
+// Gh #476: a capability call made from inside a runtime poll returns instead of
+// unwinding - `/mcp` → Sign in used to kill the whole TUI session.
+#[path = "476-a-capability-call-never-unwinds-a-ui.rs"]
+mod a_capability_call_never_unwinds_a_ui;
+
 // Gh #454: `ToolAnnotations` decodes the camelCase spelling every real payload
 // uses, and still accepts the snake_case one this tree's fixtures wrote.
 #[path = "454-annotations-decode-in-the-spelling-they-are-sent.rs"]
