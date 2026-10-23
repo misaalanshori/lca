@@ -51,6 +51,39 @@ ignore = [
     "RUSTSEC-2026-0367",
     "RUSTSEC-2026-0368",
     "RUSTSEC-2026-0369",
+    # RUSTSEC-2026-0386 (2026-10-23): `tokio::io::unix::AsyncFd`'s safe
+    # constructors (`new`, `with_interest`, `try_new`, `try_with_interest`)
+    # accept any `T: AsRawFd`, so safe code can register an arbitrary or
+    # closed descriptor - or close/replace the descriptor while the `AsyncFd`
+    # lives - and the I/O driver's `epoll`/`kqueue` user data then points at
+    # freed memory when readiness fires. Patched in 1.51.6 / 1.53.3 / 1.54.0
+    # by deprecating those constructors in favour of `unsafe register`.
+    #
+    # Dead code in this workspace. `AsyncFd` and its constructors have zero
+    # call sites in `crates/` and `extensions/` (grep: no `AsyncFd` and no
+    # `tokio::io::unix` anywhere, production or test). Every descriptor LCA
+    # owns is driven either by `tokio::process`/`tokio::net` (which register
+    # internally, past the deprecated surface) or by our own `poll` loops on
+    # a blocking thread (`crates/lca-tools/src/pty.rs`), so the constructor
+    # the advisory is about is never reached.
+    #
+    # Why not bump to the fixed tokio: 1.54 measured a *real diagnostic
+    # regression* in this tree. `crates/lca-registry`'s streamed-cap loop
+    # (`plain_get`) stops reading at the byte limit and returns a message naming
+    # the limit; on 1.54 the HTTP/1.1 body decoder surfaces `Canceled` from
+    # `body.frame()` *before* a frame is delivered, so the cap check never runs
+    # and the user gets "client error (Canceled)" instead of "over the N byte
+    # limit". The row that caught it is
+    # `tests/regressions/355-update-fetch-is-bounded.rs`'s
+    # `an_installer_body_over_the_cap_is_refused_while_reading`, which asserts
+    # the refusal *names the limit*. Losing that message is a UX regression on a
+    # supply-chain guard, so the pin stays until our loop can attribute a
+    # canceled read - which is its own cycle, not a dependency bump.
+    #
+    # Remove when: `cargo deny` can express "this advisory is fixed in the
+    # resolved version" for yanked-style entries, or when the ignore proves
+    # unnecessary on a future tokio bump - whichever comes first.
+    "RUSTSEC-2026-0386",
     # cargo-deny's yank-ignore for `zip` (same array, a package spec):
     # see the paragraph above. Scoped to this one crate.
     { crate = "zip" },
