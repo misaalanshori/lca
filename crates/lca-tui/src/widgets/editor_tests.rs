@@ -447,6 +447,8 @@ fn autocomplete_accepts_and_inserts() {
                 value: "gpt-4o".into(),
                 label: "gpt-4o".into(),
                 description: None,
+                origin: None,
+                dim: false,
             }]
         })),
     }];
@@ -481,6 +483,8 @@ impl AutocompleteProvider for SingleCandidate {
                 value: "README.md".into(),
                 label: "README.md".into(),
                 description: None,
+                origin: None,
+                dim: false,
             }],
             prefix: "REA".into(),
         })
@@ -821,6 +825,8 @@ impl AutocompleteProvider for TenCandidates {
                     value: format!("item{i}"),
                     label: format!("item{i}"),
                     description: None,
+                    origin: None,
+                    dim: false,
                 })
                 .collect(),
             prefix: String::new(),

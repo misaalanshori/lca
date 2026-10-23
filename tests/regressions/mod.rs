@@ -1047,3 +1047,11 @@ mod interactive_shell_tty;
 // `read_dir`-dependent.
 #[path = "502-fuzzy-walk-budget.rs"]
 mod fuzzy_walk_budget;
+
+// GitHub #408: the trigger-provider seam (the in-process half). These rows read the
+// source because the promise is about *shape*: a later cycle could pass every
+// behavioural row while turning the decorator into a registry, unguarding the
+// trigger validator, or letting the chain own `@`. The WIT import and the
+// `autocomplete.trigger` capability are the deferred half (see the report).
+#[path = "408-trigger-provider-seam.rs"]
+mod trigger_provider_seam;

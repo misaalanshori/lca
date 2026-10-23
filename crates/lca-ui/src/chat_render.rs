@@ -238,6 +238,10 @@ impl Chat {
                         .role(Role::Text))(
                         &padded
                     )));
+                } else if self.editor.suggestion_is_dim(start + k) {
+                    // Gh #408 rule 5: a failure/timeout row is dim, so it reads as
+                    // news rather than as a choosable offer.
+                    dock.push((self.theme.dim)((row).as_str()));
                 } else {
                     dock.push(row.clone());
                 }

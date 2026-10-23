@@ -78,6 +78,28 @@ newline is a newline, not a submit). Remap anything in
 prompt editor, which keeps its startup key map until you restart; see
 [Configuration](configuration.md#key-bindings) and gh #332).
 
+### Completion triggers: `/`, `@`, and `#`
+
+Three things complete in the prompt editor, and they never compete:
+
+- **`/` at the start of the line** completes commands (built-in, prompt
+  templates, extension commands) and their arguments.
+- **`@` after a space** completes workspace files, `Tab` drills into a
+  directory and stays open, `Enter` commits a file and adds a space.
+- **`#`** completes **issue numbers** from the `gh` CLI in the current
+  repository: `#12` offers `#12`, `#123`; `#redact` searches titles. Rows
+  read `#12  [open] the title  [issues]`, and accepting one inserts `#12`.
+
+The `#` provider is the first consumer of the trigger seam: an
+autocomplete provider declares the characters it owns and handles those
+tokens itself, delegating everything else to the built-in provider — so a
+trigger can never shadow `/`, `@`, or paths. `#` requires the GitHub CLI
+on `PATH`; without it (or outside a GitHub repository) the popup shows one
+dim `(unavailable)` row naming what to do instead of failing silently, and
+`Escape` dismisses it. Every trigger's query has a hard deadline: a slow
+answer becomes a dim row, never a frozen editor. Typing inside one token
+reuses the previous answer, so it costs no work and no repaint.
+
 ## tmux, multiplexers, and SSH
 
 Running inside tmux is supported and tested: mouse clicks on tool

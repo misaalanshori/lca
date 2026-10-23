@@ -73,8 +73,19 @@ pub struct Proxies {
 impl Proxies {
     /// Read the proxy configuration from the process environment.
     pub fn from_env() -> Proxies {
-        let get =
-            |upper: &str, lower: &str| std::env::var(upper).or_else(|_| std::env::var(lower)).ok();
+        Self::from_lookup(|name| std::env::var(name).ok())
+    }
+
+    /// Read the configuration through an injected variable lookup.
+    ///
+    /// The seam exists because a test that asserts "`HTTPS_PROXY` reaches the
+    /// decision" has only two honest options: mutate the process environment - which
+    /// races every other row sharing the binary, since `http_client` reads it too -
+    /// or inject the lookup. This is the second. It is not a test-only hook: a future
+    /// caller with its own configuration source (a profile file, a flag layer) uses
+    /// the same entry point.
+    pub fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Proxies {
+        let get = |upper: &str, lower: &str| lookup(upper).or_else(|| lookup(lower));
         let all = get("ALL_PROXY", "all_proxy");
         let parse = |value: Option<String>| value.as_deref().and_then(parse_proxy);
         Proxies {

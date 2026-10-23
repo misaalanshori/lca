@@ -6,6 +6,8 @@
 //! on any of them. The theme, transcript, footer, chat composition, and the
 //! interactive loop live here.
 
+pub mod autocomplete_issues;
+mod autocomplete_provider;
 pub mod chat;
 mod chat_commands;
 mod chat_confirm;
