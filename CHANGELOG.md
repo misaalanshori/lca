@@ -24,6 +24,28 @@ Dates are UTC.
   quarantined under gh #195 ("turn-ends dropped under load") were this same bug —
   they are un-quarantined and green.
 
+- **The extension authoring guide teaches a route that exists, and its example
+  builds** (gh #439). It told authors to run `wkg get lca:ext@0.6.0 --format wit
+  --output wit/`, and **nothing serves that package** — no registry is named
+  anywhere in the repository, and the release pipeline publishes built
+  *components* to `ghcr.io/misaalanshori/lca/<name>`, never the WIT package. An
+  author following the guide hit a 404 at the first step. It now documents the
+  path that works — vendor `wit/` from a checkout at the tag you target — and says
+  the three things that decide which copy to take: the package line names the ABI
+  line (`0.6`) and patches do not move it, `wit/` is the whole contract with
+  `deps/lca-host/` included, and **a release tag's `wit/` is a snapshot that can
+  lag the line** (the `v0.6.0` tag predates the `lca:host/net` import, so a
+  copied `with:` block from the current line is refused as an unused remapping).
+  The guide's example code was also wrong in four ways that each stop a build —
+  `schema`/`execute` where the worlds export `get-schema`/`run`, `ToolResult::text`
+  where it is a plain record, a missing `with:` map, and a `bindings` module that
+  does not resolve. Every command and the whole example are now run from a
+  scratch directory and pasted in the report, including the guest building for
+  `wasm32-wasip2` from the vendored `wit/` and registering in a real host.
+  Publishing the package itself is **not** done: `wkg publish` needs a registry
+  namespace matching the package identity (`lca:ext` → repository `lca/ext`) and
+  this project publishes under `misaalanshori/lca/<name>`; that is tracked, and
+  the guide says so instead of pointing at a server.
 - **Running `lca` from your home directory no longer reads your own config as a
   project's** (gh #481). From `$HOME`, `<cwd>/.lca/config.toml` and
   `~/.lca/config.toml` are the same file, so a documented user setting

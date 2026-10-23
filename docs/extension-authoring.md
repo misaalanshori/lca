@@ -24,26 +24,112 @@ cargo install wkg
 
 `wkg` fetches WIT packages from a registry and publishes artifacts. `cargo-component` builds a Rust crate into a component.
 
-Get the ABI package. It holds the WIT definitions for every world.
+Get the ABI package. It holds the WIT definitions for every world, and you
+vendor it into your crate rather than fetching it from a registry — see
+[Getting `wit/`](#getting-wit) below for why, and for the one command.
+
+## Getting `wit/`
+
+`wit/` is **the whole contract**. Worlds, interfaces, records, and the host
+imports they reference all live there; nothing else from this repository is
+needed to build an extension. You do not install it and you do not generate it —
+you copy it next to your crate and point `wit_bindgen::generate!` at the path.
+
+Two facts decide which copy to take.
+
+**The package line names the ABI line, not the release.** Every `wit/*.wit` starts
+`package lca:ext@0.6.0;`, and the host's line is `0.6` (`ABI_VERSION` in
+`crates/lca-ext-abi`). Manifest `abi = "0.6"`. A patch release does not move
+this: `docs/abi-versioning.md` bumps the label only on a real interface break.
+
+**A release tag is a snapshot, so its `wit/` can lag the line.** Publishing a
+release does not rewrite `wit/`, and the extras imported since the last tag are
+not in it. `v0.6.0`'s `wit/world-tool.wit` has no `lca:host/net` import, which the
+current line does. That is why the command below checks out the tag and then tells
+you to confirm the world you need is actually there.
+
+### The path that works
+
+Vendor from a checkout at the tag you are targeting. From your crate's parent
+directory:
 
 ```
-wkg get lca:ext@0.6.0 --format wit --output wit/
+git clone --depth 1 --branch v0.6.0 --filter=blob:none --sparse \
+    https://github.com/misaalanshori/lca.git lca-wit
+cd lca-wit && git sparse-checkout set wit && cd ..
+cp -r lca-wit/wit ./wit
+rm -rf lca-wit
 ```
+
+That leaves a `wit/` containing `types.wit`, the `world-*.wit` files, and
+`deps/lca-host/` — the host import interfaces the worlds reference. `deps/` is
+part of the contract and must be copied with the rest; a `wit/` without it does
+not resolve.
+
+Confirm it before you write code against it:
+
+```
+wasm-tools component wit wit/ | head -1
+# package lca:ext@0.6.0;
+```
+
+If you are targeting the moving line rather than a release, clone the default branch
+instead of a tag — the `--branch v0.6.0` above becomes no branch flag at all, and
+you get whatever `main` holds today. Prefer a tag when you want a fixed contract
+and the default branch when you need an import that landed after the last release;
+the `grep` above tells you which you have. Do not reach for the repository's
+`unstable` tag: it is a release-channel marker, not a branch that tracks `main`.
+
+### Why not `wkg get`
+
+Earlier revisions of this guide told you to run
+`wkg get lca:ext@0.6.0 --format wit --output wit/`. **Nothing serves that
+package.** No registry is named anywhere in this repository, and the release
+pipeline publishes built *components* to `ghcr.io/misaalanshori/lca/<name>` —
+never the WIT package itself. The command resolves against the default registry
+(`ghcr.io`) at `lca/ext`, a namespace this project does not own, so it fails.
+The vendoring path above is the supported route; if a registry is published later,
+this section will name it.
+
+Two things are worth knowing if you try anyway, because they explain the error
+rather than leaving you to guess at it. `lca:ext` depends on `lca:host`, and
+`wkg` refuses to build a package whose dependencies do not resolve — you would
+have to publish `lca:host` first. And the package namespace would have to match
+an account that owns it on the registry, because `wkg` maps `lca:ext` to the
+repository `lca/ext`; the real push is blocked on that, not on the tooling.
 
 ## A first extension: a tool
 
 The smallest useful extension implements the `tool` world. It adds one callable tool to the agent.
 
-Create the crate.
+Create the crate. Either tool works, and the rest of this guide does not care
+which you picked.
 
 ```
 cargo component new --lib word-count
 cd word-count
 ```
 
-Point the manifest at the world. In `Cargo.toml`:
+`cargo component new` writes the `[package.metadata.component]` table for you. If
+you do not have `cargo-component` installed, plain cargo is enough — add that
+table yourself in the next step:
+
+```
+cargo new --lib word-count
+cd word-count
+```
+
+Point the manifest at the world and declare the two crates the code below
+needs. In `Cargo.toml`:
 
 ```toml
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.41"
+serde_json = "1"
+
 [package.metadata.component]
 package = "example:word-count"
 
@@ -52,16 +138,61 @@ path = "wit"
 world = "tool"
 ```
 
-Implement the two exports. The schema function describes the tool to the model. The execute function does the work.
+The `[package.metadata.component]` table is `cargo-component`'s; `cargo component
+build` reads it and is the shortest route. If you would rather not depend on
+`cargo-component`, the same crate builds with plain `cargo build --target
+wasm32-wasip2 --release` — `wit_bindgen::generate!` reads `path` and `world`
+directly and ignores the metadata table. Every command in this guide was run the
+plain-`cargo` way, so both work.
+
+Implement the two exports. `tool-schema`'s `get-schema` describes the tool to the
+model; `execute`'s `run` does the work. Both are exported *interfaces*, so the
+`Guest` traits live under `exports::lca::ext::`.
+
+Two details will stop you if you do not know them. The `lca:host/*` imports must
+be mapped to `generate` in the `with:` block — without it the macro refuses with
+`missing 'with' mapping for the key lca:host/log@0.6.0`, because it will not
+guess whether you want the generated bindings or your own. **Map exactly the
+imports your `wit/` declares, no more and no fewer**: an extra entry is refused
+with `unused remappings provided via 'with'`, which is what happens if you copy
+this block against an older tag whose world has fewer imports. List them:
+
+```
+grep -h 'import lca:host' wit/world-tool.wit
+```
+
+And `ToolResult` is a plain record (`call-id`, `status`, `content`,
+`truncated`, `extras`), not a constructor: there is no `ToolResult::text`.
+
+The block below matches the imports in the `v0.6.0` tag's `wit/`, which is the
+snapshot the vendoring command above produces. If you cloned the default branch
+instead, it declares one more (`lca:host/net@0.6.0`) — add that line.
 
 ```rust
-use crate::bindings::exports::lca::ext::tool::{Guest, ToolCall, ToolResult, ToolSchema};
+wit_bindgen::generate!({
+    path: "wit",
+    world: "tool",
+    with: {
+        "lca:host/log@0.6.0": generate,
+        "lca:host/fs@0.6.0": generate,
+        "lca:host/process@0.6.0": generate,
+        "lca:host/pty@0.6.0": generate,
+        "lca:host/ui-dialogs@0.6.0": generate,
+        "lca:host/tools@0.6.0": generate,
+        "lca:host/resources@0.6.0": generate,
+        "lca:host/state@0.6.0": generate,
+    },
+});
+
+use exports::lca::ext::execute::{Guest as ExecuteGuest, ToolResult};
+use exports::lca::ext::tool_schema::{Guest as SchemaGuest, Schema};
+use lca::ext::types::ToolCall;
 
 struct Component;
 
-impl Guest for Component {
-    fn schema() -> ToolSchema {
-        ToolSchema {
+impl SchemaGuest for Component {
+    fn get_schema() -> Schema {
+        Schema {
             name: "word_count".to_string(),
             description: "Count words in a file in the workspace.".to_string(),
             parameters: r#"{
@@ -72,32 +203,48 @@ impl Guest for Component {
                 "required": ["path"]
             }"#
             .to_string(),
-        }
-    }
-
-    fn execute(call: ToolCall) -> ToolResult {
-        let args: serde_json::Value = match serde_json::from_str(&call.arguments) {
-            Ok(v) => v,
-            Err(e) => return ToolResult::error(format!("bad arguments: {e}")),
-        };
-
-        let path = match args["path"].as_str() {
-            Some(p) => p,
-            None => return ToolResult::error("path is required".to_string()),
-        };
-
-        match crate::bindings::lca::host::fs::read("workspace", path) {
-            Ok(bytes) => {
-                let text = String::from_utf8_lossy(&bytes);
-                ToolResult::text(format!("{} words", text.split_whitespace().count()))
-            }
-            Err(e) => ToolResult::error(format!("cannot read {path}: {e}")),
+            extras: Vec::new(),
         }
     }
 }
 
-bindings::export!(Component with_types_in bindings);
+impl ExecuteGuest for Component {
+    fn run(call: ToolCall) -> ToolResult {
+        let reply = |status: &str, content: String| ToolResult {
+            call_id: call.call_id.clone(),
+            status: status.to_string(),
+            content: Some(content),
+            truncated: false,
+            extras: Vec::new(),
+        };
+
+        let args: serde_json::Value = match serde_json::from_str(&call.arguments) {
+            Ok(v) => v,
+            Err(e) => return reply("error", format!("bad arguments: {e}")),
+        };
+
+        let path = match args["path"].as_str() {
+            Some(p) => p,
+            None => return reply("error", "path is required".to_string()),
+        };
+
+        match lca::host::fs::read("workspace", path) {
+            Ok(bytes) => {
+                let text = String::from_utf8_lossy(&bytes);
+                reply("ok", format!("{} words", text.split_whitespace().count()))
+            }
+            Err(e) => reply("error", format!("cannot read {path}: {e}")),
+        }
+    }
+}
+
+export!(Component with_types_in self);
 ```
+
+That block is not illustrative — it is extracted from a crate that builds for
+`wasm32-wasip2` against a vendored `wit/` and registers as `word_count` in a real
+host.
+
 
 ### The `worlds` list
 
@@ -584,17 +731,23 @@ An extension is an OCI artifact. Any registry that implements the OCI distributi
 
 ```
 wkg oci push ghcr.io/yourname/word-count:0.1.0 word_count.wasm
-wkg oci push ghcr.io/yourname/word-count:abi-0.2 word_count.wasm
+wkg oci push ghcr.io/yourname/word-count:abi-0.6 word_count.wasm
 ```
 
 Push two tags. The version tag is immutable and identifies this exact release. The ABI line tag moves and is what the update resolver reads.
+
+Note what this publishes: the **component and its manifest**, which is what
+`lca ext install` consumes. It does not publish the WIT package `lca:ext` —
+that is vendored, not fetched (see [Getting `wit/`](#getting-wit)). A component
+requires no registry entry for the interface it was built against; the host
+links against its own copy.
 
 `lca ext install` reads `extension.toml` from the artifact's OCI config blob, with the second layer as a fallback, and the component from layer0 (`application/wasm`). `scripts/publish-oci.sh` publishes exactly that layout, and the repository's release workflow runs it for the first-party extensions - a bare `wkg oci push` of the component alone produces an artifact with no manifest in it, so pack the manifest into the config blob the way the script does. A user's agent resolves the moving tag to a digest at update time and loads by digest afterward, so the moving tag never decides what runs on an already-installed machine.
 
 Users install with the reference.
 
 ```
-lca ext install ghcr.io/yourname/word-count:abi-0.2
+lca ext install ghcr.io/yourname/word-count:abi-0.6
 ```
 
 First-party extensions take the shorthand (gh #252): a bare name
@@ -604,7 +757,7 @@ repository (`ghcr.io/misaalanshori/lca/<name>[:tag]`), the tag
 defaulting to the current ABI line. Anything with a slash stays
 exact.
 
-An OCI registry is not the only option. Any HTTPS host works: zip the component and `extension.toml` together with nothing else added, publish two URLs the same way, one for the fixed version and one that always points at the current release, and a user installs with `lca ext install https://yourhost.example/word-count-abi-0.2.zip`. The update mechanics are identical either way; see ADR-0010.
+An OCI registry is not the only option. Any HTTPS host works: zip the component and `extension.toml` together with nothing else added, publish two URLs the same way, one for the fixed version and one that always points at the current release, and a user installs with `lca ext install https://yourhost.example/word-count-abi-0.6.zip`. The update mechanics are identical either way; see ADR-0010.
 
 A git repository works too (gh #59): `lca ext install git+https://git.example.com/team/pack` clones the repo, checks out the default branch, and pins the commit in the lockfile like an OCI digest pins bytes. Append `#<rev>` for a branch, tag, or commit (`git+https://...#v1.2.0`); the lockfile keeps the typed ref (branches advance on `ext update`) and the resolved commit separately. The checkout reads like a local package directory: one top-level `extension.toml`, at most one top-level `*.wasm`, `resources/**` below it — anything else a repo carries (README, CI configs) is ignored. The `git` command must be on PATH.
 
