@@ -1041,6 +1041,18 @@ fn resume_command_uses_the_real_flag_for_the_default_home() {
     );
 }
 
+// Verifies: gh #403 gap 2 - **a flag-looking argument is quoted.** A session id
+// or path that begins with `-` would otherwise be read as an option by the very
+// tool the hint tells the user to run, turning a correct hint into a broken one.
+#[test]
+fn resume_command_quotes_an_argument_that_looks_like_a_flag() {
+    let command = crate::resume_command::resume_command("-rf", None);
+    assert!(
+        !command.ends_with(" -rf"),
+        "an id beginning with `-` is quoted so it is not parsed as a flag: {command}"
+    );
+}
+
 // Verifies: gh #403 gap 2 - **a relocated session dir is quoted.** `--resume`
 // resolves against the current data home, so a session carried in from elsewhere
 // needs `--session <path>`; a path with a space must not split into two words.
@@ -1052,9 +1064,19 @@ fn resume_command_quotes_a_relocated_session_directory() {
         command.starts_with("lca --session "),
         "a relocated session names its path: {command}"
     );
+    // The quoting dialect is platform-dependent on purpose: `cmd`/PowerShell do
+    // not treat `'` the way POSIX shells do, so Windows gets `"` with `"` doubled.
+    // Assert the *behaviour* (the space is inside quotes), not one dialect - a row
+    // keyed to `'` passed on Linux and failed on the Windows runner, which is the
+    // raw-path-comparison lesson in a new place.
+    let quoted = if cfg!(windows) { '"' } else { '\'' };
     assert!(
-        command.contains("'"),
-        "and the path with a space is quoted: {command}"
+        command.contains(quoted),
+        "the path with a space is quoted for this platform: {command}"
+    );
+    assert!(
+        command.contains("my sessions"),
+        "and the space survives inside the quotes: {command}"
     );
     assert!(
         !command.contains("lca --resume"),

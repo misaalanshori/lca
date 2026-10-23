@@ -21,11 +21,19 @@
 /// for a human pasting into the shell that launched `lca`; upgrade to a
 /// shell-probing quote if a third dialect ever reports breakage.
 fn shell_quote(arg: &str) -> String {
-    let safe = |byte: char| byte.is_ascii_alphanumeric() || "-_./~:+@%'.=".contains(byte);
-    if !arg.is_empty() && arg.chars().all(safe) && !arg.contains('\'') {
+    let windows = cfg!(windows);
+    // Conservative allow-list: anything not plainly inert gets quoted. A `'` is
+    // inert to `cmd` but opens a quote to a POSIX shell, so it is unsafe on the
+    // POSIX side only.
+    let safe = |byte: char| {
+        byte.is_ascii_alphanumeric() || "-_./~:+@%=,;".contains(byte) || (windows && byte == '\'')
+    };
+    // A leading `-` would read as a flag to the tool being invoked, so it is
+    // quoted even though it is otherwise inert.
+    if !arg.is_empty() && arg.chars().all(safe) && !arg.starts_with('-') {
         return arg.to_string();
     }
-    if cfg!(windows) {
+    if windows {
         format!("\"{}\"", arg.replace('"', "\"\""))
     } else {
         format!("'{}'", arg.replace('\'', "'\\''"))
