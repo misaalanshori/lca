@@ -757,6 +757,11 @@ mod deny_rule_actually_matches;
 #[path = "459-stderr-tail-never-blocks.rs"]
 mod stderr_tail_never_blocks;
 
+// Gh #402: a cache miss names its cause, once per cause, with counted-by-design
+// worded as cost rather than as a defect.
+#[path = "402-a-miss-names-its-cause.rs"]
+mod a_miss_names_its_cause;
+
 // Gh #489: the RPC loop must poll its turn future in place; a `take()` inside a
 // `select!` branch drops the turn and the session's state with it.
 #[path = "489-rpc-turn-future-is-never-dropped.rs"]

@@ -2,12 +2,18 @@
 //! picker's text and switch, the session age label, and the stats story.
 //! Pure functions over records and store reads - no terminal, no loop.
 
+use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
 use lca_protocol::{CommandEffect, Record};
 use lca_session::{Session, SessionStore, ViewMode};
 
 use super::ModelChoice;
+
+// gh #402: declared here rather than in `mod.rs` so that file stays untouched
+// (`hooks.rs` and `attach.rs` are Worker 2's, and `mod.rs` sits at the ceiling).
+#[path = "cache_cause/mod.rs"]
+pub(super) mod cache_cause;
 
 /// A short relative age (`now`, `5m`, `3h`, `2d`, `3w`, `2mo`, `1y`), pi's
 /// session-row format (`selectors-large.md`).
@@ -196,15 +202,46 @@ pub(super) fn model_effect_on(
 }
 
 /// The stats story (FR-UI-19): the same numbers the footer accumulates,
-/// A counted cache miss's notice text, if there is news (gh #42):
-/// `None` when notices are off or no new miss landed since `last`,
-/// which advances past the newest miss seen. The loop calls this
-/// when a turn ends; the text points at `/session` for the numbers.
+impl super::Ui {
+    /// The `cache_miss_notice` hook (gh #42, gh #402).
+    ///
+    /// Lives here rather than inline in `hooks.rs` so that file keeps its
+    /// 1,200-line budget, and because the closure's state is the cause set this
+    /// module owns.
+    pub(super) fn cache_miss_notice_hook(self: &Arc<Self>) -> lca_ui::CacheMissNotice {
+        // Gh #402: causes already reported, not a miss count - a count cannot
+        // tell "same divergence again" from "a different cause".
+        let seen = Arc::new(Mutex::new(BTreeSet::new()));
+        let ui = Arc::clone(self);
+        Arc::new(move || {
+            let config = crate::lock(&ui.config);
+            let enabled = config.cache_miss_notices();
+            let floor = config.cache_noise_floor_tokens();
+            drop(config);
+            let session = crate::lock(&ui.current_session).clone();
+            let mut seen = seen.lock().unwrap_or_else(|poison| poison.into_inner());
+            miss_notice_for(&ui.store, &session, floor, &mut seen, enabled)
+        })
+    }
+}
+
+/// A counted cache miss's notice text, if there is news (gh #42, gh #402):
+/// `None` when notices are off or no *new cause* has landed.
+///
+/// gh #402 makes the notice name **why**. Before it, the text said only "N tokens
+/// re-billed", so a user watching the footer's ratio fall had no way to learn that
+/// a skill had matched or that their project instructions had changed. The cause is
+/// read from the signals the measurement already recorded - see
+/// [`cache_cause::attribute`], the single place that decides, so the notice and
+/// `/session` cannot tell two stories about one miss.
+///
+/// **Once per cause, not once per turn.** `seen` holds the causes already
+/// reported: a repeat is silent, and a cause not yet reported re-arms.
 pub(super) fn miss_notice_for(
     store: &SessionStore,
     session: &Session,
     floor: u64,
-    last: &mut usize,
+    seen: &mut BTreeSet<cache_cause::Cause>,
     enabled: bool,
 ) -> Option<String> {
     if !enabled {
@@ -213,19 +250,31 @@ pub(super) fn miss_notice_for(
     let read = store.resolved(session, ViewMode::Display).ok()?;
     let misses = lca_session::collect_cache_misses(&read.records, floor);
     let newest = misses.last()?;
-    if misses.len() <= *last {
+    let cause = cache_cause::attribute(&read.records, newest, cache_ttl_ms());
+    if !seen.insert(cause) {
         return None;
     }
-    *last = misses.len();
-    Some(format!(
-        "prompt cache miss: {} tokens re-billed ({}) - see /session",
+    let occurrences = misses
+        .iter()
+        .filter(|miss| cache_cause::attribute(&read.records, miss, cache_ttl_ms()) == cause)
+        .count();
+    let occurrences = u64::try_from(occurrences).unwrap_or(u64::MAX);
+    Some(cache_cause::notice_text(
+        cause,
         newest.missed_tokens,
-        if newest.missed_cost > 0.0 {
-            format!("${:.4}", newest.missed_cost)
-        } else {
-            "cost unknown".to_string()
-        }
+        newest.missed_cost,
+        occurrences,
     ))
+}
+
+/// The prompt-cache TTL the idle-expiry attribution compares against.
+///
+/// Zero means "unknown", which disables that branch rather than guessing: the
+/// provider's declared lifetime lives behind the model handle this display path
+/// does not hold, and attributing a miss to expiry without one would be exactly
+/// the invented cause [`cache_cause::attribute`] exists to avoid.
+fn cache_ttl_ms() -> u64 {
+    0
 }
 /// The stats story (FR-UI-19): the same numbers the footer accumulates,
 /// with per-model cost and cache waste.
@@ -1096,23 +1145,23 @@ fn miss_notices_fire_once_per_new_miss() {
     store
         .append(&session, assistant("a1", 1, cached))
         .expect("append");
-    let mut last = 0usize;
+    let mut seen = BTreeSet::new();
     assert!(
-        miss_notice_for(&store, &session, 1024, &mut last, true).is_none(),
+        miss_notice_for(&store, &session, 1024, &mut seen, true).is_none(),
         "one turn is no miss"
     );
     // A second turn re-billing the same 50k prompt is a counted miss.
     store
         .append(&session, assistant("a2", 2, rebilled))
         .expect("append");
-    let notice = miss_notice_for(&store, &session, 1024, &mut last, true).expect("a notice");
+    let notice = miss_notice_for(&store, &session, 1024, &mut seen, true).expect("a notice");
     assert!(notice.contains("/session"), "{notice}");
     assert!(
-        miss_notice_for(&store, &session, 1024, &mut last, true).is_none(),
-        "the same miss never repeats"
+        miss_notice_for(&store, &session, 1024, &mut seen, true).is_none(),
+        "the same cause never repeats"
     );
     assert!(
-        miss_notice_for(&store, &session, 1024, &mut 0, false).is_none(),
+        miss_notice_for(&store, &session, 1024, &mut BTreeSet::new(), false).is_none(),
         "off stays silent"
     );
     let _ = std::fs::remove_dir_all(&root);

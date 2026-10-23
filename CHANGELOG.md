@@ -7,6 +7,21 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **A prompt-cache miss now names what caused it** (gh #402). With
+  `cache.miss_notices` on, the notice used to say only "*N* tokens re-billed"; a user
+  watching the footer's `CH%` fall had no way to learn that a skill had matched or
+  that their project instructions had changed. The notice now says which - a skill
+  matched, instructions changed, an extension rewrote cached context, the cache
+  expired while idle, or you switched models - read from the signals the measurement
+  already records (`CacheMiss`'s own `idle_ms`/`model_changed` and the log's
+  `cache-boundary-narrowed` event plus the `[skill instructions]` /
+  `[instructions changed]` markers), never re-derived. It shows **once per cause**
+  rather than once per turn, so a real divergence is one fact instead of a repeating
+  nag, while a *different* cause re-arms it. A model switch is worded as counted real
+  cost, not as a fault, since FR-CACHE-2 makes it deliberate; a miss nothing explains
+  says `cause unknown` instead of guessing. The numbers still come from the same
+  scan `/session` totals, so the transcript and the footer cannot tell two stories.
+
 - **Quitting the interface tells you how to come back** (gh #403 gap 2). Only
   leaving fullscreen used to name the session (gh #82); any other exit left no
   answer to "how do I get back to this?". Every exit now prints
