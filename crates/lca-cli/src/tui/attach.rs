@@ -8,6 +8,43 @@ use lca_protocol::CommandEffect;
 
 use super::Ui;
 
+/// How long a clipboard **read** may take before the command reports that it
+/// could not read rather than freezing (gh #406).
+///
+/// `arboard::Clipboard::new()` and a read can block on X11: the selection owner
+/// is arbitrary code in another process, and `INCR` transfers are a conversation
+/// with it. This ran inline on the key/render thread - `invoke_command` is called
+/// from `chat_keys` - so a hung owner froze the whole interface with no way out.
+/// The bound is the difference between "the clipboard is unavailable" and "the
+/// agent stopped responding".
+const CLIPBOARD_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Read from the clipboard with a bound, as the daemonised closure described on
+/// [`CLIPBOARD_TIMEOUT`].
+///
+/// `None` covers three cases the caller treats identically - no display (SSH, a
+/// container), no clipboard data of the requested kind, and a call that did not
+/// answer in time - because the user-facing answer is the same sentence for all
+/// three: there is nothing to paste.
+fn with_clipboard_timeout<T, F>(work: F) -> Option<T>
+where
+    T: Send + 'static,
+    F: FnOnce(&mut arboard::Clipboard) -> Option<T> + Send + 'static,
+{
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = arboard::Clipboard::new()
+            .ok()
+            .and_then(|mut cb| work(&mut cb));
+        let _ = tx.send(result);
+    });
+    // A timeout leaves the helper thread behind: the clipboard API has no
+    // cancellation, and blocking the key thread on an arbitrary other process is
+    // the failure this exists to prevent. One detached thread per stuck copy is
+    // the accepted cost; the bound is short for that reason.
+    rx.recv_timeout(CLIPBOARD_TIMEOUT).ok().flatten()
+}
+
 /// Stage opener `@file` images into the pending attachments (gh
 /// #71): they ride with the first submission exactly like `/attach`
 /// does. A file that will not stage warns and drops - the interface
@@ -93,16 +130,26 @@ impl Ui {
     /// to attach. Drag-and-drop needs no separate path: terminals
     /// paste the dropped file's path as text, which `/attach <path>`
     /// (or an `@path` opener argument) already stages.
+    ///
+    /// Gh #406: the read is bounded and off the key thread
+    /// ([`with_clipboard_timeout`]). It used to call `Clipboard::new()` inline,
+    /// which meant a hung X11 selection owner froze the interface with no way
+    /// out - the same hazard the text half has, found on the half that was
+    /// already using `arboard`.
     pub(super) fn command_paste(&self) -> CommandEffect {
         let session = self.session();
-        let clipboard = arboard::Clipboard::new().and_then(|mut clipboard| clipboard.get_image());
-        let image = match clipboard {
-            Ok(image) => image,
-            Err(_) => {
-                return CommandEffect::ShowWidget(
-                    "the clipboard holds no image - copy one first".to_string(),
-                );
-            }
+        // Gh #406: pi's paste ladder is files -> image -> text, and this is the
+        // text half. An image still wins when one is present (that is what
+        // `/paste` was asked for first), but a clipboard holding *only* text now
+        // pastes that text instead of answering "the clipboard holds no image".
+        // Without this, the sole text-paste route was the terminal's own -
+        // bracketed paste a multiplexer can mangle, or an OSC 52 read almost no
+        // terminal implements.
+        let Some(image) = with_clipboard_timeout(|cb| cb.get_image().ok()) else {
+            return match self.read_clipboard_text() {
+                Some(text) => CommandEffect::InsertText(text),
+                None => CommandEffect::ShowWidget(no_clipboard_image_notice()),
+            };
         };
         let png = match lca_tools::clipboard_png(
             u32::try_from(image.width).unwrap_or(0),
@@ -136,11 +183,76 @@ impl Ui {
             note,
         }
     }
+
+    /// Read the clipboard's **text**, through the same in-process backend and
+    /// the same bound as the image path (gh #406 design point 3).
+    ///
+    /// Why this exists at all: without it the only text-paste route is the
+    /// terminal's own — bracketed paste (which a multiplexer can mangle) or an
+    /// OSC 52 read (which almost no terminal implements, and none portably).
+    /// `arboard::get_text` asks the platform directly, which is what pi's
+    /// `readClipboardText` does and what a user pressing the paste key expects.
+    ///
+    /// `None` means "nothing to paste": no display, an empty clipboard, or a
+    /// read that did not answer in time. The caller decides the wording; a
+    /// clipboard that holds only an image also lands here, which is correct —
+    /// `/paste` is the image route.
+    pub(super) fn read_clipboard_text(&self) -> Option<String> {
+        with_clipboard_timeout(|cb| cb.get_text().ok()).filter(|text| !text.is_empty())
+    }
+}
+
+/// The notice `/paste` shows when the clipboard holds nothing it can stage.
+///
+/// One sentence covers "no display", "holds only text", and "did not answer":
+/// all three mean there is no image to attach, and naming the distinction would
+/// leak a platform detail into a message the user can act on identically.
+fn no_clipboard_image_notice() -> String {
+    "the clipboard holds no image - copy one first".to_string()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Verifies: gh #406 design point 3 - `/paste` falls through from image to
+    // text, so a clipboard holding only text pastes it. pi's ladder is
+    // files -> image -> text, and this is the text half.
+    //
+    // Pinned structurally: a real clipboard cannot be driven in CI (no X11, no
+    // pasteboard, no win32 session), and the branch under test is "no image, so
+    // ask for text". Asserting the *notice* would pass whether or not the text
+    // route exists, because both paths end in a message; asserting the route
+    // does not.
+    #[test]
+    fn a_text_only_clipboard_pastes_text_rather_than_reporting_no_image() {
+        let source =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/tui/attach.rs"))
+                .expect("attach.rs is readable");
+        let start = source
+            .find("pub(super) fn command_paste")
+            .expect("the command is present");
+        let body = &source[start..];
+        let body = &body[..body.find("\n    }\n").unwrap_or(body.len())];
+        assert!(
+            body.contains("read_clipboard_text"),
+            "the no-image branch asks for text: {body}"
+        );
+        assert!(
+            body.contains("CommandEffect::InsertText"),
+            "and inserts it into the editor instead of showing a notice"
+        );
+        // The image still wins when one is present - this is a fallthrough, not
+        // a replacement, so the order must not invert.
+        let image = body.find("get_image").expect("the image read is present");
+        let text = body
+            .find("read_clipboard_text")
+            .expect("the text read is present");
+        assert!(
+            image < text,
+            "image is tried first, text only when there is no image"
+        );
+    }
     // Verifies: gh #71/#126 - an opener `@shot.png` stages like
     // `/attach` does; a non-image warns and drops, never stages.
     #[test]

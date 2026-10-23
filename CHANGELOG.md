@@ -17,6 +17,24 @@ Dates are UTC.
   string comes from one formatter shared with the fullscreen hint, so the two
   cannot drift; the quoting round-trips through a real `sh -c`.
 
+- **Copying goes through the clipboard backend that was already linked, not a
+  helper process per copy** (gh #406). `arboard` is a direct `lca-cli`
+  dependency and was already doing the *image* read, while the *text* write
+  spawned `pbcopy` / `clip` / `wl-copy` / `xclip` / `xsel` on every copy. On a
+  machine with none of the five — most Linux boxes have at best the last two, and
+  containers have none — a copy silently degraded to OSC 52, which many terminals
+  block, even though a working in-process backend was in the same binary. The
+  helper ladder is deleted: one `arboard` write, then OSC 52, then an honest
+  failure, which is the same order it always claimed. Two things came out of it
+  besides the speed: **a failed in-process write now falls through** rather than
+  stopping — `arboard` errors when there is no display, which is exactly the SSH
+  and container case where OSC 52 should take over — and **a clipboard read is
+  bounded and off the key thread**. That second one was a live hazard on the half
+  that already used `arboard`: `Clipboard::new()` and `get_image` ran inline on the
+  render thread, so a hung X11 selection owner froze the whole interface with no
+  way out. Both are now a 500 ms bound on a helper thread. `/paste` also gained
+  the text half (pi's ladder is image then text): a clipboard holding only text
+  inserts that text instead of answering "the clipboard holds no image".
 - **`--mode rpc` no longer loses a turn when a command arrives mid-turn** (gh
   #489). The loop drove its turn with `run.take()` inside a `tokio::select!`
   branch future, and `select!` rebuilds every branch future on each iteration — so

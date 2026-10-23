@@ -34,6 +34,8 @@ pub(crate) enum Screen {
     Main(MainScreenRenderer),
 }
 
+use crate::copy_ladder::{CopyReport, copy_through_ladder};
+
 impl Screen {
     fn is_fullscreen(&self) -> bool {
         matches!(self, Screen::Alt(_))
@@ -211,54 +213,6 @@ fn link_notice(url: &str, outcome: Option<Result<(), String>>) -> String {
         Some(Ok(())) => format!("opened {url}"),
         Some(Err(reason)) => format!("cannot open {url}: {reason}"),
         None => format!("cannot open {url}"),
-    }
-}
-
-/// Which copy step ran (R6, kept ours for gh #9): the host's verified
-/// native clipboard first, then OSC 52 when this screen can send it.
-/// [`CopyReport::notice`] says exactly which step ran, never claiming
-/// a step that did not - except a caller that knows its target may
-/// name the success itself, and only on [`CopyReport::Native`].
-#[derive(Debug, PartialEq, Eq)]
-enum CopyReport {
-    /// A native clipboard tool confirmed the write.
-    Native,
-    /// OSC 52 went out unverified (testing plan §14).
-    Osc52,
-    /// No step could run.
-    Failed,
-}
-
-impl CopyReport {
-    fn notice(&self) -> String {
-        match self {
-            CopyReport::Native => "copied to clipboard".to_string(),
-            CopyReport::Osc52 => {
-                "copied (if your terminal blocked the clipboard, nothing was copied)".to_string()
-            }
-            CopyReport::Failed => {
-                "could not copy: no clipboard tool found (try /fullscreen)".to_string()
-            }
-        }
-    }
-}
-
-/// Run the copy ladder over `text`, returning which step ran; the
-/// caller turns the report into the notice it shows.
-fn copy_through_ladder(
-    text: &str,
-    native: Option<&crate::state::ClipboardWriter>,
-    osc52: Option<&mut dyn FnMut(&str)>,
-) -> CopyReport {
-    if native.is_some_and(|write| write(text)) {
-        return CopyReport::Native;
-    }
-    match osc52 {
-        Some(send) => {
-            send(text);
-            CopyReport::Osc52
-        }
-        None => CopyReport::Failed,
     }
 }
 
