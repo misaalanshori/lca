@@ -15,20 +15,52 @@ struct ProjectExtension {
     wasm: Vec<u8>,
 }
 
-/// Whether two paths name the same directory, resolving symlinks and casing.
+/// Whether two paths name the same thing on disk, resolving symlinks.
 ///
-/// `symlink_metadata` first: a path that does not exist is not the same as one
-/// that does, and calling `canonicalize` on a missing path would fall back to a
-/// lexical compare - which is exactly the string comparison that has twice
-/// passed here and failed elsewhere (gh #436, gh #389). Comparing the parent plus
-/// the final component keeps the deleted-directory case honest.
-pub(crate) fn same_directory(left: &std::path::Path, right: &std::path::Path) -> bool {
+/// `canonicalize` on both sides: a `$HOME` that is itself a symlink, macOS's
+/// `/var` -> `/private/var`, and Windows's `\\?\` verbatim prefix each make a
+/// lexical comparison agree on one platform and disagree on another - the string
+/// comparison that has passed here and failed elsewhere three cycles running
+/// (gh #436, #389, #463).
+///
+/// A path that does not resolve cannot be shown to be the same as anything, so a
+/// canonicalize failure is `false`. That is the conservative answer for both
+/// callers: the extension scan would otherwise skip a real project directory, and
+/// the config loader would otherwise fold a real project file into the user file.
+///
+/// Named `same_directory` while both callers passed directories; gh #481 made the
+/// config loader the third caller and that one compares *files*, so the name is
+/// now [`same_path`]. Directories and files resolve the same way.
+pub(crate) fn same_path(left: &std::path::Path, right: &std::path::Path) -> bool {
     match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
         (Ok(left), Ok(right)) => left == right,
         // Either path is absent, so they cannot be the same existing directory;
         // a lexical spelling of an absent path proves nothing either way.
         _ => false,
     }
+}
+
+/// Whether this project's copy of `file` under `.lca` is the user's own file in
+/// the data home (gh #481).
+///
+/// The project root and the data home can be one directory (#463), and then
+/// `<cwd>/.lca/<file>` and `<data>/<file>` are the same file. Three callers need
+/// that answer and they must not disagree, so it is computed once here:
+///
+/// - the config loader, through [`same_path`], which owns its own copy because
+///   `lca-config` cannot depend on this crate;
+/// - the settings picker, which must not offer to rewrite the user's own keys as
+///   project overrides;
+/// - the MCP plan, which must not load the user's servers a second time as
+///   project overrides of themselves.
+///
+/// Canonical, for the reason [`same_path`] documents.
+pub(crate) fn project_file_is_the_user_file(
+    cwd: &std::path::Path,
+    data_dir: &std::path::Path,
+    file: &str,
+) -> bool {
+    same_path(&cwd.join(".lca").join(file), &data_dir.join(file))
 }
 
 /// Scan `<project>/.lca/extensions/` for project-local extensions (gh
@@ -55,7 +87,7 @@ fn scan_project_extensions(
     // `/var` -> `/private/var`, and Windows's `\\?\` verbatim prefix all make a
     // string comparison agree on one platform and not another (the #436 and
     // #389 lesson).
-    if same_directory(&dir, &data_dir.join("extensions")) {
+    if same_path(&dir, &data_dir.join("extensions")) {
         return (found, warnings);
     }
     let entries = match std::fs::read_dir(&dir) {

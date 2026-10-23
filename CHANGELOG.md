@@ -7,6 +7,20 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **Running `lca` from your home directory no longer reads your own config as a
+  project's** (gh #481). From `$HOME`, `<cwd>/.lca/config.toml` and
+  `~/.lca/config.toml` are the same file, so a documented user setting
+  (`trust.default_project`) was classified as a project override — and FR-CFG-7
+  correctly refuses that in a project file, which made a valid user config a fatal
+  startup error. The two paths are now compared **canonically**, and when they name
+  the same file there is no separate project layer: the setting loads, takes
+  effect, and `lca config` / `/settings` attribute it to the user file. A *real*
+  project file is still refused with the same message, so FR-PERM-9 is untouched.
+  Two more paths with the same root cause came out of the sweep and are fixed too:
+  the `/settings` picker no longer offers to rewrite your own keys as project
+  overrides, and `mcp list` no longer loads your servers twice and label them
+  `project`.
+
 - **An audit test now enforces that every extension declares the environment it
   reads** (gh #484, follow-up to #461). A WASM component is instantiated with an
   empty `WasiCtx`, so `std::env::var` inside it answers `NotPresent` unless the

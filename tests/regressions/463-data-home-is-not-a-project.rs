@@ -58,7 +58,7 @@ fn the_scan_knows_where_the_data_home_is() {
         "the scan is told the data home, so it can tell the cases apart"
     );
     assert!(
-        source.contains("same_directory(&dir, &data_dir.join(\"extensions\"))"),
+        source.contains("same_path(&dir, &data_dir.join(\"extensions\"))"),
         "and the skip is keyed on the two directories being the same place"
     );
 }
@@ -66,7 +66,7 @@ fn the_scan_knows_where_the_data_home_is() {
 // Verifies: gh #463 design point 1 - **canonical comparison**, not a string
 // prefix.
 //
-// This is the row that would fail if `same_directory` were replaced by
+// This is the row that would fail if `same_path` were replaced by
 // `left == right` on the raw paths: a `$HOME` that is a symlink, macOS's
 // `/var` -> `/private/var`, and Windows's `\\?\` verbatim prefix all make the
 // string comparison agree on one platform and not another.
@@ -74,7 +74,7 @@ fn the_scan_knows_where_the_data_home_is() {
 fn the_comparison_resolves_symlinks() {
     let source = read("crates/lca-cli/src/project_ext.rs");
     let start = source
-        .find("pub(crate) fn same_directory(")
+        .find("pub(crate) fn same_path(")
         .expect("the comparison helper exists");
     let body = &source[start..];
     let body = &body[..body.find("\n}\n").unwrap_or(body.len())];
@@ -126,7 +126,7 @@ fn the_trust_prompt_uses_the_same_check() {
         "the prompt's predicate is told the data home too"
     );
     assert!(
-        hooks.contains("crate::project_ext::same_directory"),
+        hooks.contains("crate::project_ext::same_path"),
         "and reuses the one comparison, so the two paths cannot drift apart"
     );
     assert!(

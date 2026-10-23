@@ -757,6 +757,11 @@ mod deny_rule_actually_matches;
 #[path = "459-stderr-tail-never-blocks.rs"]
 mod stderr_tail_never_blocks;
 
+// Gh #481: from `$HOME` the user config is not a project config - the project
+// layer does not exist when the two paths name the same file.
+#[path = "481-user-config-is-not-a-project-config.rs"]
+mod user_config_is_not_a_project_config;
+
 // Gh #484: every extension that reads the environment declares it, or its read is
 // gated out of the sandboxed build - the class-level audit behind #461 and this.
 #[path = "484-every-env-read-is-declared.rs"]

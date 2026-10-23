@@ -403,6 +403,23 @@ fn type_name(value: &toml::Value) -> &'static str {
     }
 }
 
+/// Whether two paths name the same file, resolving symlinks.
+///
+/// Both sides are canonicalized, so a symlinked `$HOME`, macOS's `/var` ->
+/// `/private/var`, and Windows's `\\?\` verbatim prefix all compare equal
+/// instead of agreeing on Linux and disagreeing elsewhere (gh #436, #389,
+/// #463). `canonicalize` touches the filesystem, which is why a failure is
+/// answered `false`: a path that does not resolve cannot be shown to be the
+/// same file, and the caller's fallback (treat them as two layers) is the
+/// conservative one - it keeps the ordinary two-file case working, and
+/// FR-CFG-7 still refuses a real project file that grants its own trust.
+fn same_file(left: &Path, right: &Path) -> bool {
+    match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
 fn read_table(
     path: &Path,
     label: &'static str,
@@ -513,7 +530,29 @@ impl Config {
 
         // The project file participates only for a trusted project:
         // FR-PERM-9, ADR-0006.
+        //
+        // gh #481: and only when it is genuinely a *different file* from the
+        // user file. From `$HOME` the project root and the data home are the
+        // same directory, so `<cwd>/.lca/config.toml` and `~/.lca/config.toml`
+        // are one file. Reading it twice would re-apply the user's own settings
+        // as a project layer - and FR-CFG-7 refuses `trust.default_project` in a
+        // project file, so a documented user setting became a fatal error.
+        //
+        // The refusal is right; the classification was wrong. There is no
+        // project layer when the two paths name the same file, so it does not
+        // participate and its keys keep the `UserFile` source they earned.
+        //
+        // Compared canonically, not lexically: a `$HOME` that is a symlink,
+        // macOS's `/var` -> `/private/var`, and Windows's `\\?\` verbatim
+        // prefix each make a string comparison agree on one platform and
+        // disagree on another (the gh #436 / #389 / #463 lesson, now applied to
+        // config).
+        let project_is_the_user_file = match (&input.project_file, &input.user_file) {
+            (Some(project), Some(user)) => same_file(project, user),
+            _ => false,
+        };
         if input.trusted
+            && !project_is_the_user_file
             && let Some(path) = &input.project_file
         {
             let (layer, substituted) = read_table(path, "project file", true)?;
