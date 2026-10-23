@@ -1111,3 +1111,8 @@ mod dock_tests;
 
 #[path = "key_hint_tests.rs"]
 mod key_hint_tests;
+
+// Gh #496: the live compaction marker. In its own file because the fixture it
+// needs (`chat()`) is here and `chat_tests.rs` is near the line ceiling.
+#[path = "chat_compaction_tests.rs"]
+mod compaction_tests;

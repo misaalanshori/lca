@@ -23,7 +23,20 @@ impl Chat {
             // Reconstruction events for headless/rpc; rendered elsewhere.
             TurnEvent::TurnStarted | TurnEvent::MessageStarted { .. } => {}
             TurnEvent::MessageEnded { .. } | TurnEvent::RetryFinished { .. } => {}
-            TurnEvent::CompactionStarted { .. } | TurnEvent::CompactionEnded { .. } => {}
+            // Gh #496: the live user is *in* the session when a threshold or
+            // overflow compaction fires, so the event that ends one leaves a row.
+            // `CompactionStarted` deliberately does not: the separator already
+            // shows `Compacting`, and a second live indicator of the same fact is
+            // the duplication this repo keeps consolidating away. What the
+            // transcript can add is the *record* of the event, in its
+            // chronological slot, naming the reason and whether it worked.
+            TurnEvent::CompactionStarted { .. } => {
+                // A new compaction begins, so the *next* end gets its own row.
+                self.compaction_marked = false;
+            }
+            TurnEvent::CompactionEnded { reason, success } => {
+                self.note_live_compaction(&reason, success)
+            }
             TurnEvent::TextDelta(delta) => self.transcript.append_text(&delta),
             TurnEvent::ReasoningDelta(delta) => self.transcript.append_reasoning(&delta),
             TurnEvent::ToolStarted(call) => {
@@ -170,5 +183,40 @@ impl Chat {
                 self.separator.idle();
             }
         }
+    }
+
+    /// Record a finished compaction in the transcript (gh #496).
+    ///
+    /// The user is looking at this transcript when a threshold or overflow
+    /// compaction fires, so the row is the only evidence they get live: the
+    /// summary itself lives in a `Compaction` record this crate cannot reach
+    /// (no `lca-session` dependency, by design), and it appears on `/resume`
+    /// where `replay_records` puts it in record order. Printing a marker that
+    /// names *that* it happened, and *why*, is the honest half.
+    ///
+    /// `success: false` must not look like success. It means no summary record
+    /// was written: the context is exactly as it was, and a neutral marker would
+    /// tell the user the opposite of the truth about their session.
+    ///
+    /// **One marker per compaction, not per event.** `compact_candidate` emits
+    /// one `CompactionEnded` per attempt, and the overflow recovery can attempt
+    /// more than one, so a duplicate end must not append a second row: the
+    /// transcript is the record, and two rows read as two summaries. The
+    /// `CompactionStarted` arm clears `compaction_marked` so a *real* second
+    /// compaction still gets its own marker.
+    fn note_live_compaction(&mut self, reason: &str, success: bool) {
+        if self.compaction_marked {
+            return;
+        }
+        self.compaction_marked = true;
+        let marker = if success {
+            format!("[compaction] summarised ({reason})")
+        } else {
+            // The reason still matters on failure - a provider overflow that
+            // could not be recovered from is a different situation from a manual
+            // request that errored - so it rides along here too.
+            format!("[compaction] failed ({reason}) - the context is unchanged")
+        };
+        self.transcript.push_raw(marker);
     }
 }

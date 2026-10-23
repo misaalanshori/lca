@@ -116,6 +116,11 @@ pub struct Chat {
     /// Whether a background `/compact` is summarizing (the interface stays
     /// responsive while it does; the separator says `Working`).
     pub compacting: bool,
+    /// Gh #496: whether the *current* compaction already left its transcript
+    /// marker, so a duplicate `CompactionEnded` (a retried attempt) does not
+    /// append a second row for one compaction. Cleared by `CompactionStarted`,
+    /// which is what makes a genuine second compaction still get its own.
+    pub(crate) compaction_marked: bool,
     /// The separator row's state and spinner (chrome.md's
     /// spinner-in-the-border, R2).
     pub separator: Separator,
@@ -363,6 +368,7 @@ impl Chat {
             turn_tab: None,
             deferred_host_session: None,
             compacting: false,
+            compaction_marked: false,
             turn_status: None,
             separator: Separator::new(),
             world,

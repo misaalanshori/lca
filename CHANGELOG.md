@@ -22,6 +22,26 @@ Dates are UTC.
   says `cause unknown` instead of guessing. The numbers still come from the same
   scan `/session` totals, so the transcript and the footer cannot tell two stories.
 
+- **A compaction that happens while you are in the session now says so** (gh
+  #496). `apply_turn_event` mapped `CompactionStarted | CompactionEnded` to `{}` -
+  explicitly a no-op, on the reasoning that they are reconstruction events for
+  headless/rpc "rendered elsewhere". But the live path is exactly where a user is
+  when a threshold or overflow compaction fires: the transcript they are reading
+  has just been summarized underneath them and nothing indicated it, so they
+  learned about it on the next `/resume` if ever. The end event now appends
+  `[compaction] summarised (reason)` at its chronological position, and a failed
+  compaction reads `[compaction] failed (reason) - the context is unchanged`
+  rather than looking identical to a success - a user whose compaction failed and
+  saw a neutral marker has been told the opposite of the truth about their
+  context. `CompactionStarted` stays a no-op: the separator already shows
+  `Compacting (reason)` (#388 gap 2), and a second live indicator in the
+  scrollback would be a spinner where a record belongs. The marker names the
+  event but not the content: `CompactionEnded` carries no summary, and giving
+  `lca-ui` a session-store seam to fetch text the user sees again on replay is a
+  dependency bought for cosmetics. The replay path is untouched and now has the
+  test it never had - the 4-record ordering fixture the issue cites existed only
+  as a manual check. One compaction is one marker however many end events arrive,
+  and a second compaction still gets its own.
 - **Quitting the interface tells you how to come back** (gh #403 gap 2). Only
   leaving fullscreen used to name the session (gh #82); any other exit left no
   answer to "how do I get back to this?". Every exit now prints
