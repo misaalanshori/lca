@@ -182,11 +182,28 @@ impl Card {
     }
 }
 
-/// The first eight characters of a record id, which is what distinguishes two
-/// ids at a glance. Ids shorter than that are returned whole.
+/// A record id shortened to the part that actually distinguishes it.
+///
+/// A record id is `<13-digit ms>-<counter>-<entropy>`, so **every id in one
+/// session shares its first thirteen characters** - the timestamp prefix. A
+/// head-truncation therefore printed `17927858..17927858` for a range that spans
+/// four records, which is a live-found defect: the card looked like it reported a
+/// range and reported nothing. The distinguishing part is the counter/entropy
+/// tail, so that is what survives.
 fn short_id(id: &str) -> &str {
-    match id.char_indices().nth(8) {
-        Some((at, _)) => &id[..at],
+    match id.rfind('-') {
+        // Keep the two trailing groups (`counter-entropy`): together they are
+        // what a reader greps for and what differs between records.
+        Some(_) => {
+            let mut parts = id.rsplitn(3, '-');
+            let _entropy = parts.next();
+            let _counter = parts.next();
+            match parts.next() {
+                // `rest` is everything before the last two groups.
+                Some(rest) => &id[rest.len() + 1..],
+                None => id,
+            }
+        }
         None => id,
     }
 }
