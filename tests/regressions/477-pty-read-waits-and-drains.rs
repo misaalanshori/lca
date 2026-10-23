@@ -37,12 +37,16 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 
+#[cfg(unix)]
 use std::path::PathBuf;
+#[cfg(unix)]
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
 use lca_tools::PtyChild;
 
 /// A scratch directory this row may spawn in.
+#[cfg(unix)]
 fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("lca-477-{name}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("mkdir");
@@ -54,6 +58,7 @@ fn scratch(name: &str) -> PathBuf {
 /// This is deliberately the *guest's* shape - loop until `None` - because that
 /// is the caller the defect was found in. If the host's contract is right, a
 /// caller written this naively must still get the whole output.
+#[cfg(unix)]
 fn read_to_end(pty: &mut PtyChild, budget: Duration) -> (Vec<u8>, usize, Duration) {
     let mut out = Vec::new();
     let mut calls = 0usize;
