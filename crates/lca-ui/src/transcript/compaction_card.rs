@@ -156,6 +156,8 @@ impl Card {
         if self.live {
             parts.push(format!("summarised ({})", self.reason));
         } else if self.strategy == "branch" {
+            // Pi's wording for this record (`branch-summary-message.ts`:
+            // "Branch summary (ctrl+o to expand)").
             parts.push("branch summary".to_string());
         } else if self.strategy.is_empty() {
             parts.push("summarised".to_string());
@@ -232,12 +234,35 @@ pub(super) fn render_card(
     } else {
         "[compaction]"
     };
-    let headline = format!(
-        "{} {}",
-        (theme.role(Role::CustomMessageLabel))(label),
-        (theme.role(Role::CustomMessageText))(&card.headline())
-    );
-    for line in wrap_text_with_ansi(&headline, width.saturating_sub(3).max(1)) {
+    // Pi's shape (`compaction-summary-message.ts`): the label is its **own** row,
+    // then the body. Putting the label inline with the headline made the collapsed
+    // card two rows taller than pi's and harder to scan - the label is the thing a
+    // reader locates the card by.
+    out.push(band_row(
+        &format!(" {}", (theme.role(Role::CustomMessageLabel))(label)),
+        width,
+        &bg,
+    ));
+
+    // The key hint rides **inline** with the headline, as pi writes it
+    // (`Compacted from N tokens (ctrl+o to expand)`), rather than on a row of its
+    // own: one line is the point of collapsing.
+    let key = if card.has_body() {
+        render_key_hint(theme, keybindings, "app.tools.expand", None)
+    } else {
+        String::new()
+    };
+    let mut headline = card.headline();
+    if !key.is_empty() {
+        let verb = if expanded { "to collapse" } else { "to expand" };
+        headline.push_str(&format!(" ({key} {verb})"));
+    } else if card.has_body() {
+        headline.push_str(if expanded { " (collapse)" } else { " (expand)" });
+    }
+    for line in wrap_text_with_ansi(
+        &(theme.role(Role::CustomMessageText))(&headline),
+        width.saturating_sub(3).max(1),
+    ) {
         out.push(band_row(&format!(" {line}"), width, &bg));
     }
 
@@ -248,25 +273,6 @@ pub(super) fn render_card(
         ) {
             out.push(band_row(&format!(" {line}"), width, &bg));
         }
-    }
-
-    // The hint names the key the interface will actually accept (gh #410), and
-    // only when there is something to reveal.
-    if card.has_body() {
-        let key = render_key_hint(theme, keybindings, "app.tools.expand", None);
-        let shape = if key.is_empty() {
-            if expanded {
-                "collapse".to_string()
-            } else {
-                "expand".to_string()
-            }
-        } else if expanded {
-            format!("collapse ({key})")
-        } else {
-            format!("expand ({key})")
-        };
-        let row = format!("   {}", (theme.role(Role::Muted))(&shape));
-        out.push(band_row(&row, width, &bg));
     }
 
     out.push(band_row("", width, &bg));
