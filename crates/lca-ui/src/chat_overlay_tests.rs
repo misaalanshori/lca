@@ -999,8 +999,8 @@ fn model_picker_hover_highlights_and_click_confirms() {
     let mut chat = chat();
     chat.screen_mode = true;
     chat.model_picker = Some(crate::chat_pickers::ModelPicker::new(vec![
-        ("a".to_string(), "a".to_string()),
-        ("b".to_string(), "b".to_string()),
+        crate::ModelRow::from(("a".to_string(), "a".to_string())),
+        crate::ModelRow::from(("b".to_string(), "b".to_string())),
     ]));
     let (w, h) = (80u16, 24u16);
     let (rect, _) = chat.picker_layout(w, h).expect("the box maps");
@@ -1029,8 +1029,8 @@ fn picker_backdrop_dismisses_without_confirming() {
     let mut chat = chat();
     chat.screen_mode = true;
     chat.model_picker = Some(crate::chat_pickers::ModelPicker::new(vec![
-        ("a".to_string(), "a".to_string()),
-        ("b".to_string(), "b".to_string()),
+        crate::ModelRow::from(("a".to_string(), "a".to_string())),
+        crate::ModelRow::from(("b".to_string(), "b".to_string())),
     ]));
     let (w, h) = (80u16, 24u16);
     assert_eq!(

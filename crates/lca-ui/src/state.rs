@@ -369,7 +369,7 @@ pub type ProjectSettingPersist =
 /// id is what resolution, session metadata, and provider calls use and is
 /// never decorated (G2: labels decorate display only, both directions
 /// tested).
-pub type ModelRow = (String, String);
+pub type ModelRow = crate::chat_model_search::ModelEntry;
 
 /// One row of the `/scoped-models` checklist (gh #204): the model id,
 /// its display label, its context window (0 when the provider says
@@ -502,6 +502,14 @@ pub type ThinkingSetter = Arc<dyn Fn(Option<&str>) -> String + Send + Sync>;
 /// The `/thinking` picker's offered levels, resolved for the current
 /// model by the host.
 pub type ThinkingOffered = Arc<dyn Fn() -> Vec<String> + Send + Sync>;
+
+/// Saves the picker's highlighted thinking level as the default for new sessions
+/// (gh #396, pi's `app.thinking.save`), returning the notice to show.
+///
+/// Mirrors [`ModelSave`] exactly: the host owns the write, because the config file
+/// is its file and only it can say whether the write landed. `None` is "unset"
+/// (the provider's own default), which is a value the picker can save.
+pub type ThinkingSave = Arc<dyn Fn(Option<&str>) -> String + Send + Sync>;
 /// A counted cache miss's notice text, if the host has news (gh #42):
 /// the loop calls it when a turn ends; `Some` shows once. Absent
 /// means silent (misses still aggregate under `/session`).
@@ -776,6 +784,9 @@ pub struct UiHooks {
     /// `/thinking`'s Enter: clamp the chosen level to the current model's
     /// set, store it, and return the notice.
     pub set_thinking: Option<ThinkingSetter>,
+    /// `Ctrl+S` in the thinking picker: persist the highlighted level as the
+    /// default for new sessions (gh #396). Mirrors `save_default_model`.
+    pub save_default_thinking: Option<ThinkingSave>,
     /// `/persona`: validate a bundle against this session before applying any of it
     /// (gh #412). Absent means the host cannot reach the model set or the tool
     /// registry, so `/persona` refuses rather than applying blind.

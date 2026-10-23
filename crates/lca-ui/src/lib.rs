@@ -20,6 +20,7 @@ mod chat_mcp;
 mod chat_mcp_keys;
 mod chat_mcp_render;
 mod chat_modals;
+mod chat_model_search;
 mod chat_models;
 mod chat_mouse;
 mod chat_notices;

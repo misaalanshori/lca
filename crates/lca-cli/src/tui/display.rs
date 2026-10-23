@@ -99,33 +99,56 @@ pub(super) fn persona_notice(bundle: &lca_ui::PersonaBundle) -> String {
 pub(super) fn model_label(
     model: &lca_protocol::ModelInfo,
     provider: &str,
-) -> Option<(String, String)> {
+) -> Option<lca_ui::ModelRow> {
     let id = model.id.trim();
     if id.is_empty() {
         return None;
     }
-    Some(if id.contains('/') {
+    // Gh #396: the picker's search needs the **provider** as its own field, not
+    // just as label decoration - that is what lets `openai` rank the direct entry
+    // above a proxy whose label merely contains it.
+    //
+    // The provider is the model's own `extras["provider"]` when it names one (gh
+    // #177: a model from another provider), else the caller's. Deliberately *not*
+    // `extras["label"]`: that is a display name (`opencode-go` for a model served
+    // by `openai-compatible`), and searching a brand name as if it were the
+    // provider is how the wrong row wins.
+    let billing = model
+        .extras
+        .get("provider")
+        .map(String::as_str)
+        .unwrap_or(provider)
+        .to_string();
+    if id.contains('/') {
         // Already provider-qualified: printing it twice helps nobody.
-        (id.to_string(), id.to_string())
-    } else {
-        // gh #177: a model from another provider names that
-        // provider. gh #31: the row names the service that will
-        // bill the call. The provider says so per model - in
-        // `extras`, the carrier the WIT record already had - and
-        // the caller's provider name is only the fallback for a
-        // provider that carries no per-model identity (a bundled
-        // or fake one).
-        let foreign = model
-            .extras
-            .get("provider")
-            .filter(|origin| *origin != provider);
-        let label = foreign
-            .map(String::as_str)
-            .or_else(|| model.extras.get("label").map(String::as_str));
-        match label {
-            Some(label) => (id.to_string(), format!("{id} ({label})")),
-            None => (id.to_string(), format!("{id} ({provider})")),
-        }
+        return Some(lca_ui::ModelRow {
+            id: id.to_string(),
+            label: id.to_string(),
+            provider: billing,
+        });
+    }
+    // gh #177: a model from another provider names that
+    // provider. gh #31: the row names the service that will
+    // bill the call. The provider says so per model - in
+    // `extras`, the carrier the WIT record already had - and
+    // the caller's provider name is only the fallback for a
+    // provider that carries no per-model identity (a bundled
+    // or fake one).
+    let foreign = model
+        .extras
+        .get("provider")
+        .filter(|origin| *origin != provider);
+    let label = foreign
+        .map(String::as_str)
+        .or_else(|| model.extras.get("label").map(String::as_str));
+    let label = match label {
+        Some(label) => format!("{id} ({label})"),
+        None => format!("{id} ({provider})"),
+    };
+    Some(lca_ui::ModelRow {
+        id: id.to_string(),
+        label,
+        provider: billing,
     })
 }
 
@@ -777,26 +800,27 @@ mod tests {
             },
         ];
         let rows = model_rows(&offered, "openai-compatible");
+        assert_eq!(rows[0].id, "mimo-v2.6-flash");
         assert_eq!(
-            rows[0],
-            (
-                "mimo-v2.6-flash".to_string(),
-                "mimo-v2.6-flash (opencode-go)".to_string()
-            ),
+            rows[0].label, "mimo-v2.6-flash (opencode-go)",
             "the service that will bill the call names the row"
         );
+        // Gh #396: the provider is a field so the search can use it - and it is the
+        // *provider* (`openai-compatible`), not the display label `opencode-go`,
+        // which is a brand name on the row and not who bills the call.
         assert_eq!(
-            rows[1],
-            (
-                "plain-model".to_string(),
-                "plain-model (openai-compatible)".to_string()
-            ),
+            rows[0].provider, "openai-compatible",
+            "the searchable provider is who bills, not the display label"
+        );
+        assert_eq!(rows[1].id, "plain-model");
+        assert_eq!(
+            rows[1].label, "plain-model (openai-compatible)",
             "a model with no per-model identity falls back to the provider"
         );
         // Selection is untouched by any of it: the id stays raw.
         for row in &rows {
             let picker = lca_ui::ModelPicker::new(vec![row.clone()]);
-            assert_eq!(picker.selected_model(), Some(row.0.as_str()));
+            assert_eq!(picker.selected_model(), Some(row.id.as_str()));
         }
     }
 
@@ -811,25 +835,19 @@ mod tests {
         let rows = model_rows(&offered, "openai-compatible");
 
         // Direction one: id -> label.
+        assert_eq!(rows[0].id, "deepseek-v4.1-flash");
         assert_eq!(
-            rows[0],
-            (
-                "deepseek-v4.1-flash".to_string(),
-                "deepseek-v4.1-flash (openai-compatible)".to_string()
-            ),
+            rows[0].label, "deepseek-v4.1-flash (openai-compatible)",
             "a bare id gets the provider label"
         );
+        assert_eq!(rows[1].id, "org/qualified");
         assert_eq!(
-            rows[1],
-            ("org/qualified".to_string(), "org/qualified".to_string()),
+            rows[1].label, "org/qualified",
             "a provider-qualified id is not decorated twice"
         );
+        assert_eq!(rows[2].id, "weird (v2)");
         assert_eq!(
-            rows[2],
-            (
-                "weird (v2)".to_string(),
-                "weird (v2) (openai-compatible)".to_string()
-            ),
+            rows[2].label, "weird (v2) (openai-compatible)",
             "an id containing its own parenthesis decorates without losing text"
         );
 
@@ -839,11 +857,14 @@ mod tests {
             let picker = lca_ui::ModelPicker::new(vec![row.clone()]);
             assert_eq!(
                 picker.selected_model(),
-                Some(row.0.as_str()),
+                Some(row.id.as_str()),
                 "selection returns the raw id of {}",
-                row.1
+                row.label
             );
-            assert_eq!(picker.models[0].1, row.1, "the label shows as built");
+            assert_eq!(
+                picker.models[0].label, row.label,
+                "the label shows as built"
+            );
         }
 
         // The decorated label stays searchable, and so does the raw id.
@@ -894,11 +915,11 @@ mod tests {
         ];
         let rows = model_rows(&offered, "openai-compatible");
         assert_eq!(
-            rows[0].1, "gpt-5.4-mini (codex)",
+            rows[0].label, "gpt-5.4-mini (codex)",
             "the foreign row names its provider"
         );
         assert_eq!(
-            rows[1].1, "home-model (openai-compatible)",
+            rows[1].label, "home-model (openai-compatible)",
             "the home row keeps the old fallback label"
         );
         let text = model_picker_text(&offered, "home-model", "openai-compatible");

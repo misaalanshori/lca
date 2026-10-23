@@ -229,6 +229,18 @@ pub fn tui_keybindings() -> &'static [(&'static str, KeybindingDefinition)] {
                 "Save the selected model as the default for new sessions"
             ),
         ),
+        // Gh #396: the `/thinking` picker's save-as-default, pi's
+        // `app.thinking.save` (`thinking-selector.ts`). The same `ctrl+s` the
+        // model picker uses, because they are the same gesture in the same kind
+        // of picker - a second key for one idea is the drift this repo keeps
+        // closing.
+        (
+            "app.thinking.save",
+            def!(
+                &["ctrl+s"],
+                "Save the selected thinking level as the default for new sessions"
+            ),
+        ),
         (
             "app.model.cycleBackward",
             // pi's map: `shift+ctrl+p`, with `alt+p` where a terminal

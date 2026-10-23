@@ -409,6 +409,25 @@ impl Chat {
         // The `/thinking` picker owns the keyboard while open (R1).
         if let Some(mut picker) = self.thinking_picker.take() {
             match key {
+                // Gh #396: pi's `app.thinking.save` - the highlighted level
+                // becomes the default for new sessions, mirroring the `/model`
+                // picker's `app.models.save`. The host writes it (the config file
+                // is its file) and answers with what to show; the picker stays
+                // open, pi's shape.
+                Some("ctrl+s") => {
+                    let level = if picker.selected == 0 {
+                        None
+                    } else {
+                        picker.offered.get(picker.selected - 1).cloned()
+                    };
+                    let notice = match &self.world.options.hooks.save_default_thinking {
+                        Some(save) => save(level.as_deref()),
+                        None => "saving a default thinking level is not available in this host"
+                            .to_string(),
+                    };
+                    self.say(crate::state::sanitize_block(&notice));
+                    self.thinking_picker = Some(picker);
+                }
                 Some("escape") => {}
                 Some("enter") => {
                     let level = if picker.selected == 0 {

@@ -44,6 +44,12 @@ impl Chat {
             Some(rows) if !rows.is_empty() => {
                 let mut picker = ModelPicker::new(rows);
                 picker.loading = false;
+                // Gh #396 rule 4: a defined unfiltered order, not catalog order.
+                // The default is not reachable from here (the host owns the config
+                // file), so the picker orders current-first-then-alphabetical and
+                // the host's `save_default_model` is what a user reaches for.
+                let current = self.model_label();
+                picker.reset_order(Some(&current), None);
                 self.model_picker = Some(picker);
                 return;
             }
@@ -52,7 +58,10 @@ impl Chat {
         let Some(list) = self.world.options.hooks.models.clone() else {
             let rows = self.world.options.models.clone();
             if !rows.is_empty() {
-                self.model_picker = Some(ModelPicker::new(rows));
+                let mut picker = ModelPicker::new(rows);
+                let current = self.model_label();
+                picker.reset_order(Some(&current), None);
+                self.model_picker = Some(picker);
             }
             return;
         };
@@ -96,6 +105,8 @@ impl Chat {
     /// Stash arriving rows and settle the open picker (gh #232).
     fn apply_model_refresh(&mut self, rows: Vec<crate::state::ModelRow>) {
         self.model_rows_cache = Some(rows.clone());
+        // Read the active model before borrowing the picker (gh #396).
+        let current = self.model_label();
         let Some(picker) = self.model_picker.as_mut() else {
             return;
         };
@@ -109,7 +120,9 @@ impl Chat {
         }
         picker.models = rows;
         picker.loading = false;
-        picker.refilter();
+        // Gh #396: the arriving rows get the same defined order the opening path
+        // applies, so a background discovery does not reintroduce catalog order.
+        picker.reset_order(Some(&current), None);
         picker.selected = picker.selected.min(picker.matches.len().saturating_sub(1));
     }
 

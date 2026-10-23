@@ -41,7 +41,7 @@ fn options() -> UiOptions {
         plain: true,
         invoke_command: Arc::new(|_, _| CommandEffect::None),
         slash_commands: vec!["/help".into(), "/model".into()],
-        models: vec![("p/m".to_string(), "M".to_string())],
+        models: vec![lca_ui::ModelRow::from(("p/m".to_string(), "M".to_string()))],
         workspace: PathBuf::from("."),
         keybinding_overrides: Default::default(),
         keybinding_error: None,

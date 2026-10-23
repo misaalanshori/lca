@@ -659,7 +659,7 @@ fn dispatching_help_never_enumerates_models() {
     let mut options = options();
     options.hooks.models = Some(Arc::new(move || {
         counted.fetch_add(1, Ordering::SeqCst);
-        vec![("m".to_string(), "M".to_string())]
+        vec![crate::ModelRow::from(("m".to_string(), "M".to_string()))]
     }));
     let mut chat = Chat::new(options, Arc::new(KeybindingsManager::new()));
     for command in [
@@ -697,7 +697,7 @@ fn model_catalog_snapshots_and_login_invalidates() {
     let mut options = options();
     options.hooks.models = Some(Arc::new(move || {
         counted.fetch_add(1, Ordering::SeqCst);
-        vec![("m".to_string(), "M".to_string())]
+        vec![crate::ModelRow::from(("m".to_string(), "M".to_string()))]
     }));
     let mut chat = Chat::new(options, Arc::new(KeybindingsManager::new()));
     // gh #232: the drain makes each background arrival deterministic.
@@ -735,7 +735,7 @@ fn switch_reload_and_revoke_invalidate_the_snapshot() {
     let mut options = options();
     options.hooks.models = Some(Arc::new(move || {
         counted.fetch_add(1, Ordering::SeqCst);
-        vec![("m".to_string(), "M".to_string())]
+        vec![crate::ModelRow::from(("m".to_string(), "M".to_string()))]
     }));
     options.hooks.switch_session = Some(Arc::new(|_: &str| Some(vec![])));
     options.hooks.reload = Some(Arc::new(|| crate::state::ReloadReport {
@@ -865,7 +865,7 @@ fn model_picker_opens_instantly_while_discovery_runs() {
     opts.hooks.models = Some(Arc::new(move || {
         flag.store(true, Ordering::SeqCst);
         held.wait();
-        vec![("m".to_string(), "M".to_string())]
+        vec![crate::ModelRow::from(("m".to_string(), "M".to_string()))]
     }));
     let mut chat = Chat::new(opts, Arc::new(KeybindingsManager::new()));
     for c in "/model".chars() {
@@ -899,7 +899,7 @@ fn cached_catalog_opens_with_rows_and_no_refresh_thread() {
     opts.models = Vec::new();
     opts.hooks.models = Some(Arc::new(move || {
         counted.fetch_add(1, Ordering::SeqCst);
-        vec![("m".to_string(), "M".to_string())]
+        vec![crate::ModelRow::from(("m".to_string(), "M".to_string()))]
     }));
     let mut chat = Chat::new(opts, Arc::new(KeybindingsManager::new()));
     for c in "/model".chars() {

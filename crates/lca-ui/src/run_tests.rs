@@ -704,9 +704,11 @@ fn pending_models_delivery_invalidates_the_snapshot() {
     let mut opts = options();
     opts.hooks.models = Some(Arc::new(move || {
         counted.fetch_add(1, Ordering::SeqCst);
-        vec![("m".to_string(), "M".to_string())]
+        vec![crate::ModelRow::from(("m".to_string(), "M".to_string()))]
     }));
-    opts.pending_models = Some(Arc::new(|| vec![("n".to_string(), "N".to_string())]));
+    opts.pending_models = Some(Arc::new(|| {
+        vec![crate::ModelRow::from(("n".to_string(), "N".to_string()))]
+    }));
     let mut chat = Chat::new(opts, Arc::new(KeybindingsManager::new()));
     for c in "/model".chars() {
         chat.handle_key(&c.to_string());
