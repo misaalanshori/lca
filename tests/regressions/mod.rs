@@ -1047,3 +1047,16 @@ mod interactive_shell_tty;
 // `read_dir`-dependent.
 #[path = "502-fuzzy-walk-budget.rs"]
 mod fuzzy_walk_budget;
+
+// GitHub #398 (gap 1): the sign-in URL over SSH/tmux. A 250-character OAuth URL
+// wraps across three or four rows in the login modal; dragging the mouse across
+// them grabs the `\n`s at the soft-wrap seams plus the modal's padding and `│`
+// borders, and `OSC 8` click-through is unavailable exactly where this matters.
+// The URL is the only way to finish the login, so the user had to reconstruct it
+// by hand. Gap 1 fixes the two halves that matter: a one-key copy of the exact
+// unwrapped URL with in-place `Copied URL to clipboard` feedback, and a short
+// clickable label gated on the terminal actually forwarding `OSC 8`. Gaps 2-5
+// (cumulative login history, expand-during-confirm, credential provenance, lazy
+// themed text) stay open and are listed in the batch report.
+#[path = "398-oauth-url-copy.rs"]
+mod oauth_url_copy;

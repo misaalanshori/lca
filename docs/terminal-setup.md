@@ -38,6 +38,33 @@ lives below config's reach, so they parse and do nothing. The
 environment variable (hyperlinks) and the keys above are the real
 controls.
 
+### Sign-in URLs over SSH and tmux (gh #398)
+
+A sign-in URL is 180-300 characters, so it wraps across three to five rows. On a
+local desktop that is fine - the terminal opens it on click. Over SSH or in tmux
+without hyperlink forwarding it is not: dragging the mouse across those rows
+copies the hard newlines at the wrap seams plus the modal's padding, and the URL
+you paste into the browser is broken. Before, you had to retype it.
+
+Now both places a sign-in URL appears - `/login`'s waiting screen and `/mcp`'s
+sign-in screen - offer:
+
+- **one key to copy the exact URL**. The binding is `app.message.copy` (`Ctrl+X`
+  by default, shown live - a rebind changes the hint). What lands on the
+  clipboard is the URL and nothing else: no newline, no padding, no truncation
+  marker. A 264-character URL copies as 264 bytes.
+- **in-place confirmation.** The hint row becomes `Copied URL to clipboard` for a
+  few seconds, where you were looking, and the URL stays on screen. If no
+  clipboard is reachable the notice says so instead of claiming success.
+- **`Ctrl+click to open`** - a short label that *is* the link - but only when the
+  terminal forwards `OSC 8`. Where it does not, the label is not drawn: a hint
+  you cannot follow is worse than no hint. The copy key works either way, which
+  is why it is always offered.
+
+In fullscreen (`/fullscreen`) a copy can also go out as `OSC 52` when no native
+clipboard is reachable, which is the usual case on a remote box. That path is
+unverified by nature, and the notice says so.
+
 ### Tab status (gh #213)
 
 LCA reports its lifecycle over the [Program Status Protocol (OSC 7501)](https://www.superlogical.com/rex/docs/build/program-status) — `working` while the agent is busy, `blocked` while a modal waits for you, `done` / `error` when the turn settles, `idle` while the editor waits, `clear` on shutdown — so tab bars and dashboards can badge it. Reports carry only the state and `app=lca`, never prompt text or output. Unknown 7501 traffic arriving on stdin is swallowed, never typed.

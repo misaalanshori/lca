@@ -7,6 +7,28 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **Sign-in URLs are copyable in one key over SSH and tmux** (gh #398, gap 1). A
+  sign-in URL is 180-300 characters, so it wraps across three to five rows;
+  dragging the mouse across them copies the hard newlines at the wrap seams plus
+  the modal's padding, and what reaches the browser is broken. `OSC 8`
+  click-through - the local-desktop escape hatch - is unavailable exactly there,
+  so the URL *is* the only way to finish the login. Both surfaces that show one
+  (`/login`'s waiting screen and `/mcp`'s sign-in screen) now offer one key
+  (`app.message.copy`, resolved from the live registry so a rebind changes the
+  hint) that copies the URL byte for byte, with `Copied URL to clipboard`
+  replacing the hint **in place** for a few seconds, and a short
+  `Ctrl+click to open` label that is itself the link - drawn only where the
+  terminal forwards `OSC 8`, because a hint you cannot follow is worse than none.
+  Two defects fell out of doing it: the `/mcp` sign-in screen ignored the copy key
+  entirely (the modal owned the keyboard and the key was refused with it), and the
+  CLI's pre-wrapped `OSC 8` label was escaped by `sanitize_block` into the visible
+  text `\x1b]8;;`, printing the URL twice behind garbage and stopping
+  `linkify_urls` from linking it at all. Receipt: a real 264-character
+  authorization URL in a real tmux pane, copied through `OSC 52`, decoded
+  byte-identical with no newline and no escape; the same URL reconstructed from
+  the wrapped rows is 268 bytes with a `\n` at offset 56. Gaps 2-5 of #398
+  (cumulative login history, expand-during-confirm, credential provenance, lazy
+  themed text) remain open.
 - **`@` completion reaches the file a query names, even beside a wide directory**
   (gh #502). The fuzzy walk capped itself on `out.len() > 200` - the number of
   **matches** found - so a wide shallow directory at the root spent the whole

@@ -38,6 +38,7 @@ mod copy_ladder;
 pub mod dialogs;
 pub mod ext_widgets;
 pub mod footer;
+mod login_step;
 mod mcp_types;
 pub mod render;
 pub mod resume;

@@ -575,6 +575,11 @@ fn handle_input(
         // Gh #200: on the OAuth waiting screen the target is the
         // sign-in URL itself, and a verified native copy says so.
         let from_wait = selection.trim().is_empty() && chat.world.login_waiting.is_some();
+        // Gh #398 gap 1: the MCP sign-in screen shows the other wrapped
+        // authorization URL, and it gets the same in-place confirmation.
+        let from_mcp = selection.trim().is_empty()
+            && chat.world.login_waiting.is_none()
+            && chat.mcp_sign_in_url().is_some();
         let target = if selection.trim().is_empty() {
             chat.message_copy_text()
         } else {
@@ -589,8 +594,15 @@ fn handle_input(
                     matches!(screen, Screen::Alt(_)).then(|| &mut send as &mut dyn FnMut(&str)),
                 )
             };
+            // Gh #398 gap 1: on the waiting screen the confirmation also shows
+            // **in place**, where the hint was - a reader who pressed the key
+            // should not have to hunt for a toast in the corner. The toast stays
+            // for the non-URL targets and for the OSC 52 fallback's honesty.
+            if from_wait || from_mcp {
+                chat.note_url_copied(report != CopyReport::Failed);
+            }
             chat.toast(match report {
-                CopyReport::Native if from_wait => {
+                CopyReport::Native if from_wait || from_mcp => {
                     "\u{2713} Copied sign-in URL to clipboard".to_string()
                 }
                 report => report.notice(),

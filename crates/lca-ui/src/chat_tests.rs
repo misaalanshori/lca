@@ -1025,6 +1025,11 @@ mod tooltip_tests;
 #[path = "chat_overlay_tests.rs"]
 mod overlay_tests;
 
+// Gh #398 gap 1: the sign-in URL over SSH/tmux (one-key exact copy, in-place
+// confirmation, and a clickable label only where clicking works).
+#[path = "chat_auth_url_tests.rs"]
+mod auth_url_tests;
+
 #[path = "chat_bug_tests.rs"]
 mod bug_tests;
 
