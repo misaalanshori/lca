@@ -222,6 +222,10 @@ impl Chat {
             if picker.matches.is_empty() {
                 body.push("  (no matches)".to_string());
             }
+            // Gh #395 gap 1: the row's title comes from the tree painter, which
+            // supplies the `│/├─/└─` prefix when the query is empty and the bare
+            // title when it is not (a search flattens, by design).
+            let painted = picker.paint_rows();
             for (row, index) in picker.matches.iter().enumerate() {
                 let entry = &picker.entries[*index];
                 let cur = if row == picker.selected { '>' } else { ' ' };
@@ -237,9 +241,15 @@ impl Chat {
                 } else {
                     format!(" [{}]", entry.labels.join(", "))
                 };
+                // The painted title carries the tree prefix; the rest of the row
+                // grammar (message count, age) is unchanged.
+                let title = painted
+                    .get(row)
+                    .cloned()
+                    .unwrap_or_else(|| entry.title.clone());
                 body.push(format!(
                     " {cur} {}{} ({} messages, {})",
-                    entry.title, marks, entry.messages, entry.age
+                    title, marks, entry.messages, entry.age
                 ));
             }
             self.picker_overlay(

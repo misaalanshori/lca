@@ -166,6 +166,8 @@ fn resume_filter_matches_bookmark_names() {
         messages: 4,
         age: "5m".into(),
         labels: vec!["checkpoint-1".into()],
+        modified_ms: 0,
+        parent: None,
     }];
     assert_eq!(filter_sessions(&entries, "checkpoint").len(), 1);
     assert!(filter_sessions(&entries, "nope").is_empty());

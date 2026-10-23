@@ -43,6 +43,12 @@ impl Ui {
                         messages: summary.message_count,
                         age: age_label(now, summary.modified_ms),
                         labels,
+                        // Gh #395 gap 1: the fork linkage the store already reads
+                        // from the child's `fork-point` record (ADR-0046), and the
+                        // raw timestamp the tree orders by - "3h" cannot order two
+                        // sessions an hour apart.
+                        modified_ms: summary.modified_ms,
+                        parent: summary.parent_session,
                     }
                 })
                 .collect()

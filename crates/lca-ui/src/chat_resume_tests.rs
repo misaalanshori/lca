@@ -31,6 +31,8 @@ fn resume_delete_confirms_and_trashes() {
                 messages: 1,
                 age: "now".to_string(),
                 labels: Vec::new(),
+                modified_ms: 0,
+                parent: None,
             })
             .collect()
     }));
