@@ -117,3 +117,169 @@ fn the_run_loop_resets_at_one_seam_not_at_call_sites() {
         "the seam decides on the transcript generation, not on which command ran"
     );
 }
+
+// ---------------------------------------------------------------------------
+// gh #403 gap 2: every exit tells you how to come back.
+//
+// The fullscreen-exit path already named the session id (gh #82), but a user who
+// quit any other way got nothing - so "how do I get back to this?" had no answer
+// in the transcript. The fix prints a pasteable resume command on exit.
+//
+// The whole difficulty is **conditional honesty**: a hint shown when the command
+// would fail is worse than no hint, because it teaches the user the tool lies. So
+// the formatter is one function with three gates, and these rows pin the gates
+// rather than the wording:
+//
+//   1. a TTY (a piped/headless run must gain zero bytes - scripted users parse it)
+//   2. a session that was actually saved (a run that died before `session-start`
+//      has no id to resume)
+//   3. a non-default session dir gets shell-quoted, so the printed line is
+//      pasteable on a path with spaces
+//
+// One formatter, not two: the fullscreen hint and the exit hint call the same
+// function, which is the #456 one-copy rule.
+// ---------------------------------------------------------------------------
+
+// Verifies: gh #403 gap 2 - **one formatter.** The fullscreen-exit hint (gh #82)
+// and the new exit hint must come from the same function; two `format!`s drift.
+#[test]
+fn the_resume_hint_has_exactly_one_formatter() {
+    let ui_run = read("crates/lca-ui/src/run.rs");
+
+    // The formatter lives in the interface (its own module, split for the file
+    // ceiling), which both crates can reach.
+    let formatter = read("crates/lca-ui/src/resume_command.rs");
+    assert!(
+        formatter.contains("pub fn resume_command("),
+        "the one formatter is `lca_ui::resume_command::resume_command`"
+    );
+    // The gh #82 fullscreen hint must call it rather than spell its own line.
+    let fullscreen = ui_run
+        .find("fn exit_hint(")
+        .expect("the gh #82 hint exists");
+    let body = &ui_run[fullscreen..];
+    let end = body.find("\n}\n").unwrap_or(body.len());
+    assert!(
+        body[..end].contains("resume_command("),
+        "the fullscreen hint reuses the one formatter"
+    );
+    // Neither call site builds the line itself.
+    let cli_close = read("crates/lca-cli/src/tui/close.rs");
+    for (name, source) in [
+        ("lca-ui/src/run.rs", &ui_run),
+        ("lca-cli/src/tui/close.rs", &cli_close),
+    ] {
+        assert!(
+            !source.contains("resume with: lca"),
+            "{name} must not spell the hint itself - it calls the one formatter"
+        );
+    }
+    assert!(
+        cli_close.contains("exit_resume_hint("),
+        "the CLI exit path calls the shared formatter"
+    );
+}
+
+// Verifies: gh #403 gap 2 - **gate 1: a TTY.** A piped run must gain no bytes.
+// The CLI exit path asks `IsTerminal` on stdout before printing anything.
+#[test]
+fn the_exit_hint_requires_a_tty_stdout() {
+    let close = read("crates/lca-cli/src/tui/close.rs");
+    assert!(
+        close.contains("is_terminal()"),
+        "the exit path checks that stdout is a terminal before building the hint"
+    );
+    // The check and the formatter call are in the same function, so the guard
+    // cannot drift away from the print it protects.
+    let seam = close
+        .find("fn exit_resume_hint(")
+        .expect("the hint builder exists");
+    let body = &close[seam..];
+    let end = body.find("\n    }\n").unwrap_or(body.len());
+    assert!(
+        body[..end].contains("is_terminal()"),
+        "the TTY check is inside the builder, beside the call it guards"
+    );
+    // Gate 2 is a filesystem question, not "does an id exist": a lazy session
+    // has an id from the moment the interface opens but no log until the first
+    // record, and `SessionStore::close` uses this same test.
+    assert!(
+        body[..end].contains("log_path().is_file()"),
+        "the hint asks whether the session was actually written"
+    );
+}
+
+// Verifies: gh #403 gap 2 - **gate 3: shell quoting.** The formatter quotes a
+// non-default session dir, and leaves the default alone so the common command
+// stays clean.
+#[test]
+fn a_non_default_session_dir_is_shell_quoted() {
+    let source = read("crates/lca-ui/src/resume_command.rs");
+    assert!(
+        source.contains("fn shell_quote("),
+        "the quoting helper exists"
+    );
+    let start = source
+        .find("pub fn resume_command(")
+        .expect("the formatter exists");
+    let body = &source[start..];
+    let end = body.find("\n}\n").unwrap_or(body.len());
+    let body = &body[..end];
+    assert!(
+        body.contains("shell_quote"),
+        "the formatter routes the dir through a quoting helper: {body}"
+    );
+}
+
+// Verifies: gh #403 gap 2 - **gate 2: the session was really saved.** The exit
+// hint is printed after `close()`, which is what actually persists; printing
+// before it would advertise sessions that a failed close never wrote.
+#[test]
+fn the_hint_is_printed_after_the_session_is_closed() {
+    let close = read("crates/lca-cli/src/tui/close.rs");
+    let body = close
+        .find("pub(super) fn close(&self)")
+        .expect("the close-out exists");
+    let tail = &close[body..];
+    let written = tail
+        .find("self.store.close(&session)")
+        .expect("close persists each opened session");
+    let hint = tail
+        .find("exit_resume_hint()")
+        .expect("the hint is built in this seam");
+    assert!(
+        written < hint,
+        "the hint follows the save: a session that failed to write must not be advertised"
+    );
+    // And nothing else prints it, so the seam cannot be bypassed by a call site.
+    let mod_rs = read("crates/lca-cli/src/tui/mod.rs");
+    assert!(
+        !mod_rs.contains("println!(\"{hint}\")"),
+        "the print lives in close(), not at the exit call sites"
+    );
+}
+
+// Verifies: gh #403 gap 2 - **the id comes from the save, not the launcher.** The
+// hint names the session that was actually written, reached through the opened
+// set, so a `/tree` branch switch or a `/resume` inside the session names the
+// session the user was last in rather than the one they started in.
+#[test]
+fn the_hint_names_the_session_that_was_saved() {
+    let source = read("crates/lca-cli/src/tui/close.rs");
+    let seam = source
+        .find("fn exit_resume_hint(")
+        .expect("the hint builder exists");
+    let body = &source[seam..];
+    let end = body.find("\n    }\n").unwrap_or(body.len());
+    // `self` and the field are on separate lines (rustfmt splits a long
+    // method chain), so match the field name rather than one spelling of the
+    // access.
+    assert!(
+        body[..end].contains("current_session"),
+        "the exit hint reads the session the run ended in, not the launch argument"
+    );
+    assert!(
+        !body[..end].contains("resume:"),
+        "and not the launch argument, which may name a session already left"
+    );
+}
