@@ -857,13 +857,14 @@ impl Chat {
             };
             parts.push(format!("\x1b]8;;{url}\x07{click}\x1b]8;;\x07"));
         }
-        parts.push(format!("{copy_key} to copy"));
+        // pi's `keyHint` shape (`keybinding-hints.ts`): the key in `dim`, the
+        // words in `muted`, " • " between the two halves. Matching it means the
+        // two agents' auth screens read the same way, which is the point of the
+        // parity rows.
         let dim = self.theme.role(crate::theme::Role::Dim);
-        parts
-            .into_iter()
-            .map(|part| dim(&part))
-            .collect::<Vec<_>>()
-            .join(" · ")
+        let muted = self.theme.role(crate::theme::Role::Muted);
+        parts.push(format!("{} {}", dim(&copy_key), muted("to copy")));
+        parts.join(&format!(" {} ", dim("•")))
     }
 
     /// Record that the sign-in URL was copied (gh #398 gap 1): the confirmation
