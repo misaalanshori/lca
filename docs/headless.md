@@ -110,6 +110,15 @@ v1, prompts after `shutdown`, and malformed lines (`command:
 "parse"`, no id). A failure after acceptance surfaces as events, not
 as a second response.
 
+**Commands may arrive at any time, including mid-turn** (gh #489). A line
+written while a turn is streaming is handled without disturbing it: `steer` and
+`follow_up` queue, `cancel` fires the flag, `shutdown` waits for the turn, and
+`prompt` is refused as "streaming" with the `streamingBehavior` hint rather than
+replacing the run. A client that writes a command per turn-completion boundary,
+and one that writes the whole script up front, see the same behaviour — the loop
+polls the turn in place rather than handing it to a branch that a competing
+stdin line could discard.
+
 The RPC Extension UI sub-protocol is out: extension-UI-over-RPC needs
 the ui@0.6.0 world work (#172's train).
 ## The `auth` commands
