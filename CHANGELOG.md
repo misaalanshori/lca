@@ -7,6 +7,23 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **`--mode rpc` no longer loses a turn when a command arrives mid-turn** (gh
+  #489). The loop drove its turn with `run.take()` inside a `tokio::select!`
+  branch future, and `select!` rebuilds every branch future on each iteration — so
+  a stdin line arriving while a turn was streaming made the select drop the future
+  holding the taken run, and `turn_state`, which had moved into that same future,
+  died with it. All four promises the docs make broke at once: `prompt` answered
+  `"started"` for a run that never called the provider, `follow_up` and `shutdown`
+  had no run end to hang their queues off, and every later `prompt` on that session
+  was a silent no-op. Measured on the shipped happy-path script: one turn lost in
+  40 idle, **6 in 40 (15%) under load**, and 100% when a second line was written at
+  any non-zero delay. The future is now a pinned local the select polls in place
+  (`run.as_mut()`), cleared only by the arm that observed completion — so a command
+  arriving mid-turn costs a poll, never a turn. Six rows in `e2e_rpc.rs` pin the
+  four promises and both flanking cases; all six fail on the old code. The two rows
+  quarantined under gh #195 ("turn-ends dropped under load") were this same bug —
+  they are un-quarantined and green.
+
 - **Running `lca` from your home directory no longer reads your own config as a
   project's** (gh #481). From `$HOME`, `<cwd>/.lca/config.toml` and
   `~/.lca/config.toml` are the same file, so a documented user setting

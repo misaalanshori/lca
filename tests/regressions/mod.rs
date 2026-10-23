@@ -757,6 +757,11 @@ mod deny_rule_actually_matches;
 #[path = "459-stderr-tail-never-blocks.rs"]
 mod stderr_tail_never_blocks;
 
+// Gh #489: the RPC loop must poll its turn future in place; a `take()` inside a
+// `select!` branch drops the turn and the session's state with it.
+#[path = "489-rpc-turn-future-is-never-dropped.rs"]
+mod rpc_turn_future_is_never_dropped;
+
 // Gh #481: from `$HOME` the user config is not a project config - the project
 // layer does not exist when the two paths name the same file.
 #[path = "481-user-config-is-not-a-project-config.rs"]
