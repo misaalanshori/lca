@@ -1068,3 +1068,12 @@ mod oauth_url_copy;
 // `autocomplete.trigger` capability are the deferred half (see the report).
 #[path = "408-trigger-provider-seam.rs"]
 mod trigger_provider_seam;
+
+// GitHub #393: a compaction summary collapses to one self-describing card instead
+// of printing a wall of prose the reader has already watched happen. These rows
+// guard the shape - the default stays collapsed, the stored record does not
+// change, the card reuses the tool-card override lifecycle rather than growing a
+// second one, and the live and replay paths build the same card. A branch summary
+// gets the same treatment; before this it rendered nowhere at all.
+#[path = "393-compaction-card-collapses.rs"]
+mod compaction_card_collapses;
