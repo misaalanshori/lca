@@ -12,6 +12,10 @@ The ABI is the `lca:ext` WIT package: the worlds `provider`, `tool`, `command`, 
 
 The ABI does not cover the internal crates. `lca-core` and `lca-session` change freely. It does not cover the terminal interface, the configuration file format, or the command line, which have their own compatibility rules in the release policy.
 
+**Where the contract lives (gh #439).** The `lca:ext` package is **not published to a registry**. It is distributed as the `wit/` directory in this repository, and an author vendors it from a source checkout at the tag they target; the extension authoring guide's "Getting `wit/`" section carries the command. Two consequences an author has to know: `wit/` is the entire contract (`deps/lca-host/` included — a copy without it does not resolve), and a **release tag's `wit/` is a snapshot, so it can lag the line**: publishing a release does not rewrite `wit/`, and imports added later are absent from an older tag. Read the tag's `wit/world-*.wit` for the imports it actually declares rather than assuming the current line's set.
+
+Nothing publishes the package today because `wkg`'s publish path wants a registry namespace that matches the package identity (`lca:ext` maps to the repository `lca/ext`), and this project's artifacts publish under `misaalanshori/lca/<name>`. Publishing is tracked, not implemented; if it lands, it lands as a workflow step and this section names the registry.
+
 ## Version numbers
 
 The ABI uses semantic versioning, and the numbers mean specific things here.
