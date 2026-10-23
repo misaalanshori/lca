@@ -185,3 +185,143 @@ fn only_boolean_rows_offer_the_override() {
         "a row without that pair carries no project state"
     );
 }
+
+// ===========================================================================
+// The cycle half of #397 (this batch): value-preserving cycles and wizards.
+//
+// The tri-state fix above closed a one-way door on a *boolean*. The same defect
+// existed for an enum: cycling a key whose file holds a value outside the preset
+// list ran `position(...).unwrap_or(0)`, so a miss fell back to index 0 and the
+// first press wrote the *second* preset - the user's hand-set `wheel_lines = 4`
+// was gone from the file after one keypress, with no way back.
+//
+// These rows guard the two mechanism-shaped properties a behaviour row cannot
+// see: that the cycle list is built *including* the current value, and that the
+// wizard commits through the one persist seam rather than a writer of its own.
+// ===========================================================================
+
+// Verifies: gh #397 - **the cycle list is presets union the current value**, the
+// pi `settings-selector.ts` shape (`...new Set([1, 2, 3, 5, 10, current])`).
+//
+// Asserted on the source because the property is "the list is built this way",
+// not "this one row cycles to this one value": a future edit could special-case
+// one key and pass a behaviour row while leaving every other enum clobbering.
+#[test]
+fn the_cycle_list_includes_the_value_the_file_holds() {
+    let commands = read("crates/lca-ui/src/chat_setting_cycle.rs");
+    let cycle = commands
+        .split("fn cycle_options_with(")
+        .nth(1)
+        .and_then(|rest| rest.split("fn next_cycle_value(").next())
+        .expect("cycle_options exists");
+    assert!(
+        cycle.contains("options.push(row.value.clone())"),
+        "the current value is added to the list, so a custom value is a stop:\n{cycle}"
+    );
+    assert!(
+        cycle.contains("!row.masked"),
+        "and a masked secret's `********` is not treated as a stop (gh #218):\n{cycle}"
+    );
+    // The defect itself, named: a miss must never be silently "index 0".
+    assert!(
+        !cycle.contains("unwrap_or(0)"),
+        "the cycle no longer falls back to index 0 on a miss:\n{cycle}"
+    );
+}
+
+// Verifies: gh #397 - **`default` persists as a key removal**. The `default` stop
+// is the round trip's other end, and writing it as a magic string would put a
+// value in the file that the loader does not know - so it reuses
+// `persist_setting(key, None)`, the same unset contract the tri-state's
+// `inherit` uses.
+#[test]
+fn the_default_stop_writes_a_removal_not_a_value() {
+    let commands = read("crates/lca-ui/src/chat_setting_cycle.rs");
+    let persisted = commands
+        .split("fn persisted_for(")
+        .nth(1)
+        .and_then(|rest| rest.split("fn cycle_setting(").next())
+        .expect("persisted_for exists");
+    assert!(
+        persisted.contains("value != \"default\""),
+        "`default` maps to no value, which is how a key is removed:\n{persisted}"
+    );
+    assert!(
+        commands.contains("persist(&key, None)"),
+        "and the cycle_setting path writes that removal through the shared hook"
+    );
+}
+
+// Verifies: gh #397 - **the wizard holds no writer of its own**. Design point 3:
+// it commits through the same `persist_setting` seam `/settings` uses. A second
+// writer is the drift this repo has closed three times (#403's formatter, #456's
+// grant mapping, #407's stop/run/start), so the guard is that the type *names*
+// the seam rather than owning one.
+#[test]
+fn the_wizard_commits_through_the_shared_setting_seam() {
+    let pickers = read("crates/lca-ui/src/chat_pickers.rs");
+    let commit = pickers
+        .split("pub fn commit(")
+        .nth(1)
+        .and_then(|rest| rest.split("pub fn persist_through(").next())
+        .expect("commit exists");
+    assert!(
+        commit.contains("Vec<(String, Option<String>)>"),
+        "the wizard returns the writes instead of performing them:\n{commit}"
+    );
+    // It must not reach for a config file or a second persistence route.
+    for forbidden in ["std::fs::write", "config.toml", "fs::File"] {
+        assert!(
+            !pickers.contains(forbidden),
+            "the picker module never touches the file itself (`{forbidden}`)"
+        );
+    }
+    let keys = read("crates/lca-ui/src/chat_keys.rs");
+    assert!(
+        keys.contains("self.apply_setting(&wizard_key, &value)"),
+        "and the key path commits through `apply_setting`, the `/settings` writer"
+    );
+}
+
+// Verifies: gh #397 - **a wizard is atomic at the keyboard**, which is the half
+// the brief says can do damage. The `esc` arm must not call the commit path, and
+// the commit path must exist only under the finishing `enter`.
+//
+// Source-level because "which arm writes" is exactly the property: a behaviour
+// row that cancels would pass even if a *third* arm also wrote.
+#[test]
+fn the_escape_arm_cancels_instead_of_committing() {
+    let keys = read("crates/lca-ui/src/chat_keys.rs");
+    let wizard = keys
+        .split("self.world.wizard.take()")
+        .nth(1)
+        .and_then(|rest| {
+            rest.split("if let Some(mut picker) = self.settings_picker.take()")
+                .next()
+        })
+        .expect("the wizard key arm exists");
+    let escape_at = wizard
+        .find("Some(\"escape\")")
+        .expect("the escape arm exists");
+    let commit_at = wizard
+        .find("wizard.commit()")
+        .expect("the commit call exists");
+    assert!(
+        escape_at < commit_at,
+        "the escape arm is a separate arm from the commit arm"
+    );
+    // The text between the escape arm and the next arm must not commit.
+    let after_escape = &wizard[escape_at..];
+    let escape_arm_end = after_escape
+        .find("Some(\"left\")")
+        .expect("the left arm follows escape");
+    assert!(
+        !after_escape[..escape_arm_end].contains("commit()"),
+        "escaping never commits - not even the steps already confirmed:\n{}",
+        &after_escape[..escape_arm_end]
+    );
+    assert!(
+        after_escape[..escape_arm_end].contains("wizard.cancel()"),
+        "it cancels the whole wizard"
+    );
+}

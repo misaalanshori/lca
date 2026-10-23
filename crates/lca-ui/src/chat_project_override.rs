@@ -23,7 +23,10 @@ impl Chat {
         picker: &mut crate::chat_pickers::SettingsPicker,
         forward: bool,
     ) -> String {
-        let Some(row) = picker.rows.get(picker.selected) else {
+        // Gh #397: resolve through the *visible* set, not `rows[selected]` -
+        // the cursor indexes the filtered list, so indexing the raw rows acted
+        // on a different setting entirely whenever a search was active.
+        let Some(row) = picker.selected_row().cloned() else {
             return String::new();
         };
         let Some(state) = row.project else {

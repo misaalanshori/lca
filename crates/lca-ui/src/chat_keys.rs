@@ -476,6 +476,89 @@ impl Chat {
         // the value through the one persist seam), q/Escape close.
         // While a row edits, keystrokes land in its buffer; navigation
         // waits for Enter (apply) or Escape (cancel).
+        // Gh #397: a stepped wizard owns the keyboard while it walks, and it
+        // paints above the `/settings` list it was opened from, so cancelling
+        // puts the reader back on the opener row rather than at the top.
+        //
+        // Nothing is written here except on the finishing `enter`: every step is
+        // a *proposal* until then, which is what makes `esc` at the last step
+        // apply nothing (not "the steps you already confirmed").
+        if let Some(mut wizard) = self.world.wizard.take() {
+            match key {
+                Some("escape") => {
+                    // Cancel the whole wizard. The opener key puts the cursor
+                    // back where it started, so the reader is not dumped.
+                    wizard.cancel();
+                    let opener = wizard.opener_key.clone();
+                    if let Some(picker) = self.settings_picker.as_mut()
+                        && let Some(index) = picker.rows.iter().position(|row| row.key == opener)
+                    {
+                        picker.selected = index;
+                    }
+                    self.say("wizard cancelled - nothing changed".to_string());
+                }
+                Some("left") => {
+                    wizard.step_back();
+                    self.world.wizard = Some(wizard);
+                }
+                Some("enter") if wizard.current + 1 >= wizard.steps.len() => {
+                    // Last step: commit every pending choice through the shared
+                    // `persist_setting` hook `/settings` uses (one writer).
+                    let commits = wizard.commit();
+                    let opener = wizard.opener_key.clone();
+                    let mut changed = Vec::new();
+                    for (wizard_key, value) in commits {
+                        let Some(value) = value else { continue };
+                        let notice = self.apply_setting(&wizard_key, &value);
+                        changed.push(notice);
+                    }
+                    // Re-read before the mutable borrow, so the rows reflect
+                    // what the writes actually did (the borrow checker is
+                    // pointing at the same ordering `/settings` uses).
+                    let refreshed = self.settings_rows();
+                    if let Some(picker) = self.settings_picker.as_mut() {
+                        picker.selected = refreshed
+                            .iter()
+                            .position(|row| row.key == opener)
+                            .unwrap_or(picker.selected);
+                        picker.rows = refreshed;
+                    }
+                    if changed.is_empty() {
+                        self.say("wizard finished - nothing changed".to_string());
+                    } else {
+                        for notice in changed {
+                            self.say(crate::state::sanitize_block(&notice));
+                        }
+                    }
+                }
+                Some("enter") | Some("right") => {
+                    // Advance; the choice was already recorded by up/down.
+                    wizard.step_forward();
+                    self.world.wizard = Some(wizard);
+                }
+                Some("up" | "k") | Some("down" | "j") => {
+                    // Choose the neighbouring value on the current step.
+                    let step = wizard.current_step().cloned();
+                    if let Some(step) = step
+                        && !step.values.is_empty()
+                    {
+                        let current = wizard
+                            .pending_value(&step.key)
+                            .unwrap_or(step.value.as_str())
+                            .to_string();
+                        let forward = key == Some("down") || key == Some("j");
+                        let next = Self::next_cycle_value(&step.values, &current, forward);
+                        wizard.choose(&next);
+                    }
+                    self.world.wizard = Some(wizard);
+                }
+                _ => {
+                    self.world.wizard = Some(wizard);
+                }
+            }
+            return Some(Action::Continue);
+        }
+
         if let Some(mut picker) = self.settings_picker.take() {
             if picker.editing.is_some() {
                 match key {
@@ -586,7 +669,14 @@ impl Chat {
                             self.settings_picker = Some(picker);
                         }
                         Some("thinking") => {
-                            self.open_thinking_picker();
+                            // Gh #397: the thinking row opens the **stepped
+                            // wizard** - the model, then its thinking level -
+                            // rather than the flat level picker. This is the
+                            // issue's own example of a group a flat list cannot
+                            // express, and it is why the wizard exists at all: a
+                            // step two that depends on step one, with nothing
+                            // written until both are confirmed.
+                            self.open_thinking_wizard();
                             self.settings_picker = Some(picker);
                         }
                         _ => {

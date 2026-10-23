@@ -506,6 +506,17 @@ pub(super) fn setting_meta(key: &str) -> (String, String) {
     }
 }
 
+/// Pi's `fullscreenWheelScrollLines` presets
+/// (`settings-selector.ts`, `1, 2, 3, 5, 10`).
+///
+/// Gh #397: a numeric row needs a preset list to be a *cycle* at all. The list is
+/// only the offered stops - the picker unions the value the file holds, so a
+/// hand-set `4` is reachable too rather than being clobbered.
+const WHEEL_LINE_PRESETS: &[&str] = &["1", "2", "3", "5", "10"];
+
+/// Pi's `imageWidthCells` presets (`settings-selector.ts`, `60, 80, 120`).
+const IMAGE_WIDTH_PRESETS: &[&str] = &["60", "80", "120"];
+
 pub(super) fn settings_rows(
     ui: &Arc<super::Ui>,
     data: std::path::PathBuf,
@@ -679,7 +690,17 @@ pub(super) fn settings_rows(
                 "ui.fullscreen_copy_on_select",
                 &["true", "false"],
             ),
-            row("Terminal & Execution", "ui.fullscreen_wheel_lines", &[]),
+            // Gh #397: the numeric rows cycle pi's presets, so a value the
+            // presets do not contain is a *stop on the cycle* rather than a
+            // free-text edit. That is the issue's own example
+            // (`fullscreenWheelScrollLines: 4` against `1, 2, 3, 5, 10`), and
+            // without a preset list here the row never takes the cycle path at
+            // all - found in a live pane, where `→` opened the editor instead.
+            row(
+                "Terminal & Execution",
+                "ui.fullscreen_wheel_lines",
+                WHEEL_LINE_PRESETS,
+            ),
             row(
                 "Terminal & Execution",
                 "ui.fullscreen_exit_output",
@@ -690,7 +711,11 @@ pub(super) fn settings_rows(
                 "terminal.show_images",
                 &["true", "false"],
             ),
-            row("Terminal & Execution", "terminal.image_width_cells", &[]),
+            row(
+                "Terminal & Execution",
+                "terminal.image_width_cells",
+                IMAGE_WIDTH_PRESETS,
+            ),
             row(
                 "Terminal & Execution",
                 "terminal.show_progress",

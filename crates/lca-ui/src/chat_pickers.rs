@@ -402,6 +402,20 @@ pub struct SettingsPicker {
     /// selection indexes `visible`, never `rows`, so filtering can never
     /// select a row that is not on screen.
     pub query: String,
+    /// Gh #397: the custom values the cycle has passed through, by key.
+    ///
+    /// This is the "remembered slot" the round trip needs. The list alone cannot
+    /// carry it: a `default` stop **removes the key**, so the next read of the
+    /// rows finds no value at all and the user's hand-set `4` is unreachable
+    /// again - the cycle would run `4 → 5 → 10 → default → 1 → 2 → 3 → 5` and
+    /// never come back. Remembering the custom value for as long as the picker is
+    /// open keeps it a stop *across* the removal, which is what makes
+    /// `custom → default → a → b → custom` close.
+    ///
+    /// Cleared when the picker closes, because its whole meaning is "a value this
+    /// visit passed through": persisting it across sessions would offer a stale
+    /// number the file no longer holds.
+    pub remembered: std::collections::BTreeMap<String, String>,
 }
 
 impl SettingsPicker {
@@ -449,3 +463,197 @@ pub const THINKING_LEVELS: &[(&str, &str)] = &[
     ("xhigh", "Extra-high reasoning (~32k tokens)"),
     ("max", "Maximum reasoning"),
 ];
+
+/// One step of a [`SteppedWizard`] (gh #397): a key, the value it starts at, and
+/// the values it may take.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WizardStep {
+    /// The configuration key this step writes.
+    pub key: String,
+    /// The step's paint label ("Model", "Thinking level").
+    pub label: String,
+    /// The value the step starts at - the applied one when the wizard opens.
+    pub value: String,
+    /// The values the step offers. Empty means the caller derives them from an
+    /// earlier pending choice ([`SteppedWizard::set_step_values`]).
+    pub values: Vec<String>,
+}
+
+/// A stepped settings wizard (gh #397): a related group walked as ordered steps.
+///
+/// The alternative - toggling each key one at a time in the flat list - cannot
+/// express a group whose later options depend on an earlier answer (a model's
+/// allowed thinking levels), and it cannot offer atomicity: every key press lands.
+///
+/// # Atomicity is the whole contract
+///
+/// Choices accumulate in `pending` and **nothing is written** until [`commit`].
+/// So `Esc` at the last step applies nothing at all - not "the steps you already
+/// confirmed", which would leave a half-finished configuration the user cannot
+/// recognise as half-finished. Every step is therefore a proposal, and the
+/// wizard's only power is to make the set of proposals visible before they land.
+///
+/// A later step reads `pending` ([`pending_value`]), never the applied value: the
+/// applied value describes what the session *was* on, and computing an option
+/// list from it would offer the levels of a model the user has already stepped
+/// away from.
+///
+/// [`commit`]: SteppedWizard::commit
+/// [`pending_value`]: SteppedWizard::pending_value
+pub struct SteppedWizard {
+    /// Which row of `/settings` opened it, so closing restores the cursor there
+    /// (pi's parent-restore: a submenu must not dump the reader at the top).
+    pub opener_key: String,
+    /// The steps, in the order they are walked.
+    pub steps: Vec<WizardStep>,
+    /// The step being edited.
+    pub current: usize,
+    /// Choices made so far, by key. The wizard's only state that could be
+    /// written - and it is not written until [`commit`](SteppedWizard::commit).
+    pub pending: std::collections::BTreeMap<String, String>,
+}
+
+impl SteppedWizard {
+    /// A wizard over `steps`, opened from `opener_key`, on the first step.
+    pub fn new(opener_key: &str, steps: Vec<WizardStep>) -> SteppedWizard {
+        SteppedWizard {
+            opener_key: opener_key.to_string(),
+            steps,
+            current: 0,
+            pending: std::collections::BTreeMap::new(),
+        }
+    }
+
+    /// The step being edited, if the wizard has any.
+    pub fn current_step(&self) -> Option<&WizardStep> {
+        self.steps.get(self.current)
+    }
+
+    /// The step being edited, as the tests and the painter name it.
+    pub fn current(&self) -> Option<&WizardStep> {
+        self.current_step()
+    }
+
+    /// Move to the next step. Past the last step there is nothing to walk to, so
+    /// the caller commits instead; this saturates rather than wrapping, because a
+    /// wizard that silently returned to step one would read as "start over".
+    pub fn step_forward(&mut self) {
+        self.current = (self.current + 1).min(self.steps.len().saturating_sub(1));
+    }
+
+    /// Back one step: the settings picker's existing `left` binding, not a new
+    /// one (gh #397 design point 5).
+    pub fn step_back(&mut self) {
+        self.current = self.current.saturating_sub(1);
+    }
+
+    /// Record a choice for the current step. **Pending only** - see the type's
+    /// doc for why nothing is written here.
+    pub fn choose(&mut self, value: &str) {
+        if let Some(step) = self.steps.get(self.current) {
+            self.pending.insert(step.key.clone(), value.to_string());
+        }
+    }
+
+    /// The value chosen so far for `key`: the pending choice when there is one,
+    /// else the step's starting value.
+    ///
+    /// This is what a later step must compute its options from. Reading the
+    /// *applied* value instead is the defect the type exists to prevent: on
+    /// cancel the session would be left describing a model it is not on.
+    pub fn pending_value(&self, key: &str) -> Option<&str> {
+        self.pending.get(key).map(String::as_str).or_else(|| {
+            self.steps
+                .iter()
+                .find(|step| step.key == key)
+                .map(|step| step.value.as_str())
+        })
+    }
+
+    /// Fill a step's option list once an earlier pending choice is known (a
+    /// model's supported thinking levels).
+    pub fn set_step_values(&mut self, index: usize, values: &[&str]) {
+        if let Some(step) = self.steps.get_mut(index) {
+            step.values = values.iter().map(|value| (*value).to_string()).collect();
+        }
+    }
+
+    /// Cancel the whole wizard: the pending choices go with it, and the caller
+    /// writes nothing. Returns the opener key so the picker can put the cursor
+    /// back on the row that opened it.
+    pub fn cancel(&mut self) -> Option<String> {
+        let had_pending = !self.pending.is_empty();
+        self.pending.clear();
+        had_pending.then(|| self.opener_key.clone())
+    }
+
+    /// The same cancel, always reporting - for a caller whose flow expects a
+    /// return value even when no choice was made yet.
+    pub fn take_cancel(&mut self) -> Option<String> {
+        self.pending.clear();
+        Some(self.opener_key.clone())
+    }
+
+    /// Finish: the `(key, value)` pairs to persist, in walk order.
+    ///
+    /// Only a step the user actually moved through contributes; a step left at
+    /// its starting value is not a change, and writing it would be a no-op that
+    /// still churns the file (and, for a `default` stop, could remove a key the
+    /// user meant to keep).
+    pub fn commit(&self) -> Vec<(String, Option<String>)> {
+        self.steps
+            .iter()
+            .filter_map(|step| {
+                let chosen = self.pending.get(&step.key)?;
+                Some((step.key.clone(), Some(chosen.clone())))
+            })
+            .collect()
+    }
+
+    /// The hook the wizard commits through (gh #397 design point 3): the same
+    /// `persist_setting` `/settings` uses, so there is one writer. Named as a
+    /// string rather than held as a function so the wizard cannot accidentally
+    /// grow its own config handle.
+    pub fn persist_through(&self) -> &'static str {
+        "persist_setting"
+    }
+
+    /// The hint row: existing keys only (gh #397 design point 5).
+    pub fn hint(&self) -> String {
+        format!(
+            "↑↓ choose · enter next · left back · esc cancel · step {}/{}",
+            self.current + 1,
+            self.steps.len().max(1)
+        )
+    }
+
+    /// The overlay's `(title, body)`: every step with its pending value, and the
+    /// current one marked.
+    pub fn body(&self) -> Vec<String> {
+        let mut rows = vec![String::new()];
+        for (index, step) in self.steps.iter().enumerate() {
+            let mark = if index == self.current { '>' } else { ' ' };
+            let shown = self
+                .pending
+                .get(&step.key)
+                .map_or_else(|| step.value.clone(), Clone::clone);
+            // Gh #397: an empty value must say *why* it is empty rather than
+            // printing a blank after the colon. A provider that declares no
+            // thinking levels is a real state, and a blank reads as a rendering
+            // fault (found in a live pane with a model that supports none).
+            let shown = if shown.is_empty() {
+                "(nothing offered for this model)".to_string()
+            } else {
+                shown
+            };
+            rows.push(format!(" {mark} {}: {shown}", step.label));
+        }
+        rows.push(String::new());
+        rows.push(format!(
+            " Step {}/{}",
+            self.current + 1,
+            self.steps.len().max(1)
+        ));
+        rows
+    }
+}

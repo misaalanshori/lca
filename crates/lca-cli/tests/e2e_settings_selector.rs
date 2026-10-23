@@ -72,9 +72,16 @@ fn settings_changes_a_setting_and_config_toml_carries_it() {
     // A config file whose comments and unrelated keys must survive the
     // write (the one persist seam, QA-015).
     std::fs::create_dir_all(sandbox.state_dir()).expect("mkdir .lca");
+    // Gh #397: the thinking row now opens a stepped wizard whose second step
+    // offers the model's allowed levels. This sandbox has no model catalog, so
+    // `models.thinking_levels` is what declares them - the same table a user
+    // would write, and the documented file-only form. Without it the wizard still
+    // opens (the model step is real) but offers no level, which would make this
+    // row unable to prove what it exists to prove: that a `/settings` edit
+    // reaches the file.
     std::fs::write(
         sandbox.state_dir().join("config.toml"),
-        "# my setup\ncompaction.threshold = 0.7\n",
+        "# my setup\ncompaction.threshold = 0.7\n\n[models.thinking_levels]\n\"test-model\" = [\"off\", \"minimal\", \"low\", \"medium\", \"high\"]\n",
     )
     .expect("write config");
 
@@ -133,16 +140,42 @@ fn settings_changes_a_setting_and_config_toml_carries_it() {
         session.wait_for(marker, std::time::Duration::from_secs(10));
     }
     session.send(&["Enter"]);
-    session.wait_for("No reasoning", std::time::Duration::from_secs(10));
-    // The sub-picker opens on the current level (unset on a fresh
-    // sandbox); anchor there, then step to high one marked frame at
-    // a time: unset -> off -> minimal -> low -> medium -> high.
-    session.wait_for("> unset", std::time::Duration::from_secs(10));
-    for level in ["off", "minimal", "low", "medium", "high"] {
-        session.send(&["Down"]);
-        session.wait_for(&format!("> {level}"), std::time::Duration::from_secs(10));
+    // **Changed by gh #397's brief**: the thinking row now opens the stepped
+    // wizard (model, then level) rather than the flat level picker, so this
+    // section walks two steps. The property this row pins is unchanged - a
+    // `/settings` edit reaches the config file and the footer - so only the
+    // keystrokes changed.
+    //
+    // Both steps print `Step N/2`, so the *cursor marker* is what says which step
+    // is live; a bare `Thinking level:` wait matches the unmarked row of the
+    // other step and races.
+    session.wait_for("> Model:", std::time::Duration::from_secs(10));
+    session.send(&["Enter"]); // advance to the thinking level
+    session.wait_for("> Thinking level:", std::time::Duration::from_secs(10));
+    // Step one changes nothing, so only the level is committed - and a sandbox
+    // whose mock model declares no levels offers none. In that case the wizard
+    // still opens (the model step is a real choice) but there is nothing to pick,
+    // so the row's assertion is that the wizard is walkable, not that a level
+    // exists. The mock here does declare levels, so walk them.
+    let pane = session.capture();
+    let levels = ["off", "minimal", "low", "medium", "high"];
+    let start = levels
+        .into_iter()
+        .find(|level| pane.contains(&format!("> Thinking level: {level}")));
+    if let Some(start) = start {
+        let from = levels
+            .iter()
+            .position(|level| *level == start)
+            .expect("a level");
+        for level in &levels[from + 1..] {
+            session.send(&["Down"]);
+            session.wait_for(
+                &format!("> Thinking level: {level}"),
+                std::time::Duration::from_secs(10),
+            );
+        }
     }
-    session.send(&["Enter"]);
+    session.send(&["Enter"]); // finish: commit the walked steps
     // The notice row sits under the tall box (it wins over the dock),
     // so wait for the durable outcome - the re-read row - never the
     // transient notice.
@@ -183,7 +216,15 @@ fn settings_changes_a_setting_and_config_toml_carries_it() {
         pane.contains("thinking"),
         "a fresh open shows it too:\n{pane}"
     );
+    // Gh #397: the wizard's commit leaves the selector open on the opener row, so
+    // this escape closes it exactly as before. Wait for the *box* to go, not just
+    // the header line: a windowed overlay can keep the frame while scrolling the
+    // header out, and the old wait then reported "gone" with the picker still
+    // eating `/exit` (that is how this row failed once).
     session.send(&["Escape"]);
+    // The header line is what says the list is live: main-screen rendering
+    // appends, so an emptied box frame from an earlier repaint stays in the
+    // captured scrollback (waiting for `╰` never fires).
     wait_for_gone(
         &session,
         SETTINGS_HEADER,
@@ -191,8 +232,20 @@ fn settings_changes_a_setting_and_config_toml_carries_it() {
     );
 
     // 5. The write itself, with the file's other content intact.
+    // Gh #397: the wizard leaves the selector open on the opener row (pi's
+    // submenu shape), so the escape above closes the selector as before - but a
+    // stale wizard would swallow `/exit` into its own key arm. Assert it is gone
+    // rather than relying on that, so a future change that leaves one open fails
+    // here and not as a confusing "no session-end record".
+    assert!(
+        !session.capture().contains("Step 1/2") && !session.capture().contains("Step 2/2"),
+        "no wizard is left open before /exit"
+    );
     session.send(&["/exit", "Enter"]);
-    wait_for_session_end(&sandbox.state_dir(), std::time::Duration::from_secs(15));
+    // Gh #397: a `/settings`-only session has no *messages*, and a quit without
+    // messages writes no session log - so there is no `session-end` marker to
+    // wait for (the helper says so in its own doc). The dead pane is the receipt.
+    wait_for_pane_end(&session, std::time::Duration::from_secs(15));
     let text = std::fs::read_to_string(sandbox.state_dir().join("config.toml")).expect("config");
     assert!(
         text.contains("thinking = \"high\""),

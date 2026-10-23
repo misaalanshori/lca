@@ -163,6 +163,26 @@ impl Chat {
 
     /// Draw the open picker, if any (returns true when one was drawn).
     fn compose_pickers(&self, viewport: &mut [String], width: u16, height: u16) -> bool {
+        // Gh #397: a stepped settings wizard owns the screen while it walks. It
+        // paints above the `/settings` list it was opened from, so the list is
+        // back on screen the moment the wizard closes - pi's submenu shape, and
+        // the reason a cancel needs no separate "return" path.
+        if let Some(wizard) = &self.world.wizard {
+            let title = format!("settings · {}", wizard.opener_key);
+            let body = wizard.body();
+            let hint = wizard.hint();
+            self.picker_overlay(
+                viewport,
+                width,
+                height,
+                &title,
+                &body,
+                &hint,
+                &self.theme,
+                Some(0),
+            );
+            return true;
+        }
         if let Some(picker) = &self.tree_picker {
             // gh #231: the DAG navigator paints connectors and role
             // markers on S37C's rolling-window chrome; the header
