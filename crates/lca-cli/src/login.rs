@@ -812,6 +812,7 @@ mod override_tests {
         .expect("the test manifest parses");
         crate::provider_needs::ProviderNeeds {
             defaults: manifest.net,
+            local: manifest.net_local,
             env_base_url: manifest.login_env_base_url,
         }
     }

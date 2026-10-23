@@ -17,6 +17,15 @@ use lca_core::ExtensionRegistry;
 pub(crate) struct ProviderNeeds {
     /// Manifest `[capabilities.net]` hosts.
     pub defaults: Vec<lca_permissions::NetPattern>,
+    /// Manifest `[capabilities.net-local]` ranges (gh #456).
+    ///
+    /// A configured endpoint inside one of these needs **no ad hoc consent**:
+    /// the manifest already declared the reach, the user approved that grant at
+    /// install, and the capability layer lets the request out. Without this
+    /// field the CLI asked for a second, redundant approval on every loopback
+    /// endpoint - and, before #456's own fix, the request was refused outright
+    /// because the native path never carried the grant at all.
+    pub local: Vec<lca_permissions::LocalPattern>,
     /// Manifest `[login] env_base_url`, when the provider declares one.
     pub env_base_url: Option<String>,
 }
@@ -44,6 +53,7 @@ pub(crate) fn provider_needs(
     let manifest = lca_ext_host::Manifest::parse(&text).ok()?;
     Some(ProviderNeeds {
         defaults: manifest.net,
+        local: manifest.net_local,
         env_base_url: manifest.login_env_base_url,
     })
 }
@@ -75,6 +85,7 @@ pub(crate) fn installed_needs(data: &Path, provider: &str) -> Option<ProviderNee
     let manifest = lca_ext_host::Manifest::parse(&text).ok()?;
     Some(ProviderNeeds {
         defaults: manifest.net,
+        local: manifest.net_local,
         env_base_url: manifest.login_env_base_url,
     })
 }
@@ -135,9 +146,13 @@ pub(crate) fn test_needs() -> ProviderNeeds {
          [login]\nenv_base_url = \"ACME_BASE_URL\"\n",
     )
     .expect("the test manifest parses");
+    // Built from the manifest through the same two fields the real readers
+    // use, so a new `ProviderNeeds` field cannot be forgotten here (gh #456's
+    // lesson applied to the fixture).
     ProviderNeeds {
-        defaults: manifest.net,
-        env_base_url: manifest.login_env_base_url,
+        defaults: manifest.net.clone(),
+        local: manifest.net_local.clone(),
+        env_base_url: manifest.login_env_base_url.clone(),
     }
 }
 

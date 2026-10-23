@@ -750,9 +750,17 @@ pub(super) fn list_models_command(
         &std::env::temp_dir(),
         cli,
     );
+    // Gh #456: the same allowance the interactive paths make - a host inside
+    // the provider manifest's own `net-local` range is covered at load, so a
+    // listing needs no ad hoc grant. Without this, `--list-models` refused a
+    // loopback endpoint the capability layer would have carried, which is the
+    // headless face of the divergence this issue is about.
+    let declared_local =
+        crate::provider_needs::resolve_needs(Some(&registry), &data, &provider_name)
+            .map_or_else(Vec::new, |needs| needs.local);
     if let Some(host) =
         crate::net_consent::env_configured_host(&data, &provider_name, Some(&registry))
-        && crate::ungranted_host(&grants, cwd, Some(host.clone())).is_some()
+        && crate::ungranted_host_in(&grants, cwd, Some(host.clone()), &declared_local).is_some()
     {
         eprintln!("{}", crate::net_consent::denied_message(&host));
         return exit::PERMISSION;

@@ -140,7 +140,43 @@ pub(crate) fn ungranted_host(
     cwd: &Path,
     host: Option<String>,
 ) -> Option<String> {
+    ungranted_host_in(store, cwd, host, &[])
+}
+
+/// [`ungranted_host`], also told which `net-local` ranges the provider's own
+/// manifest declares (gh #456).
+///
+/// A host inside a declared local range needs **no ad hoc grant**: the manifest
+/// asked for it, the user approved that grant at install, and the capability
+/// layer already lets the request out. Before #456 the CLI did not know about
+/// the local grant at all, so it asked for a redundant second approval - and on
+/// the native path, which dropped the grant entirely, the request was refused
+/// outright regardless of the answer.
+///
+/// The declared ranges are consulted with the same matcher the capability layer
+/// uses, so "covered here" and "covered there" cannot disagree.
+pub(crate) fn ungranted_host_in(
+    store: &std::sync::Mutex<GrantStore>,
+    cwd: &Path,
+    host: Option<String>,
+    declared_local: &[lca_permissions::LocalPattern],
+) -> Option<String> {
     let host = host?;
+    // A manifest-declared local range covers the host on its own. Both
+    // matchers are consulted because they answer different questions: a
+    // literal address parses to a /32 or /128 CIDR, which `matches_name`
+    // deliberately does not answer (it handles `localhost` and `.local`), and
+    // a name like `localhost` is not an `IpAddr` for `matches_ip`. The
+    // capability layer applies the same pair, so "covered here" and "covered
+    // there" cannot disagree (gh #456).
+    if declared_local.iter().any(|range| range.matches_name(&host))
+        || host
+            .parse::<std::net::IpAddr>()
+            .ok()
+            .is_some_and(|ip| declared_local.iter().any(|range| range.matches_ip(ip)))
+    {
+        return None;
+    }
     let covered = store
         .lock()
         .map(|store| {
@@ -229,11 +265,23 @@ pub(crate) fn extension_capabilities(
     Arc::new(engine)
 }
 
-/// The capability engine for one bundled provider (gh #157): the
-/// `net` hosts and the credential namespace come from the provider's
-/// own manifest, so every provider wires through this one function.
-/// The caller supplies the extension's own pieces (its manifest and
-/// its resource source); the host adds the session's ad hoc grants.
+/// The capability engine for one bundled provider (gh #157): the whole grant
+/// set comes from the provider's own manifest, so every provider wires through
+/// this one function. The caller supplies the extension's own pieces (its
+/// manifest and its resource source); the host adds the session's ad hoc grants.
+///
+/// Gh #456: this used to build the grants as a partial literal and let
+/// `..Default::default()` absorb the rest, which silently dropped `net_local`
+/// (and `net_declared`). A provider declaring `[capabilities.net-local]` - which
+/// #294 had just given `openai-compatible` for its `ollama`/`lmstudio` presets -
+/// therefore worked as a `.wasm` and failed as a built-in, with
+/// `permission denied: 127.0.0.1 matches no granted local range`.
+///
+/// It now calls the manifest's [one mapping](lca_ext_host::Manifest::capability_grants),
+/// which is the same call the WASM host makes: one source of truth for the
+/// native/WASM grant set, so the two delivery modes cannot diverge again
+/// without a compile error (an exhaustive literal) or a failing parity row
+/// (`tests/regressions/456-*`).
 #[cfg(feature = "bundled-openai-compat")]
 pub(crate) fn provider_capabilities(
     cwd: &Path,
@@ -244,11 +292,7 @@ pub(crate) fn provider_capabilities(
     store: std::sync::Arc<std::sync::Mutex<GrantStore>>,
     temp: &Path,
 ) -> std::sync::Arc<lca_tools::Capabilities> {
-    let mut grants = lca_tools::CapabilityGrants {
-        net: manifest.net.clone(),
-        credentials: manifest.credentials,
-        ..Default::default()
-    };
+    let mut grants = manifest.capability_grants();
     grants.adhoc_net = store
         .lock()
         .map(|store| {

@@ -794,17 +794,13 @@ impl Ui {
         // next: the first request raises the consent prompt naming that
         // host, and a scripted run has `--allow-host`. This is the
         // env-var path, which never runs `/login` on its own.
-        let endpoint_needs =
-            crate::provider_needs::provider_needs(&registry, &data, &provider_name);
+        let needs = crate::provider_needs::provider_needs(&registry, &data, &provider_name);
         if provider_is_ready
-            && let Some(host) = crate::ungranted_host(
+            && let Some(host) = crate::ungranted_host_in(
                 &grants,
                 cwd,
-                crate::provider_needs::provider_ad_hoc_host(
-                    &data,
-                    &provider_name,
-                    endpoint_needs.as_ref(),
-                ),
+                crate::provider_needs::provider_ad_hoc_host(&data, &provider_name, needs.as_ref()),
+                needs.as_ref().map_or(&[][..], |n| n.local.as_slice()),
             )
         {
             initial_head.push(format!(
