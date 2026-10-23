@@ -209,14 +209,12 @@ impl Chat {
             return;
         }
         self.compaction_marked = true;
-        let marker = if success {
-            format!("[compaction] summarised ({reason})")
-        } else {
-            // The reason still matters on failure - a provider overflow that
-            // could not be recovered from is a different situation from a manual
-            // request that errored - so it rides along here too.
-            format!("[compaction] failed ({reason}) - the context is unchanged")
-        };
-        self.transcript.push_raw(marker);
+        // Gh #393: the live row is the same collapsed card the replayed record
+        // gets, so the two views agree on *shape* even though they differ on
+        // content (#496: the event carries no summary). The reason still rides
+        // along - on a failure especially, since `success: false` means nothing
+        // was rewritten and a neutral line would say the opposite.
+        self.transcript
+            .push_compaction_card(crate::transcript::Card::live(reason, success));
     }
 }
