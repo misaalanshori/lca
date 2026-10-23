@@ -348,6 +348,10 @@ Host dialogs (`lca:host/ui-dialogs`: `confirm`, `select`, `input`, `notify`) nee
 
 An extension cannot open a modal during a running turn without the user having invoked it. This stops an extension from interrupting work.
 
+**A status badge is the smallest useful pattern** (gh #409, `ui-example`'s plan-mode badge is the reference). The extension holds the state, and the host **pulls** `render("status-line")` once per frame, so a state change needs no notification at all - the next frame sees it. That makes `request-redraw()` unnecessary for this shape, and it is worth saying plainly because the tempting alternative is a push per update, which is the per-frame-redraw bug in waiting. Two constraints come from the region table above: the badge is **one line inside the region's width** (it shares the row with native and other extensions' statuses), and its meaning must survive a plain theme - put the cue in the words (`plan 2/5`), not only in the role colour (NFR-28).
+
+Because `footer` and `status-line` are display-only, a badge cannot own a key. An extension that needs a toggle puts it in the `panel` or `modal` - regions it already receives input in - and the badge renders that state. `ui-example` does exactly that: `p` in the panel flips plan mode and `status-line` shows `plan`.
+
 Text spans carry data. The host strips control characters before drawing, so an extension that returns escape sequences sees them rendered as literal text.
 
 Consent text names the regions: "Show a segment in the status line and content in the side panel."
