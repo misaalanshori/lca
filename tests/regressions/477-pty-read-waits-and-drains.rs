@@ -105,13 +105,17 @@ fn a_fast_exiting_command_delivers_its_output_every_time() {
 
 // Verifies: gh #477's busy-spin. The property is structural and named, not a
 // throughput measurement: a read that has nothing to return must **wait**
-// rather than return an empty chunk immediately, and the loop must therefore
-// make very few calls for a child that sits silent for a while.
+// rather than return an empty chunk immediately.
 //
-// The count is the assertion with a wide margin (the defect made 584,352
-// calls/s, so "fewer than 100 for a one-second silence" cannot pass by luck
-// on a slow machine - it can only pass by waiting). The *time* is checked too,
-// so a machine fast enough to spin is still caught.
+// The assertion is calls per second of *observed* elapsed time, not a raw
+// count. A raw count is not the property - it scales with how long the child
+// took to start, and under a heavily loaded runner that alone ran the clock to
+// nine seconds and made 1,122 waiting calls look like a failure. Rate is
+// immune to that: a path that waits makes ~125 calls/second (one per 8 ms
+// readiness window) and a busy-spin made **614,104/second** measured on this
+// box, so the two are four thousand times apart and no amount of load bridges
+// the gap in the wrong direction - load makes a spinner look *slower*, never a
+// waiter look like a spinner.
 #[cfg(unix)]
 #[test]
 fn a_silent_pty_does_not_busy_spin() {
@@ -126,7 +130,7 @@ fn a_silent_pty_does_not_busy_spin() {
         &[],
     )
     .expect("spawn");
-    let (out, calls, elapsed) = read_to_end(&mut pty, Duration::from_secs(10));
+    let (out, calls, elapsed) = read_to_end(&mut pty, Duration::from_secs(30));
     let code = pty.wait().expect("wait");
     pty.kill();
     assert!(String::from_utf8_lossy(&out).contains("done"), "{out:?}");
@@ -136,10 +140,11 @@ fn a_silent_pty_does_not_busy_spin() {
         "the read returned before the child had written anything, so it did not wait \
          (elapsed {elapsed:?})"
     );
+    let per_second = calls as f64 / elapsed.as_secs_f64();
     assert!(
-        calls < 100,
-        "the read loop made {calls} calls waiting through half a second of silence; \
-         a path that waits makes a handful, a busy-spin makes hundreds of thousands"
+        per_second < 2_000.0,
+        "the read loop made {calls} calls in {elapsed:?} ({per_second:.0} calls/s); \
+         a path that waits makes ~125/s and the busy-spin made 614,104/s"
     );
 }
 
