@@ -50,6 +50,21 @@ States are emitted on transition only, never per frame, and a repeated frame wri
 
 `OSC 9;4;3` is re-emitted once a second while the indicator is active. Terminal emulators put a watchdog on the sequence (~10–15 s) so a crashed CLI does not spin a taskbar forever; a single write at turn start therefore lost the indicator on any turn longer than that, which is most of them. The refresh comes from the interface's existing 50 ms tick — no new thread — and stops with the turn: once the indicator is off nothing is written again, because an idle interface never repaints. `set_progress(false)` and `stop()` write the `OSC 9;4;0` clear immediately.
 
+## `@` file completion
+
+Typing `@` opens a fuzzy file list for the workspace; the text after it is the
+query. It walks breadth-first with a bounded budget - 2,000 entries, 256
+directories, and at most 200 entries from any one directory - so a nested file is
+reached even when a wide directory sits beside it (gh #502). Each level is visited
+in sorted order, so the same tree gives the same suggestions on every machine
+rather than depending on how the filesystem happens to list a directory.
+
+The walk is rooted at the **workspace**, so `~/.lca` only appears when it is
+genuinely inside the project - what makes it show up in a scratch `HOME` whose
+project sits at that `HOME`'s root.
+
+`.git`, `target` and `node_modules` are skipped.
+
 ## Keys and pasting
 
 LCA reads extended keys where the terminal sends them and degrades

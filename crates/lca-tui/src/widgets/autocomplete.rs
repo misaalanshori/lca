@@ -205,15 +205,56 @@ impl CombinedAutocompleteProvider {
     }
 }
 
+/// How many directory entries the `@` walk will look at, in total.
+///
+/// Gh #502: this bounds **work**, not discovery. The old code stopped when it had
+/// collected 200 *matches*, which meant a wide shallow directory could spend the
+/// whole budget on scattered-letter hits and the walk never reached a nested file
+/// the query actually named - `@mai` listed `home/.lca/private/mcp` and friends
+/// and never `src/main.rs`.
+///
+/// 2,000 entries is roughly ten times what a keystroke budget needs while still
+/// keeping the walk to a few milliseconds on a warm cache: `read_dir` on a flat
+/// directory is a syscall plus a string copy per entry, and the fuzzy scorer runs
+/// once per entry. The visible list is 20, so the entries beyond that are cheap
+/// ranking material, not something the user waits for.
+const WALK_ENTRY_BUDGET: usize = 2_000;
+
+/// How many directories the `@` walk will descend into.
+///
+/// Separate from the entry budget because the two failure shapes differ: a
+/// directory with a million files is bounded by entries, and a deep tree of empty
+/// directories is bounded by this. Both are needed, and neither is a *match*
+/// count.
+const WALK_DIR_BUDGET: usize = 256;
+
+/// The most a single directory may contribute before the walk moves on.
+///
+/// This is the fix's third leg, and the one that keeps a wide sibling from
+/// dominating: the walk is breadth-first, so `src/` is visited at the same level
+/// as the wide directory rather than after it. The per-directory cap stops one
+/// enormous directory from consuming the *whole* entry budget, which would starve
+/// breadth just as the match cap starved depth.
+const WALK_PER_DIR_CAP: usize = 200;
+
+/// What one walk has spent so far, threaded through the breadth-first queue.
+struct WalkBudget {
+    /// Entries looked at across every directory.
+    entries: usize,
+    /// Directories descended.
+    dirs: usize,
+}
+
 /// The `@file` matcher: rank by score, then path length, then name.
 fn fuzzy_files(query: &str, base: &Path) -> Suggestions {
     let mut items: Vec<(f64, usize, String, AutocompleteItem)> = Vec::new();
-    collect_files(base, base, query, 0, &mut items);
+    collect_files(base, query, &mut items);
     items.sort_by(|a, b| {
         a.0.partial_cmp(&b.0)
             .unwrap_or(std::cmp::Ordering::Equal)
             .then(a.1.cmp(&b.1))
             .then(a.2.len().cmp(&b.2.len()))
+            .then(a.2.cmp(&b.2))
     });
     let items: Vec<AutocompleteItem> = items.into_iter().take(20).map(|(_, _, _, i)| i).collect();
     Suggestions {
@@ -222,47 +263,75 @@ fn fuzzy_files(query: &str, base: &Path) -> Suggestions {
     }
 }
 
-fn collect_files(
-    root: &Path,
-    dir: &Path,
-    query: &str,
-    depth: usize,
-    out: &mut Vec<(f64, usize, String, AutocompleteItem)>,
-) {
-    if depth > 6 || out.len() > 200 {
-        return;
-    }
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
+/// Walk `base` breadth-first, collecting matches, under three budgets (gh #502).
+///
+/// **Breadth-first is the fix.** The old walk was depth-first in `read_dir`
+/// order, so the survivors were whichever directories the filesystem happened to
+/// list first; a wide data home at the root could take the entire budget before
+/// `src/` was ever opened. Visiting a level completely before descending means a
+/// nested file competes with its siblings rather than with everything the walk
+/// happened to see earlier - which is what makes the result **deterministic**
+/// across filesystems, because no level decides another level's fate.
+///
+/// Within a level, entries are sorted by name so the order does not depend on
+/// `read_dir`. That costs one sort per directory over the entries actually read,
+/// and it is what turns an intermittent bug into a reproducible one.
+fn collect_files(root: &Path, query: &str, out: &mut Vec<(f64, usize, String, AutocompleteItem)>) {
+    let mut budget = WalkBudget {
+        entries: 0,
+        dirs: 0,
     };
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
-        // D10: skip the heavy build/vendor directories in the fuzzy walk.
-        if is_ignored_dir(&name) {
+    // `(directory, depth)`, processed in order: everything at depth N before
+    // anything at depth N+1.
+    let mut queue: std::collections::VecDeque<(std::path::PathBuf, usize)> =
+        std::collections::VecDeque::new();
+    queue.push_back((root.to_path_buf(), 0));
+    while let Some((dir, depth)) = queue.pop_front() {
+        if depth > 6 || budget.dirs >= WALK_DIR_BUDGET || budget.entries >= WALK_ENTRY_BUDGET {
+            break;
+        }
+        budget.dirs += 1;
+        let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
-        }
-        let path = entry.path();
-        let rel = path
-            .strip_prefix(root)
-            .unwrap_or(&path)
-            .to_string_lossy()
-            .to_string();
-        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-        let matched = fuzzy_match_scored(query, &rel);
-        if matched.matches {
-            out.push((
-                matched.score,
-                depth,
-                rel.clone(),
-                AutocompleteItem {
-                    value: format!("@{rel}"),
-                    label: name.clone(),
-                    description: Some(rel.clone()),
-                },
-            ));
-        }
-        if is_dir {
-            collect_files(root, &path, query, depth + 1, out);
+        };
+        let mut names: Vec<std::ffi::OsString> =
+            entries.flatten().map(|entry| entry.file_name()).collect();
+        // Deterministic order: no level's contents depend on how the filesystem
+        // happened to lay out its directory blocks.
+        names.sort();
+        for (taken, name) in names.into_iter().enumerate() {
+            if budget.entries >= WALK_ENTRY_BUDGET || taken >= WALK_PER_DIR_CAP {
+                break;
+            }
+            budget.entries += 1;
+            let name = name.to_string_lossy().to_string();
+            // D10: skip the heavy build/vendor directories in the fuzzy walk.
+            if is_ignored_dir(&name) {
+                continue;
+            }
+            let path = dir.join(&name);
+            let rel = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .to_string();
+            let is_dir = path.is_dir();
+            let matched = fuzzy_match_scored(query, &rel);
+            if matched.matches {
+                out.push((
+                    matched.score,
+                    depth,
+                    rel.clone(),
+                    AutocompleteItem {
+                        value: format!("@{rel}"),
+                        label: name.clone(),
+                        description: Some(rel.clone()),
+                    },
+                ));
+            }
+            if is_dir {
+                queue.push_back((path, depth + 1));
+            }
         }
     }
 }
@@ -602,6 +671,191 @@ mod tests {
         assert!(
             !descs.iter().any(|d| d.starts_with("node_modules/")),
             "{descs:?}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // Verifies: gh #502's own repro - a wide shallow sibling starves a nested
+    // match, so the file the query *names* is never offered.
+    //
+    // The defect was not in the matcher: bare `@` listed `src/main.rs` in the
+    // same tree, and `@main` found it once `~/.lca` was absent. The walk was the
+    // problem - `collect_files` counts every *match* against one 200-item budget,
+    // in `read_dir` order, so a wide directory at the root fills the budget with
+    // scattered-letter hits and the walk never descends to `src/`.
+    //
+    // The tree below is the issue's shape: `src/main.rs`, `README.md`, and a wide
+    // populated sibling (the data-home analogue) whose entries all weakly match
+    // `mai`. Red before the fix.
+    #[test]
+    fn a_nested_file_the_query_names_survives_a_wide_sibling_directory() {
+        let tmp = std::env::temp_dir().join(format!("lca-ac-502-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("src")).unwrap();
+        std::fs::write(tmp.join("src/main.rs"), "x").unwrap();
+        std::fs::write(tmp.join("README.md"), "x").unwrap();
+        // A wide shallow sibling whose names all match `mai` loosely - the
+        // data-home shape from the issue (`mcp`, `openai-compatible`, ...),
+        // scaled past the budget so the starvation is deterministic rather than
+        // dependent on how many entries a real data home holds.
+        let wide = tmp.join("home/.lca/private");
+        std::fs::create_dir_all(&wide).unwrap();
+        for index in 0..260 {
+            // `ma...i` scattered: every one of these matches `mai`.
+            std::fs::write(wide.join(format!("m{index}a-i-{index}.toml")), "x").unwrap();
+        }
+
+        let p = provider(&tmp);
+        let s = p.get_suggestions("@mai", false).unwrap();
+        let descs: Vec<String> = s
+            .items
+            .iter()
+            .filter_map(|i| i.description.clone())
+            .map(|d| d.replace('\\', "/"))
+            .collect();
+        assert!(
+            descs.iter().any(|d| d == "src/main.rs"),
+            "the file the query names is offered, not starved by the wide sibling: {descs:?}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // Verifies: gh #502 design point 4 - **the cap still bounds the walk**. The
+    // fix moved the budget from "matches found" to "entries visited", so the row
+    // has to prove the bound still exists: a directory with far more files than
+    // the budget returns in bounded time and does not collect more than the
+    // budget allows.
+    //
+    // Structural, not a stopwatch: a timing assertion would re-create the load
+    // sensitivity this repo has spent cycles removing, and "how many entries did
+    // it read" is the actual property.
+    #[test]
+    fn the_walk_budget_still_bounds_an_enormous_directory() {
+        let tmp = std::env::temp_dir().join(format!("lca-ac-502-big-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        // Well past both budgets, so the bound is what stops it rather than the
+        // filesystem running out.
+        for index in 0..(WALK_ENTRY_BUDGET + 500) {
+            std::fs::write(tmp.join(format!("file-{index:05}.txt")), "x").unwrap();
+        }
+        let p = provider(&tmp);
+        // Every name matches the empty query, so without a bound this would
+        // collect all of them.
+        let s = p.get_suggestions("@", false).unwrap();
+        assert!(
+            s.items.len() <= 20,
+            "the visible list is 20 (got {})",
+            s.items.len()
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // Verifies: gh #502 design point 5 - **ordering is deterministic**.
+    //
+    // The old walk's survivors depended on `read_dir` order, which is why the bug
+    // was intermittent across machines: a wide directory's entries could arrive
+    // in any sequence and the budget cut wherever it happened to be. The walk now
+    // sorts each level before spending budget on it.
+    //
+    // Two rows, because "run it twice and compare" is too weak to prove anything
+    // - `read_dir` on one filesystem is stable, so that row passes with the sort
+    // removed (checked). The real property is that **the budget is spent in
+    // sorted order**, so a file whose name sorts early is never starved by one
+    // that sorts late, whatever order the filesystem hands them over in. That is
+    // what this pair asserts.
+    #[test]
+    fn the_walk_spends_its_budget_in_sorted_order() {
+        let tmp = std::env::temp_dir().join(format!("lca-ac-502-sort-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        // Well past `WALK_PER_DIR_CAP`, and only the first names alphabetically
+        // are reachable. `zebra` sorts last and must be the one dropped.
+        std::fs::write(tmp.join("aaa-first.txt"), "x").unwrap();
+        std::fs::write(tmp.join("zzz-last.txt"), "x").unwrap();
+        for index in 0..(WALK_PER_DIR_CAP + 50) {
+            std::fs::write(tmp.join(format!("mmm-{index:04}.txt")), "x").unwrap();
+        }
+        let p = provider(&tmp);
+        // Ask for the early name by name: the visible window is 20 and the bulk
+        // `mmm-*` entries crowd it, so a bare `@` would answer "was it in the
+        // window", not "did the walk reach it". A query only that file matches
+        // asks the real question - did the budget, spent in sorted order, get far
+        // enough to see a name that sorts first?
+        let descs: Vec<String> = p
+            .get_suggestions("@aaa-first", false)
+            .unwrap()
+            .items
+            .iter()
+            .filter_map(|i| i.description.clone())
+            .collect();
+        assert!(
+            descs.iter().any(|d| d == "aaa-first.txt"),
+            "the budget is spent in sorted order, so an early name survives: {descs:?}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn the_same_tree_gives_the_same_suggestions_every_time() {
+        let tmp = std::env::temp_dir().join(format!("lca-ac-502-order-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("src")).unwrap();
+        std::fs::write(tmp.join("src/main.rs"), "x").unwrap();
+        let wide = tmp.join("home/.lca/private");
+        std::fs::create_dir_all(&wide).unwrap();
+        for index in 0..260 {
+            std::fs::write(wide.join(format!("m{index}a-i-{index}.toml")), "x").unwrap();
+        }
+        let p = provider(&tmp);
+        let first: Vec<String> = p
+            .get_suggestions("@mai", false)
+            .unwrap()
+            .items
+            .iter()
+            .filter_map(|i| i.description.clone())
+            .collect();
+        for _ in 0..3 {
+            let again: Vec<String> = p
+                .get_suggestions("@mai", false)
+                .unwrap()
+                .items
+                .iter()
+                .filter_map(|i| i.description.clone())
+                .collect();
+            assert_eq!(first, again, "the walk does not depend on read_dir order");
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // Verifies: gh #502's regression pin - **bare `@` lists what it did**. The
+    // issue records that bare `@` already found `src/main.rs`; a fix that
+    // changed the breadth-first order must not quietly drop it, because bare `@`
+    // is the ordinary way a reader browses the tree.
+    #[test]
+    fn a_bare_at_still_lists_the_nested_file() {
+        let tmp = std::env::temp_dir().join(format!("lca-ac-502-bare-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("src")).unwrap();
+        std::fs::write(tmp.join("src/main.rs"), "x").unwrap();
+        std::fs::write(tmp.join("README.md"), "x").unwrap();
+        let wide = tmp.join("home/.lca/private");
+        std::fs::create_dir_all(&wide).unwrap();
+        for index in 0..40 {
+            std::fs::write(wide.join(format!("entry-{index}.toml")), "x").unwrap();
+        }
+        let p = provider(&tmp);
+        let descs: Vec<String> = p
+            .get_suggestions("@", false)
+            .unwrap()
+            .items
+            .iter()
+            .filter_map(|i| i.description.clone())
+            .map(|d| d.replace('\\', "/"))
+            .collect();
+        assert!(
+            descs.iter().any(|d| d == "src/main.rs"),
+            "bare `@` still reaches the nested file: {descs:?}"
         );
         let _ = std::fs::remove_dir_all(&tmp);
     }

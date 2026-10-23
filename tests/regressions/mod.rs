@@ -1035,3 +1035,15 @@ mod plan_mode_badge;
 // of the issue stay open.
 #[path = "407-interactive-shell-tty.rs"]
 mod interactive_shell_tty;
+
+// GitHub #502: the `@`-file fuzzy walk starved the match it should find. Its
+// budget counted **matches** (`out.len() > 200`), so a wide shallow directory at
+// the root spent the whole budget on scattered-letter hits and the walk never
+// descended to a nested file the query named - `@mai` listed
+// `home/.lca/private/mcp` and friends and never `src/main.rs`, while bare `@` did
+// list it. The matcher was right; the walk order was wrong. The fix bounds
+// **work** (visited entries and directories, each level sorted, breadth-first)
+// rather than discovery, which also makes the result deterministic instead of
+// `read_dir`-dependent.
+#[path = "502-fuzzy-walk-budget.rs"]
+mod fuzzy_walk_budget;
