@@ -31,6 +31,8 @@ One note: pi binds a random callback path since no state crosses; this extension
 
 Chat bodies over `POST {api_base}/chat/completions`: the bearer (provisioned or `OPENROUTER_API_KEY` in the native form), the model, streamed messages with usage requested, tools when the turn carries them, and gh #169's generation budget. No reasoning mapping (OpenRouter's per-model reasoning shapes are not one field — diverged openly, not guessed).
 
+**No `[capabilities.env]` section, deliberately** (gh #484). The environment reads in this extension sit under `#[cfg(not(target_arch = "wasm32"))]`, so the sandboxed build never executes them and the `env` capability would forward a value the guest has no code to read — a disclosure with no reader. The sandboxed build configures through `credentials` instead. `tests/regressions/484-*.rs` audits every extension and fails if a read ever moves out from under that gate without adding the declaration.
+
 ## login, logout, usage
 
 `login` runs the identity flow directly. The manifest declares `[login] identity = true` (gh #297), so a bare `/login` lists it as `Sign in with openrouter` alongside the preset providers; the host routes that row to this flow rather than to `login-submit`, which this extension does not implement. `logout` clears the namespace (keys are revoked on the site). `usage` is the credential-validity probe — the key never expires, so a present key is `Ok` with empty counts.

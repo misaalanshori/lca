@@ -25,7 +25,7 @@ redirect_path = "/callback"
 namespace = "anthropic"
 ```
 
-Two notes against the September spec this replaces: `worlds` is `provider` only — identity commands arrive host-namespaced through the provider world (FR-PROV-10), the way the other providers work; and there is no `[capabilities.env]` section (that grant waits on #170 — the native form reads `ANTHROPIC_API_KEY`/`ANTHROPIC_BASE_URL` from the environment the way `openai-compatible` does, and the sandbox never sees them).
+Two notes against the September spec this replaces: `worlds` is `provider` only — identity commands arrive host-namespaced through the provider world (FR-PROV-10), the way the other providers work; and there is deliberately **no `[capabilities.env]` section** (gh #484). `ANTHROPIC_API_KEY` and `ANTHROPIC_BASE_URL` are read only in the native form — the reads sit under `#[cfg(not(target_arch = "wasm32"))]`, so the sandboxed build never executes them. The `env` capability would forward a secret the guest has no code to read, which is a disclosure with no reader; the sandboxed build therefore authenticates through `credentials` (a stored key, or the subscription token) and reaches a non-default endpoint through a stored `base_url`. This is the same shape `llama`, `openrouter` and `antigravity` use, and the class-level audit in `tests/regressions/484-*.rs` keeps it honest: a read that ever moves out from under that gate must add the declaration.
 
 `net` needs all three hosts because the authorize page, the token exchange, and the inference traffic land on different domains.
 
