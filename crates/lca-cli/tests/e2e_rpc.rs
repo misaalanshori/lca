@@ -8,6 +8,53 @@ mod common;
 
 use common::{Reply, json_lines, rt, sandbox, sse_text, sse_tool_call, start_mock, stderr};
 
+/// Drive `--mode rpc` with **interleaved** writes: each element of `lines` is
+/// written after sleeping its own delay, so a row can be explicit about *when*
+/// each command lands relative to the turn. Closing stdin ends the session (EOF
+/// is the documented exit).
+///
+/// gh #489: `run_with_stdin` writes the whole script up front, which is *a*
+/// valid client but not the only one — and until the fix it was the only shape
+/// the suite exercised. The bug was invisible to it precisely because one
+/// buffered write usually delivers every line before the turn starts; a client
+/// that writes while the turn runs loses the turn. This driver is what makes
+/// the difference observable, so the rows below can assert the documented
+/// promises instead of retrying until a session happens to survive.
+fn drive_interleaved(
+    box_: &common::Sandbox,
+    mock: &common::Mock,
+    lines: &[(std::time::Duration, String)],
+) -> std::process::Output {
+    use std::io::Write as _;
+    use std::process::Stdio as Std;
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_lca"));
+    command
+        .args(["--yolo", "--model", "zen-free", "--mode", "rpc"])
+        .current_dir(box_.project())
+        .env("HOME", &box_.home)
+        .env("USERPROFILE", &box_.home)
+        .env("OPENAI_BASE_URL", mock.url())
+        .env("OPENAI_API_KEY", "test-key")
+        .env("OPENAI_MODEL", "test-model")
+        .env("LCA_UPDATE_CHECK", "false")
+        .stdin(Std::piped())
+        .stdout(Std::piped())
+        .stderr(Std::piped());
+    let mut child = command.spawn().expect("spawn lca");
+    {
+        let mut stdin = child.stdin.take().expect("piped stdin");
+        for (pause, line) in lines {
+            if !pause.is_zero() {
+                std::thread::sleep(*pause);
+            }
+            stdin.write_all(line.as_bytes()).expect("write line");
+            stdin.flush().expect("flush");
+        }
+        // Dropping stdin is the documented shutdown-as-EOF path.
+    }
+    child.wait_with_output().expect("run lca")
+}
+
 fn cmd(id: &str, command: &str, extra: &str) -> String {
     if extra.is_empty() {
         format!("{{\"id\":\"{id}\",\"type\":\"{command}\"}}\n")
@@ -26,7 +73,7 @@ fn cmd(id: &str, command: &str, extra: &str) -> String {
 // but zero turn-ends. Solo/group/reruns green; one Windows CI hit.
 // Remove the ignore to un-quarantine (exit: 5x stressed green).
 #[test]
-#[ignore = "turn-ends dropped under load - tracked in gh #195"]
+
 fn rpc_replays_prompt_steer_follow_up_cancel_shutdown() {
     let runtime = rt();
     let mock = runtime.block_on(start_mock(vec![
@@ -306,7 +353,7 @@ fn a_cancelled_queue_announces_the_accept_and_no_drain() {
 // never silent, and never kill the loop).
 // Same quarantine as above (gh #195): missing turn-end under load.
 #[test]
-#[ignore = "turn-end dropped under load - tracked in gh #195"]
+
 fn rpc_rejects_parse_errors_and_unknown_commands() {
     let runtime = rt();
     let mock = runtime.block_on(start_mock(vec![Reply::Sse(sse_text("hi"))]));
@@ -340,4 +387,310 @@ fn rpc_rejects_parse_errors_and_unknown_commands() {
         records.iter().any(|line| line["type"] == "turn-end"),
         "the loop survives both and still runs"
     );
+}
+
+// ---------------------------------------------------------------------------
+// gh #489: the four promises `docs/headless.md` makes about the RPC loop.
+//
+// The defect was `run.take()` **inside** a `select!` branch future. `select!`
+// rebuilds every branch future on each loop iteration, so when the biased stdin
+// branch became ready while a turn was pending, the select dropped the future
+// holding the taken run - and `turn_state`, which `start_run!` had moved into
+// that same future, died with it. The RPC session then answered `"started"` to
+// prompts it could never run.
+//
+// Every row below writes its lines **interleaved** with sleeps rather than
+// buffering them up front. That is the shape that exposes the bug: one buffered
+// write usually delivers every line before the first turn starts, which is why
+// the suite never saw this and why the old rows needed a retry to absorb it.
+// ---------------------------------------------------------------------------
+
+/// The provider delay used to guarantee a turn is genuinely mid-flight when the
+/// next stdin line lands. Long enough that no scheduler hiccup closes the
+/// window, short enough that a row costs under two seconds.
+const MID_TURN: std::time::Duration = std::time::Duration::from_millis(400);
+
+/// Write this line immediately - the client is not pausing, the line is just
+/// first.
+const ZERO: std::time::Duration = std::time::Duration::ZERO;
+
+// Verifies: gh #489 (promise 1) - `prompt` answers `"disposition": "started"`
+// and a run ACTUALLY began: the provider is asked, and the turn ends.
+//
+// Pre-fix: `prompt` + one more line 400 ms later produced `turn-start`,
+// `message-start`, and then nothing - zero model requests, zero `turn-end`, exit
+// 0. Deterministic at every non-zero delay.
+#[test]
+fn a_prompt_written_before_a_second_line_still_runs_its_turn() {
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![Reply::SseAfter(
+        800,
+        sse_text("first done"),
+    )]));
+    let box_ = sandbox("rpc-489-prompt-runs");
+    let output = drive_interleaved(
+        &box_,
+        &mock,
+        &[
+            (ZERO, cmd("p1", "prompt", r#""message":"hello""#)),
+            // Any second line mid-turn used to drop the run; `steer` is the
+            // realistic client, and the next row shows it is not the trigger.
+            (MID_TURN, cmd("s1", "steer", r#""message":"a note""#)),
+        ],
+    );
+    let records = json_lines(&output);
+    let turns = records.iter().filter(|l| l["type"] == "turn-end").count();
+    assert_eq!(
+        turns, 1,
+        "the prompt's turn must end even though another line arrived mid-flight: {records:?}"
+    );
+    assert!(
+        records
+            .iter()
+            .any(|l| l["type"] == "text" && l["content"] == "first done"),
+        "and the provider was actually asked: {records:?}"
+    );
+    assert!(
+        mock.request_count() >= 1,
+        "at least one model request reached the provider"
+    );
+    let _ = std::fs::remove_dir_all(&box_.root);
+}
+
+// Verifies: gh #489 - **the trigger is any stdin readiness, not the steer.** A
+// bare `prompt` followed by `shutdown` mid-turn lost the turn 3 times in 30
+// before the fix; this row is the deterministic form of that observation.
+#[test]
+fn a_shutdown_arriving_mid_turn_does_not_discard_the_turn() {
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![Reply::SseAfter(
+        800,
+        sse_text("done anyway"),
+    )]));
+    let box_ = sandbox("rpc-489-shutdown-midturn");
+    let output = drive_interleaved(
+        &box_,
+        &mock,
+        &[
+            (ZERO, cmd("p1", "prompt", r#""message":"hello""#)),
+            (MID_TURN, cmd("d1", "shutdown", "")),
+        ],
+    );
+    let records = json_lines(&output);
+    assert_eq!(
+        records.iter().filter(|l| l["type"] == "turn-end").count(),
+        1,
+        "shutdown mid-turn must let the turn finish, not destroy it: {records:?}"
+    );
+    assert!(
+        records
+            .iter()
+            .any(|l| l["type"] == "text" && l["content"] == "done anyway"),
+        "the reply landed: {records:?}"
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "and the documented exit code holds: {}",
+        stderr(&output)
+    );
+    let _ = std::fs::remove_dir_all(&box_.root);
+}
+
+// Verifies: gh #489 (promise 4) - **multi-turn state survives.** After a steer
+// arrived mid-run, the session was dead: a second `prompt` answered
+// `{"disposition":"started"}` while the provider received nothing, because
+// `turn_state` had been moved into the dropped future and `start_run!` silently
+// found `None`.
+//
+// Pre-fix this row saw exactly one model request for two prompts.
+#[test]
+fn a_second_prompt_after_a_mid_turn_steer_still_runs() {
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![
+        Reply::SseAfter(600, sse_text("first done")),
+        Reply::Sse(sse_text("second done")),
+    ]));
+    let box_ = sandbox("rpc-489-multi-turn");
+    let output = drive_interleaved(
+        &box_,
+        &mock,
+        &[
+            (ZERO, cmd("p1", "prompt", r#""message":"one""#)),
+            // Arrives mid-turn (well inside the 600 ms reply): this is what used
+            // to kill the session.
+            (
+                std::time::Duration::from_millis(150),
+                cmd("s1", "steer", r#""message":"nudge""#),
+            ),
+            // Far enough past turn one that the 600 ms reply has landed even
+            // with a slow scheduler. The margin is deliberately generous: a
+            // tight wait here would make the row fail on *its own* timing under
+            // load rather than on the product, which is the mistake the
+            // original flake taught. `a_prompt_written_before_...` above is the
+            // row that pins mid-turn arrival; this one pins *multi-turn survival*
+            // and needs turn one finished, not in flight.
+            (
+                std::time::Duration::from_millis(3000),
+                cmd("p2", "prompt", r#""message":"two""#),
+            ),
+        ],
+    );
+    let records = json_lines(&output);
+    let responses: Vec<&serde_json::Value> = records
+        .iter()
+        .filter(|line| line["type"] == "response")
+        .collect();
+    let disposition = |id: &str| {
+        responses
+            .iter()
+            .find(|line| line["id"] == id)
+            .map(|line| {
+                line["data"]["disposition"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string()
+            })
+            .unwrap_or_default()
+    };
+    assert_eq!(
+        disposition("p2"),
+        "started",
+        "p2 is accepted: {responses:?}"
+    );
+    assert!(
+        mock.request_count() >= 2,
+        "two prompts must reach the provider, not one (got {}): {records:?}",
+        mock.request_count()
+    );
+    assert_eq!(
+        records.iter().filter(|l| l["type"] == "turn-end").count(),
+        2,
+        "both turns end: {records:?}"
+    );
+    assert!(
+        records
+            .iter()
+            .any(|l| l["type"] == "text" && l["content"] == "second done"),
+        "the second turn's reply landed: {records:?}"
+    );
+    let _ = std::fs::remove_dir_all(&box_.root);
+}
+
+// Verifies: gh #489 (promise 2) - **`follow_up` submits after the run ends.**
+// This promise was previously untestable through the interleaved path because
+// the run it hangs off had already been destroyed; the only rows that reached it
+// buffered the whole script up front.
+#[test]
+fn a_follow_up_written_mid_turn_submits_after_the_run_ends() {
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![
+        Reply::SseAfter(600, sse_text("first done")),
+        Reply::Sse(sse_text("followed up")),
+    ]));
+    let box_ = sandbox("rpc-489-follow-up");
+    let output = drive_interleaved(
+        &box_,
+        &mock,
+        &[
+            (ZERO, cmd("p1", "prompt", r#""message":"one""#)),
+            (MID_TURN, cmd("f1", "follow_up", r#""message":"later""#)),
+        ],
+    );
+    let records = json_lines(&output);
+    assert!(
+        records.iter().any(|l| {
+            l["type"] == "response" && l["id"] == "f1" && l["data"]["disposition"] == "queued"
+        }),
+        "the follow-up was accepted: {records:?}"
+    );
+    assert!(
+        records
+            .iter()
+            .any(|l| l["type"] == "text" && l["content"] == "followed up"),
+        "and it actually ran after the first turn ended: {records:?}"
+    );
+    assert_eq!(
+        records.iter().filter(|l| l["type"] == "turn-end").count(),
+        2,
+        "first turn plus the follow-up's: {records:?}"
+    );
+    let _ = std::fs::remove_dir_all(&box_.root);
+}
+
+// Verifies: gh #489 (promise 3) - **`shutdown` drains queued follow-ups first.**
+// Before the fix a mid-turn shutdown dropped the run, so there was no run end to
+// hang the queue off and the accepted follow-up was silently discarded while the
+// process exited 0.
+#[test]
+fn a_shutdown_drains_a_queued_follow_up_before_exiting() {
+    let runtime = rt();
+    let mock = runtime.block_on(start_mock(vec![
+        Reply::SseAfter(600, sse_text("first done")),
+        Reply::Sse(sse_text("drained on the way out")),
+    ]));
+    let box_ = sandbox("rpc-489-shutdown-drains");
+    let output = drive_interleaved(
+        &box_,
+        &mock,
+        &[
+            (ZERO, cmd("p1", "prompt", r#""message":"one""#)),
+            (MID_TURN, cmd("f1", "follow_up", r#""message":"queued""#)),
+            (MID_TURN, cmd("d1", "shutdown", "")),
+        ],
+    );
+    let records = json_lines(&output);
+    assert!(
+        records
+            .iter()
+            .any(|l| l["type"] == "text" && l["content"] == "drained on the way out"),
+        "the queued follow-up ran before exit, as documented: {records:?}"
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "and the exit code is still 0: {}",
+        stderr(&output)
+    );
+    let _ = std::fs::remove_dir_all(&box_.root);
+}
+
+// Verifies: gh #489 - **a bare `prompt` whose stdin closes at EOF runs.** The
+// 2-in-30 case: the turn was lost even with no second *command*, because EOF is
+// itself a stdin event and the biased branch read it mid-turn.
+//
+// Repeated, because this is the narrowest window in the family: EOF is queued as
+// soon as the one line is written, so whether it is observed before or after the
+// turn's first poll is a genuine race. The fix removes the consequence, so all
+// rounds must pass; on pre-fix code this fails within a few rounds, which is why
+// the count is here rather than a single attempt.
+#[test]
+fn a_prompt_with_stdin_closed_immediately_still_runs() {
+    for round in 0..8 {
+        let runtime = rt();
+        let mock = runtime.block_on(start_mock(vec![Reply::SseAfter(
+            300,
+            sse_text("still ran"),
+        )]));
+        let box_ = sandbox(&format!("rpc-489-eof{round}"));
+        let output = drive_interleaved(
+            &box_,
+            &mock,
+            // One line, and stdin closes the instant it is written.
+            &[(ZERO, cmd("p1", "prompt", r#""message":"hello""#))],
+        );
+        let records = json_lines(&output);
+        assert_eq!(
+            records.iter().filter(|l| l["type"] == "turn-end").count(),
+            1,
+            "round {round}: EOF mid-turn must not destroy the turn: {records:?}"
+        );
+        assert!(
+            records
+                .iter()
+                .any(|l| l["type"] == "text" && l["content"] == "still ran"),
+            "round {round}: the reply landed: {records:?}"
+        );
+        let _ = std::fs::remove_dir_all(&box_.root);
+    }
 }

@@ -139,8 +139,19 @@ pub async fn rpc(
     // explicit disposition, pi's rule.
     // Not `Send`: the agent holds non-`Send` prompt callbacks, and
     // `select!` polls inline without spawning, so it never needs to be.
-    // Not `Send`: the agent holds non-`Send` prompt callbacks, and
-    // `select!` polls inline without spawning, so it never needs to be.
+    //
+    // gh #489: the run future is a **pinned local the loop owns**, and the
+    // `select!` below borrows it with `as_mut()`. It must never be moved into a
+    // branch future: `select!` rebuilds every branch future on each iteration,
+    // so anything a branch captured and owned is dropped the moment another
+    // branch wins. That is exactly what used to happen - a `run.take()` inside
+    // the branch future meant a stdin line arriving mid-turn killed the run, and
+    // `turn_state`, which had moved into the same future, died with it. The
+    // session then answered `"started"` to prompts it could never run.
+    //
+    // The invariant that keeps it safe: `run` is cleared only in the arm that
+    // observed completion, and `turn_state` only leaves `Some` when a future
+    // that actually finished hands it back.
     type RunFuture<'a> =
         std::pin::Pin<Box<dyn std::future::Future<Output = (TurnOutcome, TurnState)> + 'a>>;
     let mut run: Option<RunFuture<'_>> = None;
@@ -166,12 +177,16 @@ pub async fn rpc(
     // Start one turn on the shared state (mirrors the one-shot path: a
     // fresh agent per turn, borrowing tools for exactly one run). The
     // text moves into the future, so nothing dangles across commands.
+    //
+    // gh #489: the future still owns `turn_state` (it moves in here and is
+    // handed back by the outcome arm), which is only safe because the `select!`
+    // below polls the future **in place** - nothing but the completion arm can
+    // clear `run`, so the future is never dropped mid-turn. Design point 2's
+    // second clause: "the future owns it *and* is guaranteed not to be
+    // dropped". Previously the `take()` lived inside a select branch future,
+    // which `select!` rebuilds each iteration, so the drop was routine.
     macro_rules! start_run {
         ($text:expr, $queue:expr) => {{
-            // Invariant: a run exists exactly when the state moved into
-            // it, so `take` succeeds wherever this macro runs. The
-            // state moves into the future with the agent, and the
-            // outcome arm hands it back.
             if let Some(mut state) = turn_state.take() {
                 let flag = CancelFlag::new();
                 cancel_flag = Some(flag.clone());
@@ -291,6 +306,20 @@ pub async fn rpc(
                 queue_sink.emit_queue_queued(lca_protocol::SubmitMode::FollowUp);
             }
         }};
+    }
+
+    /// Poll an active run future in place (gh #489).
+    ///
+    /// Takes `&mut Option<..>` rather than the `Option` itself so the future is
+    /// never moved out: `select!` rebuilds branch futures every iteration, and a
+    /// moved run would be dropped whenever the stdin branch won. The `None` arm
+    /// yields a future that never resolves, which is unreachable because the
+    /// caller's `if run.is_some()` guard disables the branch first.
+    async fn poll_run(run: &mut Option<RunFuture<'_>>) -> (TurnOutcome, TurnState) {
+        match run.as_mut() {
+            Some(future) => future.await,
+            None => std::future::pending().await,
+        }
     }
 
     loop {
@@ -465,11 +494,22 @@ pub async fn rpc(
                     }
                 }
             }
-            outcome = async {
-                #[allow(clippy::expect_used)] // the select only runs with a run active; no arm clears it mid-poll.
-                run.take().expect("a run is active").await
-            } => {
+            // gh #489: a borrow of the loop's own `run`, never `run.take()`
+            // inside the branch. `select!` rebuilds branch futures every
+            // iteration, so a future that owned the taken run was dropped
+            // whenever the biased stdin branch won - destroying the turn, and
+            // `turn_state` (which that future owned) with it. Polling the pinned
+            // future where it lives means a stdin line mid-turn costs a poll,
+            // not a turn.
+            //
+            // The guard is what makes the `None` arm in `poll_run` unreachable:
+            // `select!` checks `if run.is_some()` before constructing the future.
+            outcome = poll_run(&mut run), if run.is_some() => {
                 cancel_flag = None;
+                // Cleared only here, after the await finished: that is the
+                // guarantee that keeps `turn_state` (which the future owns)
+                // from ever being dropped.
+                run = None;
                 let (outcome, state) = outcome;
                 turn_state = Some(state);
                 let _ = outcome;
