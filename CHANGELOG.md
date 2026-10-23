@@ -56,6 +56,24 @@ Dates are UTC.
   background task is not orphaned. A current-thread runtime can neither do that nor
   block from inside its poll, so that case is refused by name instead of unwinding.
 
+- **A pty read waits for output instead of spinning on it, and a fast-exiting
+  program no longer loses what it printed** (gh #477). Two defects shared one
+  site, which is why one CI failure looked like a flake. The **busy-spin**: the
+  host answered "nothing yet" with an empty chunk, so a caller looping until
+  end-of-stream re-called with no wait — measured at **614,104 read calls in a
+  second** on this box, all but a handful of them empty. On a loaded runner that
+  stole the core from the very program whose output was being awaited. The
+  **readiness race**: the loop treated the first end-of-stream as final, but a
+  pty master reports its end on terms of its own — the child exiting does not
+  mean the bytes it wrote have been drained, which is exactly the `exit 0 ` with
+  no output that macOS CI saw. The host now waits on the master (a readiness
+  window, not a delay) and answers "the session ended" only on the brief's rule:
+  **child exit plus a drained buffer**, with a short grace window for a tail that
+  is still arriving. That drops the spin to **126 calls/second** — a ~4,900×
+  reduction — and the failing row now passes six times out of six on a box under
+  load 14. Nothing about the pty contract changed: `read` still returns `None`
+  when the session ended, which was always the promise; the host was simply
+  answering it from one syscall's point of view.
 - **Tool annotations decode in the spelling everyone actually sends** (gh #454).
   `ToolAnnotations` derived `Deserialize` with no rename, so serde expected
   `read_only_hint` while every real payload says `readOnlyHint` — the MCP spelling,

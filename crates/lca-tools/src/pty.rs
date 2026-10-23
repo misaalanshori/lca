@@ -196,6 +196,34 @@ mod unsafe_ptmx {
         use std::os::unix::io::AsRawFd;
         file.as_raw_fd()
     }
+
+    /// Wait up to `timeout_ms` for the master to have **data** to read.
+    ///
+    /// `true` means bytes are available now; `false` means the window closed
+    /// without any. Only `POLLIN` counts: `POLLHUP`/`POLLERR` mean the other
+    /// end is gone, which is the session's *end* and not data, and treating it
+    /// as data makes a drained pty look permanently readable - the loop then
+    /// spins against its own EOF instead of terminating.
+    ///
+    /// Interrupts are reported as "no data": a signal is not the session's
+    /// state, and the caller's next read still sees whatever is really there.
+    pub(super) fn wait_readable(file: &std::fs::File, timeout_ms: i32) -> std::io::Result<bool> {
+        let mut pfd = libc::pollfd {
+            fd: raw_fd(file),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: one valid pollfd, alive for the duration of the call.
+        let rc = unsafe { libc::poll(&mut pfd, 1, timeout_ms) };
+        if rc < 0 {
+            let err = std::io::Error::last_os_error();
+            if err.kind() == std::io::ErrorKind::Interrupted {
+                return Ok(false);
+            }
+            return Err(err);
+        }
+        Ok(rc > 0 && (pfd.revents & libc::POLLIN) != 0)
+    }
 }
 
 #[cfg(unix)]
@@ -249,18 +277,108 @@ fn spawn_impl(
     })
 }
 
+/// How long one `read` waits for output before answering "nothing yet".
+///
+/// This is a readiness window, not a delay: the call returns the moment the
+/// master is readable (or the session ends), and only spends the full window
+/// when the program is genuinely silent. Sized at roughly one frame so a
+/// frame-driven caller (the `ui` panel) still gets its answer promptly while a
+/// caller looping until `None` (the conformance probe) makes a handful of
+/// calls instead of hundreds of thousands.
+#[cfg(unix)]
+const READY_WAIT: std::time::Duration = std::time::Duration::from_millis(8);
+
+/// How long to wait for a tail that may still be in flight when the master
+/// reports its end after the child exited (gh #477).
+///
+/// A pty's master reports EOF on terms of its own: the child exiting does not
+/// mean the bytes it wrote have been drained, and the platform that failed
+/// (`exit 0 ` with no output) reported the end before the tail was readable.
+/// This window is spent only in that case - after an EOF-looking read *and*
+/// a confirmed child exit - so it costs nothing on the normal path.
+#[cfg(unix)]
+const DRAIN_GRACE: std::time::Duration = std::time::Duration::from_millis(4);
+
+/// Has the child exited? `try_wait` caches the status, so the `wait` that
+/// every caller runs afterwards still reports the real exit code.
+#[cfg(unix)]
+fn child_exited(inner: &mut Inner) -> std::io::Result<bool> {
+    Ok(inner.child.try_wait()?.is_some())
+}
+
+/// Wait up to `window` for the master to be readable; `true` when it is.
+#[cfg(unix)]
+fn wait_readable_for(inner: &Inner, window: std::time::Duration) -> std::io::Result<bool> {
+    unsafe_ptmx::wait_readable(&inner.master, window.as_millis() as i32)
+}
+
+/// Is this really the end of the session (gh #477)?
+///
+/// Called when a read looked like EOF - `read_up_to` answering `None` for a
+/// zero-byte read, or the master answering `EIO` once every slave closed.
+/// Neither is trustworthy on its own: a pty can report its end while the bytes
+/// written just ahead of it are still in flight, which is precisely the
+/// `"exit 0 "` result CI caught.
+///
+/// The brief's rule, implemented literally: **child exit plus a drained
+/// buffer**. If the child has not exited this is not the end - the session is
+/// alive and the program may still write. If it has, one grace window is
+/// spent on the chance that the tail is arriving late, and the answer is "the
+/// end" only when that window passes with nothing to read.
+///
+/// Deliberately **does not consume anything**: it only asks the kernel whether
+/// the master is readable, so a tail that does arrive is still there for the
+/// caller's next read. Consuming it here would lose exactly the bytes this
+/// function exists to rescue.
+#[cfg(unix)]
+fn session_ended(inner: &mut Inner) -> std::io::Result<bool> {
+    if !child_exited(inner)? {
+        return Ok(false);
+    }
+    // The child is gone. A late tail gets one window to show up; readable here
+    // means "not drained yet", whatever the earlier read implied.
+    Ok(!wait_readable_for(inner, DRAIN_GRACE)?)
+}
+
 #[cfg(unix)]
 fn read_impl(inner: &mut Inner, max: usize) -> std::io::Result<Option<Vec<u8>>> {
-    match crate::process::read_up_to(&mut inner.master, max) {
-        Ok(bytes) => Ok(bytes),
-        // Linux reports EIO on the master once every slave side is gone;
-        // that is this stream's EOF, not a failure.
-        Err(err) if err.raw_os_error() == Some(5) => Ok(None),
-        // The master is nonblocking: no data yet is "nothing this
-        // call", not EOF and not an error - a panel polling a live
-        // session between keystrokes lands here every time.
-        Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => Ok(Some(Vec::new())),
-        Err(err) => Err(err),
+    let deadline = std::time::Instant::now() + READY_WAIT;
+    loop {
+        // Always read first: output may already be buffered, and a read that
+        // returns data costs nothing. Only an *empty* answer has to wait.
+        let looked_like_eof = match crate::process::read_up_to(&mut inner.master, max) {
+            Ok(Some(bytes)) if !bytes.is_empty() => return Ok(Some(bytes)),
+            // Unreachable today (`read_up_to` maps a zero-byte read to `None`),
+            // but the arm is what keeps this match honest if that ever changes.
+            Ok(Some(_)) => false,
+            // `read_up_to` reports a zero-byte read as `None`, and Linux reports
+            // EIO once every slave side is gone. Both *look* like the end - but
+            // gh #477: a pty master may report it before the bytes written just
+            // ahead of it are readable, which is exactly the "exit 0, no
+            // output" shape CI caught. Only the brief's rule ends the session:
+            // child exit **and** a drain window that came back empty.
+            Ok(None) => true,
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => false,
+            Err(err) if err.raw_os_error() == Some(5) => true,
+            Err(err) => return Err(err),
+        };
+        if looked_like_eof && session_ended(inner)? {
+            return Ok(None);
+        }
+        // Not the end (or not yet). gh #477: wait for the master to become
+        // readable instead of answering `WouldBlock` with an empty chunk
+        // immediately - that tight loop ran at a measured 614,104
+        // calls/second and starved the very writer it was waiting for.
+        let remaining = deadline
+            .saturating_duration_since(std::time::Instant::now())
+            .as_millis();
+        if remaining == 0 || !unsafe_ptmx::wait_readable(&inner.master, remaining as i32)? {
+            // The window closed with the program still silent. "Nothing yet"
+            // is an honest answer here: the session is open (a closed one
+            // would have ended above), and a caller with a frame to draw must
+            // not be blocked for output that may never come.
+            return Ok(Some(Vec::new()));
+        }
     }
 }
 
