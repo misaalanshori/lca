@@ -70,6 +70,75 @@ impl Chat {
         self.open_thinking_picker_with(offered, current);
     }
 
+    /// Open the **stepped thinking wizard** (gh #397): the model, then its
+    /// thinking level.
+    ///
+    /// This is the issue's example of a group a flat list cannot express. The
+    /// second step's options depend on the first, so the wizard computes them from
+    /// the *pending* model - not the applied one - or cancelling would leave the
+    /// session describing a model it is not on. Nothing is written until the last
+    /// step is confirmed, so `Esc` at step two changes nothing at all.
+    ///
+    /// A model that cannot reason still gets a wizard of one step, because the
+    /// wizard's job here is the thinking level; the notice names the limitation
+    /// rather than refusing to open.
+    pub(super) fn open_thinking_wizard(&mut self) {
+        eprintln!("OPEN_THINKING_WIZARD called");
+        let current_level = self.thinking_level().unwrap_or_default();
+        let offered = self
+            .world
+            .options
+            .hooks
+            .thinking_offered
+            .as_ref()
+            .map(|offer| offer())
+            .unwrap_or_else(thinking_offered_all);
+        // A model that does not reason still gets the wizard: step one (which
+        // model) is a real choice whether or not the current one reasons, and
+        // the level step then says why it offers nothing rather than the wizard
+        // refusing to open. Refusing here made the row look dead on exactly the
+        // configuration where a user would go looking for the model step - found
+        // in the `e2e_settings_selector` sandbox, whose mock model declares no
+        // levels.
+        let model = self.model_label();
+        let steps = vec![
+            crate::chat_pickers::WizardStep {
+                key: "provider.model".to_string(),
+                label: "Model".to_string(),
+                value: model.clone(),
+                // The model step offers the models the session can switch to;
+                // without a host list the current model is the only stop, which
+                // still lets step two be reached and is honest about what is
+                // known.
+                values: self.wizard_models(),
+            },
+            crate::chat_pickers::WizardStep {
+                key: "thinking".to_string(),
+                label: "Thinking level".to_string(),
+                value: current_level,
+                values: offered,
+            },
+        ];
+        self.world.wizard = Some(crate::chat_pickers::SteppedWizard::new("thinking", steps));
+    }
+
+    /// The models the thinking wizard's first step offers: the host's list when
+    /// there is one, else just the current model.
+    fn wizard_models(&self) -> Vec<String> {
+        let current = self.model_label();
+        let mut models = vec![current.clone()];
+        // The live list when the host has one, the startup snapshot otherwise -
+        // the same two sources `/model` reads, so the wizard cannot offer a
+        // different set from the picker beside it.
+        let live = self.world.options.hooks.models.as_ref().map(|list| list());
+        for (id, _label) in live.unwrap_or_else(|| self.world.options.models.clone()) {
+            if !models.contains(&id) {
+                models.push(id);
+            }
+        }
+        models
+    }
+
     fn open_thinking_picker_with(&mut self, offered: Vec<String>, current: Option<String>) {
         let selected = match current.as_deref() {
             None => 0,
@@ -214,6 +283,7 @@ impl Chat {
                     selected: 0,
                     editing: None,
                     query: String::new(),
+                    remembered: std::collections::BTreeMap::new(),
                 });
                 return Action::Continue;
             }
@@ -1020,36 +1090,6 @@ impl Chat {
                 format!("{other} = {value}")
             }
         }
-    }
-
-    /// One step on a `/settings` row (gh #30): the next value in the
-    /// row's list (wrapping), applied and persisted, then the rows are
-    /// re-read so value and source show what actually won.
-    pub(super) fn cycle_setting(
-        &mut self,
-        picker: &mut crate::chat_pickers::SettingsPicker,
-        forward: bool,
-    ) -> String {
-        let Some(row) = picker.rows.get(picker.selected) else {
-            return String::new();
-        };
-        if row.values.is_empty() {
-            return format!("{} is edited through its picker", row.key);
-        }
-        let (key, values, current) = (row.key.clone(), row.values.clone(), row.value.clone());
-        let position = values
-            .iter()
-            .position(|value| *value == current)
-            .unwrap_or(0);
-        let next = if forward {
-            (position + 1) % values.len()
-        } else {
-            (position + values.len() - 1) % values.len()
-        };
-        let notice = self.apply_setting(&key, &values[next]);
-        picker.rows = self.settings_rows();
-        picker.selected = picker.selected.min(picker.rows.len().saturating_sub(1));
-        notice
     }
 }
 

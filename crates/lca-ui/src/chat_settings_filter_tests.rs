@@ -33,6 +33,7 @@ fn picker(rows: &[(&str, &str, &str)]) -> crate::chat_pickers::SettingsPicker {
         selected: 0,
         editing: None,
         query: String::new(),
+        remembered: std::collections::BTreeMap::new(),
     }
 }
 

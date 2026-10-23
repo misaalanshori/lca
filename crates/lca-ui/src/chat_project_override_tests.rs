@@ -41,6 +41,7 @@ fn chat_with(rows: Vec<crate::state::SettingRow>, writes: &Writes, trusted: bool
         selected: 0,
         editing: None,
         query: String::new(),
+        remembered: std::collections::BTreeMap::new(),
     });
     let log = writes.clone();
     chat.world.options.hooks.persist_project_setting =
@@ -179,6 +180,7 @@ fn a_failed_write_is_reported_not_faked() {
         selected: 0,
         editing: None,
         query: String::new(),
+        remembered: std::collections::BTreeMap::new(),
     });
     let attempts = Arc::new(AtomicUsize::new(0));
     let counted = attempts.clone();
@@ -251,6 +253,7 @@ fn the_rendered_row_names_the_project_state() {
             selected: 0,
             editing: None,
             query: String::new(),
+            remembered: std::collections::BTreeMap::new(),
         });
         // `viewport` is what the painter draws, including the picker overlay.
         let painted = strip(&chat.viewport(100, 30, 0));

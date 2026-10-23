@@ -45,6 +45,9 @@ pub struct UiState {
     pub url_copied_at: Option<std::time::Instant>,
     /// Ctrl+C seen once on an idle prompt.
     pub ctrl_c_armed: bool,
+    /// The open stepped settings wizard, if any (gh #397): a related group
+    /// walked as ordered steps, committing only when finished.
+    pub wizard: Option<crate::chat_pickers::SteppedWizard>,
     /// The extension side panel is open.
     pub panel_open: bool,
     /// An extension modal is open (one at a time, user-dismissible:
@@ -82,6 +85,7 @@ impl UiState {
             auth_url: None,
             url_copied_at: None,
             ctrl_c_armed: false,
+            wizard: None,
             panel_open: false,
             modal_open: false,
             dialog: None,

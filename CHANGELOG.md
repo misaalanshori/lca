@@ -19,6 +19,26 @@ Dates are UTC.
   import and the `autocomplete.trigger` capability are the follow-up cycle.
 
 ### Fixed
+- **A `/settings` cycle no longer destroys a custom value** (gh #397). The stops on
+  a row's cycle are now `default` plus the presets **union the value the file
+  holds**, union-sorted, so a hand-set `ui.fullscreen_wheel_lines = 4` — not one of
+  `1, 2, 3, 5, 10` — is a stop like any other and cycling returns to it. The old code
+  looked the current value up in the preset list and fell back to index 0 on a miss,
+  so the *first* keypress wrote the second preset and the user's value was gone with
+  no way back: a one-way door on a config file, the same defect the tri-state fix
+  closed for booleans, in the enum case. `default` leads the cycle and is written as
+  a key removal (the existing unset contract), which is what makes
+  `custom → default → a → b → custom` close. Masked secrets are never added as a
+  stop.
+- **Stepped settings wizards, with cancel meaning nothing happened** (gh #397). A
+  related group (a model and its thinking level) can be walked as ordered steps
+  instead of toggled one key at a time, with each pending choice visible and the
+  current step marked. Every step before the last is a proposal held in a pending
+  map, so `Esc` at the last step applies **nothing** — not the steps already
+  confirmed — and a later step that depends on an earlier answer reads the *pending*
+  choice, never the applied one. Committing writes through the same
+  `persist_setting` seam `/settings` uses, in walk order, and returns the cursor to
+  the row that opened the wizard.
 - **Sign-in URLs are copyable in one key over SSH and tmux** (gh #398, gap 1). A
   sign-in URL is 180-300 characters, so it wraps across three to five rows;
   dragging the mouse across them copies the hard newlines at the wrap seams plus
