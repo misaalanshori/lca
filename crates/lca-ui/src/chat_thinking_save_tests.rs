@@ -201,3 +201,67 @@ fn the_model_and_thinking_saves_share_one_key() {
         "and it is pi's `app.thinking.save` key"
     );
 }
+
+// Verifies: gh #396 - **the two `ctrl+s` saves are never live at the same time.**
+//
+// Both pickers claim one key, which is only safe if they cannot both be open. They
+// cannot, and the mechanism is worth naming because it is not the obvious one: an
+// open picker **owns the keyboard**, so `/thinking` typed while `/model` is up never
+// reaches the command parser - the characters go into the picker's search box, and
+// Enter then commits that search and closes the model picker. So the transcript is:
+// one picker open, the other's command swallowed, and enter leaves *neither* open
+// rather than both.
+//
+// A future change that let a slash command run through an open picker would put two
+// handlers on `ctrl+s` in one frame; this row is what would fail.
+#[test]
+fn the_two_save_actions_belong_to_mutually_exclusive_pickers() {
+    let mut first = chat();
+    for c in "/model".chars() {
+        first.handle_key(&c.to_string());
+    }
+    first.handle_key("\r");
+    assert!(first.model_picker.is_some(), "the model picker opened");
+
+    // `/thinking` typed into the open model picker does not open a second picker:
+    // the keys belong to the one that is up.
+    for c in "/thinking".chars() {
+        first.handle_key(&c.to_string());
+    }
+    assert!(
+        first.thinking_picker.is_none(),
+        "a command typed into an open picker does not open a second one"
+    );
+    assert!(
+        first.model_picker.is_some(),
+        "the model picker is still the one owning the keyboard"
+    );
+    // The two are never both live, which is what makes one key safe.
+    assert!(
+        !(first.model_picker.is_some() && first.thinking_picker.is_some()),
+        "two save pickers must never be open at once"
+    );
+    first.handle_key("\r");
+
+    // From a fresh chat the same holds with the roles swapped.
+    let mut fresh = chat();
+    for c in "/thinking".chars() {
+        fresh.handle_key(&c.to_string());
+    }
+    fresh.handle_key("\r");
+    assert!(
+        fresh.thinking_picker.is_some(),
+        "the thinking picker opened"
+    );
+    for c in "/model".chars() {
+        fresh.handle_key(&c.to_string());
+    }
+    assert!(
+        fresh.model_picker.is_none(),
+        "and `/model` typed into it does not open a second picker"
+    );
+    assert!(
+        !(fresh.model_picker.is_some() && fresh.thinking_picker.is_some()),
+        "two save pickers must never be open at once"
+    );
+}
