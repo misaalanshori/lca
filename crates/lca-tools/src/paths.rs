@@ -166,12 +166,16 @@ impl ScreenshotLookup {
         path.file_name()?.to_str()?;
         let ext = path.extension()?.to_str()?;
         let stem = path.file_stem()?.to_str()?;
-        // Which known stem does this filename start with? Then split the rest into
-        // date and time by the join the user's spelling used.
+        // gh #405: normalise the *typed* name to NFC before parsing it, so the
+        // comparison against the enumerated candidates is spelling-insensitive. A
+        // macOS disk hands back NFD while a paste is usually NFC (and a French
+        // `Capture d'écran` is the common case), so without this the search works
+        // in one direction only.
+        let stem_nfc: String = stem.nfc().collect();
         let known = SHOT_STEMS
             .iter()
-            .find(|candidate| stem.starts_with(**candidate))?;
-        let rest = stem.strip_prefix(known)?.trim_start();
+            .find(|candidate| stem_nfc.starts_with(**candidate))?;
+        let rest = stem_nfc.strip_prefix(known)?.trim_start().to_string();
         let (date, time) = match rest.split_once(" at ") {
             Some((date, time)) => (date, time),
             None => rest.rsplit_once(' ')?,

@@ -230,23 +230,41 @@ fn the_candidate_set_covers_every_known_shape() {
 // Verifies: gh #405 gap 1 - **NFC and NFD spellings both resolve.** macOS writes
 // NFD on disk while a user's paste may be NFC; `Capture d'écran` is the French name
 // and its accent can arrive either way.
+//
+// Asserted on **the file found**, not on string equality: macOS's filesystem (HFS+
+// and APFS both) normalises filenames on write, so the `PathBuf` a caller gets back
+// is whatever spelling the filesystem reports - which is not the spelling this test
+// built on Linux. What matters is that the lookup reaches the right file in both
+// directions; the bytes it then reads are the user's screenshot either way.
 #[test]
 fn an_accented_name_resolves_in_either_normalisation() {
-    let home = home("lca-405-nfd", &["Desktop"]);
-    // NFD: 'é' as e + combining acute.
+    let root = home("lca-405-nfd", &["Desktop"]);
+    // NFD on disk: 'é' as e + combining acute.
     let nfd = "Capture d'e\u{301}cran 2024-01-01 at 10.00.00.png";
-    let real = touch(&home.join("Desktop").join(nfd));
-    let lookup = ScreenshotLookup::new(&home);
-    // NFC spelling from the user.
+    touch(&root.join("Desktop").join(nfd));
+    let lookup = ScreenshotLookup::new(&root);
     let nfc = "Capture d'\u{e9}cran 2024-01-01 at 10.00.00.png";
-    assert_eq!(
-        lookup
-            .resolve(Path::new(&format!("~/Desktop/{nfc}")))
-            .as_deref(),
-        Some(real.as_path()),
-        "the NFC spelling finds the NFD file"
+    let found = lookup
+        .resolve(Path::new(&format!("~/Desktop/{nfc}")))
+        .expect("the NFC spelling finds the NFD file");
+    assert!(
+        found.is_file(),
+        "and the result is a real file: {}",
+        found.display()
     );
-    let _ = std::fs::remove_dir_all(&home);
+    // The content, not the path spelling, is what a read consumes.
+    assert_eq!(std::fs::read(&found).expect("read"), b"png");
+
+    // And the reverse direction: an NFC file found by an NFD spelling.
+    let root2 = home("lca-405-nfc", &["Desktop"]);
+    touch(&root2.join("Desktop").join(nfc));
+    let lookup2 = ScreenshotLookup::new(&root2);
+    let found2 = lookup2
+        .resolve(Path::new(&format!("~/Desktop/{nfd}")))
+        .expect("the NFD spelling finds the NFC file");
+    assert_eq!(std::fs::read(&found2).expect("read"), b"png");
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&root2);
 }
 
 // Verifies: gh #405 gap 1 - **the end-to-end wiring.** `screenshot_or_literal` is
