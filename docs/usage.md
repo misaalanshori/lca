@@ -313,6 +313,20 @@ id, message count, tokens, and cost. `/fork` clones the tip into a
 new session; `/tree` walks the branch history; `/compact` replaces
 old history with a summary so a long session stays affordable.
 
+`/resume` shows a **tree** when a project has forks (gh #395). A session that was
+forked heads its own block and its descendants hang under it, indented with
+`├─` / `└─` connectors and a `│` column wherever an earlier sibling continues - so
+a fork family reads as one thing instead of as unrelated rows. A block sorts by
+its **subtree's** most recent activity, not the parent's own last write, because
+after a couple of forks the work you are looking for is usually a child. Typing a
+query flattens the list to the matches, and clearing it brings the tree back.
+
+Two cases that would otherwise be worse than the list it replaced: a session whose
+parent has been deleted is shown as a **root** (it is still resumable, so it is
+never hidden), and a malformed linkage — a session naming itself as its parent, or
+two naming each other — is broken into roots rather than followed, so the picker
+cannot hang.
+
 In `/tree`, a session with no forks reads as a flat list - rows indent
 only where the history actually forks, so a hundred-turn conversation
 still fits a narrow pane. The branch you are on sorts first, `f` cycles

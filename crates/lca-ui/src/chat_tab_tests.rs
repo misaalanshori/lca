@@ -41,6 +41,8 @@ fn tabbed_options() -> crate::state::UiOptions {
                 messages: 1,
                 age: "now".to_string(),
                 labels: Vec::new(),
+                modified_ms: 0,
+                parent: None,
             })
             .collect()
     }));

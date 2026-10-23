@@ -1077,3 +1077,18 @@ mod trigger_provider_seam;
 // gets the same treatment; before this it rendered nowhere at all.
 #[path = "393-compaction-card-collapses.rs"]
 mod compaction_card_collapses;
+
+// GitHub #395 (gap 1): threaded forks in `/resume`. The picker was a flat
+// chronological list, so a fork family - the ordinary case after a few `/fork`s -
+// showed the parent and its children as unrelated rows and the only ordering was
+// last-write time. It is a tree now: parent heads a block, children hang under it
+// with `│/├─/└─` connectors, families sort by their **subtree's** latest activity
+// (a busy fork lifts its parent), a query flattens to the scored list and clearing
+// it restores the tree. The linkage is ADR-0046's `fork-point` record's
+// `parent_session` - **not** pi's `parentSessionPath`, which this design has no
+// field for - already read into `SessionSummary::parent_session` by the store, so
+// no storage change was needed. Gaps 2-5 (streaming progress + touch preservation,
+// hierarchy colours, safe delete, scope toggle / rename / full-text) stay open and
+// are listed in the batch report.
+#[path = "395-fork-tree.rs"]
+mod fork_tree;

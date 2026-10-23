@@ -84,6 +84,8 @@ fn open_resume_picker_lists_sessions_or_says_none() {
             messages: 3,
             age: "today".into(),
             labels: Vec::new(),
+            modified_ms: 0,
+            parent: None,
         }]
     }));
     let mut chat = Chat::new(opts, Arc::new(KeybindingsManager::new()));

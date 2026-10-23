@@ -28,6 +28,20 @@ Dates are UTC.
   import and the `autocomplete.trigger` capability are the follow-up cycle.
 
 ### Fixed
+- **`/resume` shows forks as a tree** (gh #395, gap 1). It was a flat
+  chronological list, so a fork family — the ordinary case after a few `/fork`s —
+  read as unrelated rows and the only ordering was last-write time. A forked
+  session now heads its own block with its descendants under it, connected by
+  `│`/`├─`/`└─` and correct at every depth, and a block sorts by its **subtree's**
+  latest activity: a busy fork lifts its parent, because that is usually where the
+  work you are looking for went. Typing a query flattens to the scored list and
+  clearing it restores the tree. A session whose parent was deleted shows as a root
+  rather than disappearing; a malformed self/cycle linkage is broken into roots
+  instead of followed, so the picker cannot hang. The linkage is ADR-0046's
+  `fork-point` record's `parent_session` — which the store already read into
+  `SessionSummary` — not pi's `parentSessionPath`, so **no storage change** was
+  involved. Gaps 2–5 (streaming progress with touch preservation, hierarchy
+  colours, safe delete, scope toggle / rename / full-text) remain open.
 - **A `/settings` cycle no longer destroys a custom value** (gh #397). The stops on
   a row's cycle are now `default` plus the presets **union the value the file
   holds**, union-sorted, so a hand-set `ui.fullscreen_wheel_lines = 4` — not one of

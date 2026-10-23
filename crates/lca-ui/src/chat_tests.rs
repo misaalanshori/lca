@@ -330,6 +330,8 @@ fn paste_into_the_resume_picker_search_filters_the_list() {
             messages: 1,
             age: "now".into(),
             labels: Vec::new(),
+            modified_ms: 0,
+            parent: None,
         },
         crate::resume::SessionEntry {
             id: "b".into(),
@@ -337,6 +339,8 @@ fn paste_into_the_resume_picker_search_filters_the_list() {
             messages: 2,
             age: "now".into(),
             labels: Vec::new(),
+            modified_ms: 0,
+            parent: None,
         },
     ]));
     chat.handle_key(&bracketed("beta"));
@@ -1051,6 +1055,14 @@ mod toast_tests;
 // Gh #397: value-preserving cycles and stepped settings wizards.
 #[path = "chat_wizard_tests.rs"]
 mod wizard_tests;
+
+// Gh #395 gap 1: threaded forks in `/resume`.
+#[path = "chat_resume_tree_tests.rs"]
+mod resume_tree_tests;
+
+// The `/resume` overlay row, split from `chat_overlay_tests.rs` at the ceiling.
+#[path = "chat_resume_wired_tests.rs"]
+mod resume_wired_tests;
 
 #[path = "chat_hub_tests.rs"]
 mod hub_tests;
