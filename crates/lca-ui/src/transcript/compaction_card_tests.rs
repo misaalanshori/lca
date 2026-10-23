@@ -312,3 +312,37 @@ fn a_compaction_is_a_typed_card_not_a_raw_string() {
         "not a pre-rendered raw line"
     );
 }
+
+// Verifies: a live-found defect - **the range must distinguish the records it
+// names.** Record ids are `<13-digit ms>-<counter>-<entropy>`, so every id in a
+// session shares its first thirteen characters. Truncating from the head printed
+// `17927858..17927858` for a range spanning four records: the card looked like it
+// reported a range and reported nothing.
+#[test]
+fn the_record_range_distinguishes_ids_that_share_a_timestamp_prefix() {
+    let from = "1792785803400-00000002-430c";
+    let to = "1792785803400-00000009-430c";
+    let mut transcript = Transcript::default();
+    transcript.push_compaction_card(Card::replay("llm", "S", from, to, None));
+    let text = frame(&transcript);
+    let range = text
+        .split(" · ")
+        .find(|part| part.contains(".."))
+        .unwrap_or_else(|| panic!("the card reports a range:\n{text}"));
+    let (left, right) = range.trim().split_once("..").expect("a range");
+    assert_ne!(
+        left, right,
+        "the two ends must differ, or the range says nothing:\n{text}"
+    );
+    assert!(
+        text.contains("00000002") && text.contains("00000009"),
+        "the distinguishing counter is what survives:\n{text}"
+    );
+    // And an id with no groups at all is returned whole rather than panicking.
+    assert!(
+        Card::replay("llm", "S", "plain", "plain", None)
+            .headline()
+            .contains("plain"),
+        "a single-group id survives whole"
+    );
+}
