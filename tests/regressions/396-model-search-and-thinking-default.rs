@@ -134,9 +134,10 @@ fn the_thinking_default_uses_the_same_persist_path_as_the_model_default() {
 
 // Verifies: gh #396 rule 7 - **one binding for one gesture.** The thinking save
 // is `ctrl+s`, the same as the model save, because they are the same gesture in the
-// same kind of picker. pi's `app.thinking.save` is `ctrl+r`; LCA keeps its own
-// model save on `ctrl+s`, so matching it is the consistent choice here - and a
-// second key for the same idea is what this row prevents.
+// same kind of picker. pi agrees: its `app.thinking.save` default is `ctrl+s`
+// (`core/keybindings.ts`), so matching LCA's model save is both internally
+// consistent and pi's own choice. A second key for one idea is what this row
+// prevents.
 #[test]
 fn the_thinking_save_keeps_the_model_saves_key() {
     let source = code_only(&read("crates/lca-tui/src/engine/keybindings.rs"));
