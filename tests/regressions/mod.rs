@@ -757,6 +757,11 @@ mod deny_rule_actually_matches;
 #[path = "459-stderr-tail-never-blocks.rs"]
 mod stderr_tail_never_blocks;
 
+// Gh #405: macOS screenshot path variants and streaming-text safety, plus guards
+// for the two behaviours the issue says are already at parity with pi.
+#[path = "405-platform-paths-and-stream-safety.rs"]
+mod platform_paths_and_stream_safety;
+
 // Gh #402: a cache miss names its cause, once per cause, with counted-by-design
 // worded as cost rather than as a defect.
 #[path = "402-a-miss-names-its-cause.rs"]

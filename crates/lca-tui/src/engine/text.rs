@@ -18,6 +18,13 @@
 
 mod ansi;
 mod osc8;
+// gh #405 gap 4: the incomplete-escape sanitizer, split out for the ceiling.
+mod stream_safety;
+pub use stream_safety::sanitize_incomplete_escapes;
+// gh #405 gap 4: the streaming-safety rows (split chunks, incomplete tails).
+#[cfg(test)]
+#[path = "text/stream_safety_tests.rs"]
+mod stream_safety_tests;
 use ansi::update_tracker_from_text;
 pub use ansi::{AnsiCodeTracker, get_active_background_ansi};
 use osc8::get_active_osc8_close;
@@ -503,6 +510,9 @@ pub fn wrap_text_with_ansi(text: &str, width: usize) -> Vec<String> {
     }
     let mut result: Vec<String> = Vec::new();
     let mut tracker = AnsiCodeTracker::new();
+    // gh #405: a sequence that never completed is not text - drop it rather than
+    // let its bytes reach the terminal.
+    let text = sanitize_incomplete_escapes(text);
     let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
     for input_line in normalized.split('\n') {
         let prefix = if result.is_empty() {
