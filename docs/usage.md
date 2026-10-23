@@ -67,6 +67,44 @@ nothing is sent without you. `Alt+Up` does the same on demand while
 the turn keeps running. Typing during `/compact` queues the message
 for the moment compaction finishes instead of being refused.
 
+## Run a shell command with `!`
+
+`!<command>` runs it and streams the output into a card in the transcript; `!!`
+does the same but keeps the command and its output out of the model's context.
+Both are cancellable with `Esc` while they run.
+
+Some commands need a real terminal rather than a pipe: an editor, a pager, an
+interactive `git` subcommand, a REPL, anything fullscreen. Those would either
+refuse (`vim: output is not to a terminal`) or stop and wait for keys that never
+arrive - a hang that looks like the agent is still working. `!` recognises them
+and **hands the terminal over**: the interface steps aside, the command runs with
+its own stdio, and the interface comes back with a card showing the exit code.
+
+```
+!vim notes.txt        # the editor opens; :q returns you here
+!git add -p           # hunk-by-hunk, as in a shell
+!lazygit              # fullscreen
+!git log | less       # a pager tail counts, so this opens `less`
+```
+
+**Detection is a short, explicit list, and it errs towards staying piped.** A
+false positive - running `git log` fullscreen when you wanted its output in the
+transcript - breaks the feature, so only programs whose *primary* mode is the
+terminal are matched, and only as the program word: `grep vim notes.md` is a
+search and stays piped.
+
+When the list does not know your program, or a wrapper hides it, `!i` forces the
+handoff:
+
+```
+!i ./my-curses-tool    # runs with the terminal handed over
+```
+
+Inside a handed-over command `Ctrl+C` reaches the command, not the agent - it
+owns the terminal while it runs. If it ignores signals, kill it from another
+shell (`kill -9 -<pgid>` for a whole process group); the agent cannot offer a key
+of its own while the child holds the terminal.
+
 ## Work in more than one tab
 
 `Ctrl+T` opens another conversation in the same folder, and each tab

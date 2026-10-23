@@ -108,6 +108,63 @@ fn run_through_shell(command: &str) -> std::io::Result<std::process::ExitStatus>
     }
 }
 
+/// Run one command with the terminal handed to it (gh #407 pattern 3).
+///
+/// **Inherited stdio, not pipes.** `spawn_direct` - which every non-interactive
+/// `!` command uses - pipes all three descriptors for a worker thread to drain,
+/// and a fullscreen program on a pipe either refuses (`vim: output is not to a
+/// terminal`) or blocks for keystrokes that never arrive. This spawns with
+/// `Stdio::inherit()` so the child owns the terminal it was given, after the loop
+/// has stopped the interface and its reader thread.
+///
+/// The process group mirrors `spawn_direct`'s: a child that forks should die with
+/// its parent rather than outlive the agent.
+///
+/// **`Ctrl+C` reaches the child**, which is correct and expected: the child owns
+/// the terminal, so the signal is its to handle. A child that *ignores* signals
+/// is the case this leaves to the user, and that is documented rather than
+/// worked around: `kill` it from another shell (`kill -9 -<pgid>` for a group),
+/// or close the terminal. The parent cannot observe a key while the child holds
+/// the terminal in raw mode - that is what inheritance means - so inventing a
+/// parent-side escape here would be a promise the architecture cannot keep.
+#[cfg(unix)]
+pub(super) fn interactive_run(cwd: &std::path::Path, command: &str) -> Option<i32> {
+    use std::os::unix::process::CommandExt;
+    let mut cmd = std::process::Command::new("sh");
+    cmd.arg("-c")
+        .arg(command)
+        .current_dir(cwd)
+        .stdin(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit());
+    // Own process group, like `spawn_direct`: a `!vim | less` pipeline's
+    // children die with it rather than being reparented.
+    cmd.process_group(0);
+    let mut child = cmd.spawn().ok()?;
+    let status = child.wait().ok()?;
+    use std::os::unix::process::ExitStatusExt;
+    Some(
+        status
+            .code()
+            .unwrap_or_else(|| 128 + status.signal().unwrap_or(1)),
+    )
+}
+
+/// The Windows half: the same inheritance through `cmd /C`.
+#[cfg(windows)]
+pub(super) fn interactive_run(cwd: &std::path::Path, command: &str) -> Option<i32> {
+    let mut child = std::process::Command::new("cmd")
+        .arg("/C")
+        .arg(command)
+        .current_dir(cwd)
+        .stdin(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .spawn()
+        .ok()?;
+    child.wait().ok().and_then(|status| status.code())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
