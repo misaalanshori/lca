@@ -1021,3 +1021,119 @@ fn an_osc11_reply_rebuilds_the_system_panels() {
         "a dark background steps the panel lighter"
     );
 }
+
+// ---------------------------------------------------------------------------
+// gh #403 gap 2: one formatter for the resume command.
+//
+// The fullscreen-exit hint (gh #82) named an id; the exit notice needs the whole
+// *pasteable command*. Two `format!`s would drift, so both call
+// `resume_command`. These rows pin the string and, crucially, that a relocated
+// session dir comes back **shell-quoted and parseable** - the third honesty gate.
+// ---------------------------------------------------------------------------
+
+// Verifies: gh #403 gap 2 - the default case names the real flag and stays clean.
+#[test]
+fn resume_command_uses_the_real_flag_for_the_default_home() {
+    assert_eq!(
+        crate::resume_command::resume_command("abc123", None),
+        "lca --resume abc123",
+        "the common command carries no quoting noise"
+    );
+}
+
+// Verifies: gh #403 gap 2 - **a relocated session dir is quoted.** `--resume`
+// resolves against the current data home, so a session carried in from elsewhere
+// needs `--session <path>`; a path with a space must not split into two words.
+#[test]
+fn resume_command_quotes_a_relocated_session_directory() {
+    let dir = std::path::Path::new("/tmp/my sessions/2026-10-23-1");
+    let command = crate::resume_command::resume_command("abc123", Some(dir));
+    assert!(
+        command.starts_with("lca --session "),
+        "a relocated session names its path: {command}"
+    );
+    assert!(
+        command.contains("'"),
+        "and the path with a space is quoted: {command}"
+    );
+    assert!(
+        !command.contains("lca --resume"),
+        "the id alone would resolve against the wrong home: {command}"
+    );
+}
+
+// Verifies: gh #403 gap 2 - **the quoted command actually parses.** Asserting a
+// quote character is present proves nothing; this feeds the printed line to a
+// real shell (`sh -c`) and checks the argument list the shell reconstructs.
+#[cfg(unix)]
+#[test]
+fn the_quoted_command_round_trips_through_a_real_shell() {
+    let awkward = "/tmp/lca resume test-403/space and 'quote' here";
+    let dir = std::path::Path::new(awkward);
+    let command = crate::resume_command::resume_command("abc123", Some(dir));
+    // Reconstruct the argv `sh` would build, without running `lca`: the command
+    // word is replaced by `printf` so nothing executes.
+    let probe = command.replacen("lca --session ", "printf '%s' ", 1);
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(&probe)
+        .output()
+        .expect("run sh");
+    assert!(
+        output.status.success(),
+        "the printed command parses: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        awkward,
+        "and the shell reconstructs the path byte-for-byte: {command}"
+    );
+}
+
+// Verifies: gh #403 gap 2 - **gate 1: a non-TTY stdout says nothing.** A piped or
+// headless run must gain zero bytes; scripted users parse this output.
+#[test]
+fn exit_resume_hint_is_silent_without_a_tty() {
+    assert_eq!(
+        crate::resume_command::exit_resume_hint("abc123", None, false),
+        None,
+        "a piped run gets no hint, so its output is byte-identical to before"
+    );
+    assert_eq!(
+        crate::resume_command::exit_resume_hint("abc123", None, true),
+        Some("resume with: lca --resume abc123".to_string())
+    );
+}
+
+// Verifies: gh #403 gap 2 - **gate 2: no id, no hint.** A run that never reached
+// `session-start` wrote nothing, so there is nothing to advertise.
+#[test]
+fn exit_resume_hint_is_silent_without_a_saved_session() {
+    assert_eq!(
+        crate::resume_command::exit_resume_hint("", None, true),
+        None,
+        "no session id means no saved file to resume"
+    );
+}
+
+// Verifies: gh #403 gap 2 - the exit notice and the fullscreen hint name the same
+// command, which is what makes "one formatter" observable rather than aspirational.
+#[test]
+fn both_hints_share_the_same_command_string() {
+    let tuning = crate::state::DisplayTuning {
+        fullscreen_exit_output: "resume-hint".to_string(),
+        ..crate::state::DisplayTuning::default()
+    };
+    let fullscreen = super::exit_hint(&tuning, "abc123").expect("the gh #82 hint");
+    let on_exit =
+        crate::resume_command::exit_resume_hint("abc123", None, true).expect("the gh #403 hint");
+    assert!(
+        fullscreen.contains(&crate::resume_command::resume_command("abc123", None)),
+        "the fullscreen hint embeds the shared command: {fullscreen}"
+    );
+    assert!(
+        on_exit.contains(&crate::resume_command::resume_command("abc123", None)),
+        "so does the exit hint: {on_exit}"
+    );
+}

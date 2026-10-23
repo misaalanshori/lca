@@ -173,7 +173,8 @@ impl Screen {
 fn exit_hint(tuning: &crate::state::DisplayTuning, session_id: &str) -> Option<String> {
     if tuning.fullscreen_exit_output.as_str() == "resume-hint" && !session_id.is_empty() {
         Some(format!(
-            "session continues in scrollback - resume with: lca --resume {session_id}"
+            "session continues in scrollback - resume with: {}",
+            crate::resume_command::resume_command(session_id, None)
         ))
     } else {
         None
