@@ -962,3 +962,17 @@ mod background_turns_across_tabs;
 // field over a manifest that populates every capability the schema allows.
 #[path = "456-capability-parity-across-delivery-modes.rs"]
 mod capability_parity_across_delivery_modes;
+
+// GitHub #477: the pty read loop had no yield and treated the first "nothing
+// yet" as the end of the stream. Two defects, one site, and the second one is
+// what macOS CI caught: `echo pty-ok` exited 0 and its output was simply
+// missing (`"exit 0 "`). The host answered "the session ended" from a single
+// syscall's view; the conformance guest looped on that answer with no wait, at
+// a measured 584,352 calls per second.
+//
+// The fix moves the answer to where the facts are - a read says done only when
+// the child has exited *and* the buffer is drained, and waits when nothing is
+// coming yet - so a caller written the naive way (loop until `None`) is
+// correct by construction.
+#[path = "477-pty-read-waits-and-drains.rs"]
+mod pty_read_waits_and_drains;

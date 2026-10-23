@@ -196,6 +196,34 @@ mod unsafe_ptmx {
         use std::os::unix::io::AsRawFd;
         file.as_raw_fd()
     }
+
+    /// Wait up to `timeout_ms` for the master to have **data** to read.
+    ///
+    /// `true` means bytes are available now; `false` means the window closed
+    /// without any. Only `POLLIN` counts: `POLLHUP`/`POLLERR` mean the other
+    /// end is gone, which is the session's *end* and not data, and treating it
+    /// as data makes a drained pty look permanently readable - the loop then
+    /// spins against its own EOF instead of terminating.
+    ///
+    /// Interrupts are reported as "no data": a signal is not the session's
+    /// state, and the caller's next read still sees whatever is really there.
+    pub(super) fn wait_readable(file: &std::fs::File, timeout_ms: i32) -> std::io::Result<bool> {
+        let mut pfd = libc::pollfd {
+            fd: raw_fd(file),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: one valid pollfd, alive for the duration of the call.
+        let rc = unsafe { libc::poll(&mut pfd, 1, timeout_ms) };
+        if rc < 0 {
+            let err = std::io::Error::last_os_error();
+            if err.kind() == std::io::ErrorKind::Interrupted {
+                return Ok(false);
+            }
+            return Err(err);
+        }
+        Ok(rc > 0 && (pfd.revents & libc::POLLIN) != 0)
+    }
 }
 
 #[cfg(unix)]
@@ -249,18 +277,92 @@ fn spawn_impl(
     })
 }
 
+/// How long one `read` waits for output before answering "nothing yet".
+///
+/// This is a readiness window, not a delay: the call returns the moment the
+/// master is readable (or the session ends), and only spends the full window
+/// when the program is genuinely silent. Sized at roughly one frame so a
+/// frame-driven caller (the `ui` panel) still gets its answer promptly while a
+/// caller looping until `None` (the conformance probe) makes a handful of
+/// calls instead of hundreds of thousands.
+#[cfg(unix)]
+const READY_WAIT: std::time::Duration = std::time::Duration::from_millis(8);
+
+/// How long to give a tail that may still be in flight after the child exited
+/// (gh #477).
+///
+/// A pty's master reports its end on terms of its own: the child exiting does
+/// not mean the bytes it wrote have been drained, and the platform that failed
+/// (`exit 0 ` with no output) reported the end before the tail was readable.
+/// This is spent **once**, on the first EOF-looking read after a confirmed
+/// child exit, so it costs nothing on the normal path.
+#[cfg(unix)]
+const DRAIN_GRACE: std::time::Duration = std::time::Duration::from_millis(4);
+
+/// Has the child exited? `try_wait` caches the status, so the `wait` that
+/// every caller runs afterwards still reports the real exit code.
+#[cfg(unix)]
+fn child_exited(inner: &mut Inner) -> std::io::Result<bool> {
+    Ok(inner.child.try_wait()?.is_some())
+}
+
 #[cfg(unix)]
 fn read_impl(inner: &mut Inner, max: usize) -> std::io::Result<Option<Vec<u8>>> {
-    match crate::process::read_up_to(&mut inner.master, max) {
-        Ok(bytes) => Ok(bytes),
-        // Linux reports EIO on the master once every slave side is gone;
-        // that is this stream's EOF, not a failure.
-        Err(err) if err.raw_os_error() == Some(5) => Ok(None),
-        // The master is nonblocking: no data yet is "nothing this
-        // call", not EOF and not an error - a panel polling a live
-        // session between keystrokes lands here every time.
-        Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => Ok(Some(Vec::new())),
-        Err(err) => Err(err),
+    let deadline = std::time::Instant::now() + READY_WAIT;
+    // A tail gets exactly one second chance, never a loop. macOS leaves a
+    // drained master *permanently readable* (a read answers 0 bytes at once),
+    // so "poll says readable" cannot distinguish a late tail from the end -
+    // a grace loop against it would spin until the test budget expired, which
+    // is exactly how the first version of this fix turned a lost-output flake
+    // into a 120-second timeout on macOS CI.
+    let mut drain_retry_used = false;
+    loop {
+        // Read first: output may already be buffered, and a read that returns
+        // data costs nothing. Only an *empty* answer has to wait.
+        let end_of_stream = match crate::process::read_up_to(&mut inner.master, max) {
+            Ok(Some(bytes)) if !bytes.is_empty() => return Ok(Some(bytes)),
+            // Unreachable today (`read_up_to` maps a zero-byte read to `None`),
+            // but the arm is what keeps this match honest if that ever changes.
+            Ok(Some(_)) => false,
+            // `read_up_to` reports a zero-byte read as `None`, and Linux reports
+            // EIO once every slave side is gone. Both mean the master saw its
+            // end - which on a pty can arrive before the tail is readable, the
+            // "exit 0, no output" shape gh #477 was filed for.
+            Ok(None) => true,
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => false,
+            Err(err) if err.raw_os_error() == Some(5) => true,
+            Err(err) => return Err(err),
+        };
+        if end_of_stream {
+            // Not the end while the child is still alive: it may write again.
+            if !child_exited(inner)? {
+                // fall through to the wait below and look again
+            } else if drain_retry_used {
+                // Child gone, end seen twice: the buffer is genuinely drained.
+                return Ok(None);
+            } else {
+                // Child gone and an end seen - give a late tail one window to
+                // appear before believing it. Whatever it finds is returned by
+                // the next iteration, because this only waits; it never reads.
+                drain_retry_used = true;
+                let _ = unsafe_ptmx::wait_readable(&inner.master, DRAIN_GRACE.as_millis() as i32)?;
+                continue;
+            }
+        }
+        // Nothing to return yet. gh #477: wait for the master to have data
+        // instead of answering `WouldBlock` with an empty chunk immediately -
+        // that tight loop ran at a measured 614,104 calls/second and starved
+        // the very writer it was waiting for.
+        let remaining = deadline
+            .saturating_duration_since(std::time::Instant::now())
+            .as_millis();
+        if remaining == 0 || !unsafe_ptmx::wait_readable(&inner.master, remaining as i32)? {
+            // The window closed with the program still silent. "Nothing yet"
+            // is an honest answer: the session is open (a confirmed end would
+            // have returned above), and a caller with a frame to draw must not
+            // be blocked for output that may never come.
+            return Ok(Some(Vec::new()));
+        }
     }
 }
 
