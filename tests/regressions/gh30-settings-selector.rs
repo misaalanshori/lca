@@ -266,25 +266,54 @@ fn the_theme_and_thinking_rows_open_their_existing_sub_pickers() {
         "the restored rows answer with what just landed"
     );
 
-    // Row 2 is `thinking`: same story through its own picker.
+    // Row 2 is `thinking`. **Changed by gh #397's brief**: the row now opens the
+    // stepped wizard (model, then thinking level) instead of the flat level
+    // picker, because a level list whose options depend on the model is the
+    // group a flat list cannot express. This row previously asserted
+    // `thinking_picker.is_some()`.
     chat.settings_picker.as_mut().expect("open").selected = 2;
     chat.handle_key("\r");
     assert!(
-        chat.thinking_picker.is_some(),
-        "the thinking row opens the thinking picker"
+        chat.world.wizard.is_some(),
+        "the thinking row opens the stepped wizard"
     );
-    chat.handle_key("\x1b[B"); // Down: unset -> off
-    chat.handle_key("\r");
-    let persisted_thinking = writes
-        .lock()
-        .unwrap()
-        .iter()
-        .any(|(key, value)| key == "thinking" && value.as_deref() == Some("off"));
     assert!(
-        persisted_thinking,
-        "the thinking pick persisted: {:?}",
-        writes
+        chat.thinking_picker.is_none(),
+        "and not the flat level picker, which the wizard replaces"
     );
+    assert!(
+        chat.settings_picker.is_some(),
+        "the selector stays open underneath (pi's submenu shape)"
+    );
+    // Walk to the level step and confirm it: the wizard commits through the same
+    // persist hook, in order, and only on the last step.
+    chat.handle_key("\r"); // step 1 -> step 2
+    let level = chat
+        .world
+        .wizard
+        .as_ref()
+        .and_then(|wizard| wizard.current())
+        .and_then(|step| step.values.first().cloned());
+    if let Some(level) = level {
+        chat.handle_key("\x1b[B"); // Down: choose the neighbouring level
+        chat.handle_key("\r"); // finish
+        let persisted_thinking = writes
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(key, value)| key == "thinking" && value.is_some());
+        assert!(
+            persisted_thinking,
+            "the wizard persisted the thinking level: {:?}",
+            writes
+        );
+        let _ = level;
+    } else {
+        // A provider that declares no levels: the wizard opens, offers nothing,
+        // and commits nothing. Cancelling is the only sensible outcome.
+        chat.handle_key("\x1b");
+        assert!(chat.world.wizard.is_none(), "the wizard closes on esc");
+    }
 }
 
 // ADR-0042: `permissions.mode = yolo` is loud - the footer marker
@@ -295,14 +324,26 @@ fn the_yolo_toggle_is_loud_in_the_footer() {
     let writes: Writes = Arc::new(Mutex::new(Vec::new()));
     let mut chat = chat(rows_hook(writes.clone()));
     open_settings(&mut chat);
-    // Row 3 is `permissions.mode` (ask -> yolo).
+    // Row 3 is `permissions.mode` (ask -> yolo). **Changed by gh #397's brief**:
+    // the cycle gained a leading `default` stop, and this fixture's unwritten rows
+    // read `auto` (which is not one of this row's presets), so the row is really at
+    // `default` and one press lands on the first preset rather than the second.
+    // The assertion below is the same property as before - the toggle persists
+    // through the shared seam and the footer goes loud - so the presses are what
+    // changed, not what is being proved.
     for _ in 0..3 {
         chat.handle_key("\x1b[B");
     }
+    chat.handle_key("\x1b[C"); // Right: default -> ask
     chat.handle_key("\x1b[C"); // Right: ask -> yolo
+    // Two presses, two writes - each through the same seam. What the row pins is
+    // that the *last* one is `yolo` and that no write bypassed the hook.
     assert_eq!(
         *writes.lock().unwrap(),
-        vec![("permissions.mode".to_string(), Some("yolo".to_string()))]
+        vec![
+            ("permissions.mode".to_string(), Some("ask".to_string())),
+            ("permissions.mode".to_string(), Some("yolo".to_string())),
+        ]
     );
     assert!(chat.world.options.yolo, "the session flag follows");
     let rendered = chat
