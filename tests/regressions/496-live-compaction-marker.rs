@@ -63,11 +63,16 @@ fn user_record(id: &str, text: &str) -> Record {
     }
 }
 
-// Verifies: gh #496 - **the replay path is untouched**. `replay_records` places a
-// summary at the compaction record's own position, naming the strategy. This is
-// the behaviour the issue says already works, and the reason option A was enough:
-// the user who leaves and comes back gets the *content*, so the live marker only
-// has to say the *fact*.
+// Verifies: gh #496 - **the replay path still places the summary in record
+// order.** This is the behaviour the issue says already works, and the reason
+// option A was enough: the user who leaves and comes back gets the *content*, so
+// the live marker only has to say the *fact*.
+//
+// Gh #393 sanctioned change: the summary is now behind a collapsed card, so this
+// row asserts the card sits in record order (not that its text is visible) and
+// then expands it to prove the text is still there and still in the right place.
+// The property - chronological position, content preserved - is unchanged; only
+// the default visibility moved, which is exactly what #393 asked for.
 //
 // The 4-record fixture is the one the issue cites (`u1, u2, Compaction{u1..u2},
 // u3`) - it existed only as a manual check until this row.
@@ -88,15 +93,28 @@ fn replaying_a_session_still_puts_the_summary_in_record_order() {
     let third = text.find("U:third").expect("the record after the cut");
     assert!(
         first < summary && summary < third,
-        "the summary sits in record order:\n{text}"
+        "the card sits in record order:\n{text}"
     );
     assert!(
-        text.contains("SUMMARY"),
-        "and carries the summary text, unlike the live marker which has none:\n{text}"
-    );
-    assert!(
-        text.contains("(via llm)"),
+        text.contains("summarised via llm"),
         "and names the strategy that produced it:\n{text}"
+    );
+    // Gh #393: collapsed by default, so the text is one key away rather than
+    // printed. Expanding proves the content survived the change.
+    assert!(
+        !text.contains("SUMMARY"),
+        "collapsed, the summary is not printed:\n{text}"
+    );
+    let card = transcript
+        .entries()
+        .iter()
+        .position(|entry| matches!(entry, lca_ui::Entry::Compaction { .. }))
+        .expect("the record became a card");
+    assert!(transcript.toggle_entry_compaction(card), "the card opens");
+    let expanded = transcript.render(100, &lca_ui::Theme::default()).join("\n");
+    assert!(
+        expanded.contains("SUMMARY"),
+        "and carries the summary text, unlike the live marker which has none:\n{expanded}"
     );
 }
 
@@ -105,14 +123,23 @@ fn replaying_a_session_still_puts_the_summary_in_record_order() {
 // asks for: "the two views are on the record as different-but-consistent". A
 // regression that made the live path render the summary too would need the store
 // seam option B was rejected for, so this row also documents the boundary.
+//
+// Gh #393 sanctioned change: both sides are now *collapsed cards*, so "different
+// on purpose" is asserted as "different content, same shape" rather than as the
+// old expanded text. The live marker carries no summary because
+// `TurnEvent::CompactionEnded` is `{reason, success}`; that has not changed.
 #[test]
 fn the_live_marker_and_the_replayed_summary_are_different_on_purpose() {
     let mut transcript = lca_ui::Transcript::default();
     transcript.replay_records(&[compaction_record("c1", "SUMMARY", "llm")], None);
     let replayed = transcript.render(100, &lca_ui::Theme::default()).join("\n");
     assert!(
-        replayed.contains("(via llm)"),
+        replayed.contains("summarised via llm"),
         "the replay knows the strategy:\n{replayed}"
+    );
+    assert!(
+        replayed.contains("expand"),
+        "and the card is collapsed, offering the key that reveals the text:\n{replayed}"
     );
 
     // The live marker has no strategy and no summary - it is built from the
@@ -128,14 +155,39 @@ fn the_live_marker_and_the_replayed_summary_are_different_on_purpose() {
         .expect("the live marker exists");
     let body = &source[marker..];
     let body = &body[..body.find("\n    }\n").unwrap_or(body.len())];
+    // Gh #393: the live row is now a typed card, so the label lives in the card
+    // renderer. What this row still pins is the *data* the live path passes: a
+    // reason and a success flag, and no summary.
     assert!(
-        body.contains("[compaction]") && body.contains("summarised"),
-        "the live marker names the event:\n{body}"
+        body.contains("Card::live("),
+        "the live marker builds a card from the event:\n{body}"
     );
     assert!(
-        !body.contains("summary"),
+        body.contains("reason"),
+        "and passes the reason through:\n{body}"
+    );
+    // The *call* must not take a summary argument. Checked against the code
+    // lines, not the whole body: the comment above the call explains the absence
+    // of one, and a prose mention is not a parameter.
+    let calls: String = body
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !calls.contains("summary"),
         "and does not pretend to carry the summary - it cannot, and option B's \
-         store seam was rejected:\n{body}"
+         store seam was rejected:\n{calls}"
+    );
+    // And the card renderer still names the event for both views.
+    let card = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/crates/lca-ui/src/transcript/compaction_card.rs"
+    ))
+    .expect("the card renderer is readable");
+    assert!(
+        card.contains("[compaction]") && card.contains("summarised"),
+        "the card names the event"
     );
 }
 

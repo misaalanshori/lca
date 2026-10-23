@@ -113,6 +113,10 @@ fn paren_hint(
     }
 }
 
+/// Gh #393: the compaction card lives in its own module (`compaction_card.rs`);
+/// this is the one call site.
+use crate::transcript::compaction_card::render_card as render_compaction_card;
+
 // Eight rendering inputs plus the sink; like `render_assistant` below,
 // a context struct is the upgrade if a ninth arrives.
 #[allow(clippy::too_many_arguments)]
@@ -166,6 +170,19 @@ pub(super) fn render_entry(
         }
         Entry::Notice(text) => {
             render_custom(text, width, theme, out);
+            0
+        }
+        // Gh #393: the collapsed card. `expanded` is the per-entry override over
+        // the global default, the same rule a tool card follows.
+        Entry::Compaction { card, expanded } => {
+            render_compaction_card(
+                card,
+                expanded.unwrap_or(tools_expanded),
+                width,
+                theme,
+                keybindings,
+                out,
+            );
             0
         }
         Entry::Error(text) => {

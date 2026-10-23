@@ -823,6 +823,13 @@ impl Chat {
                     None => None,
                 }
             }
+            Some(EntryHit::Compaction(index)) => {
+                match self.transcript.compaction_card_expanded(index) {
+                    Some(true) => Some("Collapse summary".to_string()),
+                    Some(false) => Some("Expand summary".to_string()),
+                    None => None,
+                }
+            }
             None => None,
         }
     }
