@@ -7,6 +7,16 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **Quitting the interface tells you how to come back** (gh #403 gap 2). Only
+  leaving fullscreen used to name the session (gh #82); any other exit left no
+  answer to "how do I get back to this?". Every exit now prints
+  `resume with: lca --resume <id>` once the session has been written — and only
+  then: a piped or headless run gains zero bytes, a launch-and-quit session (gh
+  #122, which records nothing) stays silent, and a session kept outside `~/.lca`
+  is named by path with shell quoting so the line pastes cleanly. The command
+  string comes from one formatter shared with the fullscreen hint, so the two
+  cannot drift; the quoting round-trips through a real `sh -c`.
+
 - **`--mode rpc` no longer loses a turn when a command arrives mid-turn** (gh
   #489). The loop drove its turn with `run.take()` inside a `tokio::select!`
   branch future, and `select!` rebuilds every branch future on each iteration — so

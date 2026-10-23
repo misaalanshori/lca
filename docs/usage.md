@@ -284,6 +284,13 @@ outside, `lca resume` lists the project's sessions, and
 `lca -c -p "continue"` appends a headless turn to the latest one
 (see [CLI integration](cli-integration.md)).
 
+Quitting the interface prints `resume with: lca --resume <id>` once the session
+has been written, so the way back is in the scrollback (gh #403 gap 2). It is
+printed only when the command will work: not for a piped or headless run, and not
+for a session that never recorded anything — a hint whose command failed would
+teach you the tool lies. A session kept outside `~/.lca` is named by path
+(`lca --session <dir>`) and shell-quoted, so the line pastes cleanly.
+
 ## Adjust the interface
 
 `/settings` edits the user-facing keys with the winning source
