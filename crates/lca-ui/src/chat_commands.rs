@@ -5,10 +5,6 @@ use std::sync::Arc;
 
 use lca_tui::engine::keybindings::KeybindingsManager;
 use lca_tui::engine::keys;
-use lca_tui::widgets::autocomplete::trigger::TriggerChain;
-use lca_tui::widgets::autocomplete::{
-    ArgumentCompletions, AutocompleteItem, CombinedAutocompleteProvider, SlashCommand,
-};
 
 pub(crate) use crate::command_help_table::command_help;
 
@@ -16,7 +12,7 @@ use super::chat::Chat;
 use crate::chat_pickers::{
     SettingsPicker, ThemePicker, ThinkingPicker, TreePicker, TrustPicker, thinking_offered_all,
 };
-use crate::state::{Action, UiOptions};
+use crate::state::Action;
 
 /// Commands that must wait for the turn boundary (composer-polish
 /// fold-in): they touch the session while a running turn may be appending
@@ -871,105 +867,7 @@ pub(crate) fn paste_text(data: &str) -> Option<String> {
     lca_tui::widgets::paste::bracketed_paste_content(data).map(lca_tui::widgets::paste::flatten)
 }
 
-/// Build the autocomplete chain: the built-in provider (commands, arguments, paths)
-/// with the first-party `#`-issue trigger wrapped over it (gh #408).
-///
-/// The trigger is registered *outside* the built-in provider, so the inner provider
-/// keeps owning `/`, `@`, and paths by construction — a decorator cannot shadow a
-/// token it never sees first.
-pub(crate) fn provider_for(options: &UiOptions) -> TriggerChain {
-    let inner = Arc::new(inner_provider_for(options));
-    let mut chain = TriggerChain::new(inner, std::time::Duration::from_secs(3));
-    // Gh #408: the failure to register would be a programming error, not a user
-    // condition — `#` is a legal trigger by construction. Recording it as a notice
-    // would be noise, so the `Result` is consumed and the chain stays valid either
-    // way (an unregistered trigger simply delegates).
-    let _ = chain.register(
-        "#",
-        "issues",
-        Arc::new(crate::autocomplete_issues::IssueQuery::new(
-            options.workspace.clone(),
-        )),
-    );
-    chain
-}
-
-/// The built-in provider: command names, their arguments, and file paths.
-fn inner_provider_for(options: &UiOptions) -> CombinedAutocompleteProvider {
-    let models = options.models.clone();
-    let providers: Vec<String> = options
-        .slash_commands
-        .iter()
-        .filter_map(|c| c.strip_prefix('/'))
-        .filter_map(|c| c.strip_suffix(".login"))
-        .map(str::to_string)
-        .collect();
-    let mut commands: Vec<SlashCommand> = options
-        .slash_commands
-        .iter()
-        .map(|command| {
-            let name = command.strip_prefix('/').unwrap_or(command).to_string();
-            let argument_completions: Option<ArgumentCompletions> = match name.as_str() {
-                "model" => {
-                    let models = models.clone();
-                    Some(Arc::new(move |prefix: &str| {
-                        models
-                            .iter()
-                            .filter(|(id, _)| id.starts_with(prefix))
-                            .map(|(id, label)| AutocompleteItem {
-                                // The insert is the raw id; only the menu
-                                // row shows the label (G2).
-                                value: id.clone(),
-                                label: label.clone(),
-                                description: None,
-                                origin: None,
-                                dim: false,
-                            })
-                            .collect()
-                    }))
-                }
-                "login" => {
-                    let providers = providers.clone();
-                    Some(Arc::new(move |prefix: &str| {
-                        providers
-                            .iter()
-                            .filter(|p| p.starts_with(prefix))
-                            .map(|p| AutocompleteItem {
-                                value: p.clone(),
-                                label: p.clone(),
-                                description: None,
-                                origin: None,
-                                dim: false,
-                            })
-                            .collect()
-                    }))
-                }
-                _ => None,
-            };
-            SlashCommand {
-                name,
-                description: None,
-                argument_hint: None,
-                argument_completions,
-            }
-        })
-        .collect();
-    // Gh #58: templates complete with their description and hint.
-    if let Some(templates) = options.hooks.prompt_templates.as_ref() {
-        for template in templates() {
-            if !commands.iter().any(|c| c.name == template.name) {
-                commands.push(SlashCommand {
-                    name: template.name,
-                    description: (!template.description.is_empty()).then_some(template.description),
-                    argument_hint: (!template.argument_hint.is_empty())
-                        .then_some(template.argument_hint),
-                    argument_completions: None,
-                });
-            }
-        }
-    }
-    CombinedAutocompleteProvider::new(commands, options.workspace.clone())
-}
+pub(crate) use crate::autocomplete_provider::provider_for;
 
 /// The product changelog, baked in at build time (gh #131): `/changelog`
 /// reads it without reaching the network or the filesystem.

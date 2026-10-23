@@ -1032,3 +1032,37 @@ fn fork_enter_on_open_forks_the_latest_record() {
     );
     assert_eq!(chat.editor.text(), "first\n\nsecond", "the text restores");
 }
+
+// Verifies: gh #408 side-by-side - **a command is offered once.** The host's
+// `slash_commands()` inserts `/settings` explicitly and also derives it from
+// `HANDLED_NAMES`, so the popup showed two identical rows (pi shows one). The
+// duplication is upstream in `lca-cli` and that tree is out of this cycle's
+// boundary, so the dedupe lands where the list becomes suggestions - which is also
+// the layer that must never offer the same thing twice.
+#[test]
+fn a_command_appears_in_the_popup_only_once() {
+    let mut opts = options();
+    opts.slash_commands = vec![
+        "/help".into(),
+        "/settings".into(),
+        "/settings".into(),
+        "/model".into(),
+        "/model".into(),
+        "/model".into(),
+    ];
+    use lca_tui::widgets::autocomplete::AutocompleteProvider;
+    let provider = super::provider_for(&opts);
+    let suggestions = provider.get_suggestions("/set", false).expect("offers");
+    assert_eq!(
+        suggestions.items.len(),
+        1,
+        "one row per command, however many times the host lists it: {:?}",
+        suggestions
+            .items
+            .iter()
+            .map(|i| &i.label)
+            .collect::<Vec<_>>()
+    );
+    let model = provider.get_suggestions("/mod", false).expect("offers");
+    assert_eq!(model.items.len(), 1, "and the same for a repeated name");
+}

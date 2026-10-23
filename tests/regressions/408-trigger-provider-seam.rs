@@ -172,7 +172,9 @@ fn the_first_party_provider_lives_in_the_host_and_the_engine_stays_world_less() 
 /// structure rather than by ordering luck.
 #[test]
 fn the_trigger_is_wrapped_over_the_builtin_provider() {
-    let source = code_only(&read("crates/lca-ui/src/chat_commands.rs"));
+    // The construction moved to its own module for the ceiling; the property is the
+    // same, so this reads the chain's home.
+    let source = code_only(&read("crates/lca-ui/src/autocomplete_provider.rs"));
     assert!(
         source.contains("TriggerChain::new(inner"),
         "the chain decorates the built-in provider"
