@@ -23,6 +23,7 @@ mod persona;
 pub(crate) use hub::OFFICIAL_CATALOG_URL;
 mod label_hooks;
 pub mod login;
+mod model_rows;
 mod model_select;
 mod pending_step;
 mod runner;

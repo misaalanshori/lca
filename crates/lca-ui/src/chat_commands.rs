@@ -131,9 +131,11 @@ impl Chat {
         // the same two sources `/model` reads, so the wizard cannot offer a
         // different set from the picker beside it.
         let live = self.world.options.hooks.models.as_ref().map(|list| list());
-        for (id, _label) in live.unwrap_or_else(|| self.world.options.models.clone()) {
-            if !models.contains(&id) {
-                models.push(id);
+        // Gh #396: a `ModelRow` is a struct now (`id`, `label`, `provider`), so the
+        // id is a field rather than the tuple's first slot.
+        for entry in live.unwrap_or_else(|| self.world.options.models.clone()) {
+            if !models.contains(&entry.id) {
+                models.push(entry.id);
             }
         }
         models
