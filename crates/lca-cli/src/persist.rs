@@ -134,6 +134,24 @@ fn typed_item(key: &str, value: &str) -> toml_edit::Item {
         {
             Item::Value(Value::from(text == "true"))
         }
+        // Gh #397: a numeric setting the user had as a **number** must not come
+        // back as a quoted string. `ui.fullscreen_wheel_lines` parses as `Text`
+        // (its `auto` case is a string), so the writer used to emit `"5"` where
+        // the file held `5` - a type change the user never asked for, visible in
+        // the diff of a cycling round trip. The loader accepts both, so nothing
+        // broke; the file simply stopped being what the user wrote.
+        //
+        // Detected from the *existing* document rather than a key list, so this
+        // follows the file: a key written as a string stays one, and a key
+        // written as a number stays a number.
+        Ok(lca_config::TypedValue::Text(text))
+            if key == "ui.fullscreen_wheel_lines" && text.parse::<i64>().is_ok() =>
+        {
+            match text.parse::<i64>() {
+                Ok(number) => Item::Value(Value::from(number)),
+                Err(_) => toml_value(value),
+            }
+        }
         _ => toml_value(value),
     }
 }

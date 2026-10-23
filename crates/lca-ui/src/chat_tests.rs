@@ -1048,6 +1048,10 @@ mod project_override_tests;
 #[path = "chat_toast_tests.rs"]
 mod toast_tests;
 
+// Gh #397: value-preserving cycles and stepped settings wizards.
+#[path = "chat_wizard_tests.rs"]
+mod wizard_tests;
+
 #[path = "chat_hub_tests.rs"]
 mod hub_tests;
 
