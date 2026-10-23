@@ -1129,10 +1129,28 @@ impl Editor {
                     .as_ref()
                     .map(|d| format!("  {d}"))
                     .unwrap_or_default();
-                let line = format!("{marker}{}{desc}", item.label);
+                // Gh #408: a trigger-owned row names its source, so a row from an
+                // extension is never mistaken for a built-in one. Typed on the item
+                // and composed here, so the editor never re-parses a string.
+                let origin = item
+                    .origin
+                    .as_ref()
+                    .map(|o| format!("  [{o}]"))
+                    .unwrap_or_default();
+                let line = format!("{marker}{}{desc}{origin}", item.label);
                 truncate_to_width(&line, width, "…", false)
             })
             .collect()
+    }
+
+    /// Whether the row at `index` renders dimmed (gh #408 rule 5): an
+    /// `(unavailable)` row is information, not a choice, so the popup must not
+    /// offer it as though it were selectable.
+    pub fn suggestion_is_dim(&self, index: usize) -> bool {
+        self.suggestions
+            .as_ref()
+            .and_then(|s| s.items.get(index))
+            .is_some_and(|item| item.dim)
     }
 
     /// The visible width of the widest buffer line.

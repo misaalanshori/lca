@@ -12,6 +12,8 @@
 //! search feels slow; the near-directory pass is what makes completion feel
 //! immediate.
 
+pub mod trigger;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -24,6 +26,15 @@ pub struct AutocompleteItem {
     pub label: String,
     /// An optional description.
     pub description: Option<String>,
+    /// Where the row came from, for a provider that is not the built-in one -
+    /// rendered as `[extension: github-issues]` (gh #408, issuedraft 022's origin
+    /// tag). `None` for the built-in command and path rows.
+    pub origin: Option<String>,
+    /// Render the row dimmed (gh #408 rule 5): an `(unavailable)` row is
+    /// information, not a choice, so it must not look selectable. Styling is
+    /// carried as a typed flag rather than pre-baked escapes, so the popup keeps
+    /// rendering plain text and the theme decides what "dim" is.
+    pub dim: bool,
 }
 
 /// A slash command with optional argument completion.
@@ -142,6 +153,8 @@ impl CombinedAutocompleteProvider {
                             (None, Some(d)) => Some(d.clone()),
                             (None, None) => None,
                         },
+                        origin: None,
+                        dim: false,
                     },
                 ));
             }
@@ -192,6 +205,8 @@ impl CombinedAutocompleteProvider {
                     },
                     label: if is_dir { format!("{name}/") } else { name },
                     description: None,
+                    origin: None,
+                    dim: false,
                 },
             ));
         }
@@ -326,6 +341,8 @@ fn collect_files(root: &Path, query: &str, out: &mut Vec<(f64, usize, String, Au
                         value: format!("@{rel}"),
                         label: name.clone(),
                         description: Some(rel.clone()),
+                        origin: None,
+                        dim: false,
                     },
                 ));
             }
@@ -531,6 +548,8 @@ mod tests {
                             value: m.to_string(),
                             label: m.to_string(),
                             description: None,
+                            origin: None,
+                            dim: false,
                         })
                         .collect()
                 })),

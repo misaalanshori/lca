@@ -148,9 +148,12 @@ fn the_walk_is_breadth_first_and_sorted() {
 // it: `options.workspace`, never `$HOME` and never the process cwd.
 #[test]
 fn the_walk_is_rooted_at_the_workspace() {
+    // The construction site moved to its own module when `chat_commands.rs`
+    // reached the 1,200-line ceiling (gh #408); the property is unchanged, so this
+    // follows it rather than pinning a file path that a split can silently orphan.
     let source = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/crates/lca-ui/src/chat_commands.rs"
+        "/crates/lca-ui/src/autocomplete_provider.rs"
     ))
     .expect("the provider's construction site is readable");
     assert!(

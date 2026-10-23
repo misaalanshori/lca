@@ -6,6 +6,18 @@ Dates are UTC.
 
 ## [Unreleased]
 
+### Added
+- **`#` completes issue numbers from `gh` inline in the prompt** (gh #408). This is
+  the first consumer of a new trigger seam: an autocomplete provider declares the
+  characters it owns and handles those tokens itself, delegating every other token
+  down the chain — so a trigger cannot shadow `/`, `@`, or file paths by
+  construction. A query has a hard deadline (a slow or failing answer is one dim
+  `(unavailable)` row, never a frozen editor or a modal), a newer keystroke
+  supersedes an older query so a stale row never overwrites newer text, typed rows
+  carry their `[origin]` tag, and an unchanged token reuses its previous answer.
+  Registering `/`, whitespace, or a multi-character prefix is refused. The WIT
+  import and the `autocomplete.trigger` capability are the follow-up cycle.
+
 ### Fixed
 - **Sign-in URLs are copyable in one key over SSH and tmux** (gh #398, gap 1). A
   sign-in URL is 180-300 characters, so it wraps across three to five rows;
