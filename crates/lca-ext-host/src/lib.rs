@@ -40,7 +40,7 @@ use lca_protocol::{
     CapabilityError, CommandEffect, CompletionRequest, DispatchError, EventSink, HookAction,
     IdentityOutcome, ModelInfo, PostToolObservation, ToolCall, ToolResultStatus, ToolSpec, Usage,
 };
-use lca_tools::{Capabilities, CapabilityGrants, Denial, ResourceSource};
+use lca_tools::{Capabilities, Denial, ResourceSource};
 use std::collections::BTreeMap;
 use wasmtime::component::{HasSelf, Linker, ResourceTable};
 use wasmtime::{Engine, Store, StoreLimits, StoreLimitsBuilder};
@@ -289,25 +289,16 @@ impl ExtHost {
             });
         }
 
+        // Gh #456: the grant set comes from the manifest's one mapping, which
+        // is the same call `lca-cli`'s native provider path makes. The set is
+        // byte-identical to the hand-written literal this replaced - the
+        // equality row in `tests/regressions/456-*` proves it field by field -
+        // and a future grant field can no longer be added to one path only.
+        // `adhoc_net` is empty here by construction: the install flow attaches
+        // ad hoc grants (FR-PERM-16) from user consent, never a manifest.
         let mut cap = Capabilities::new(
             manifest.name.clone(),
-            CapabilityGrants {
-                fs: manifest.fs.clone(),
-                fs_declared: !manifest.fs.is_empty(),
-                process: manifest.process,
-                pty: manifest.pty,
-                // Gh #302: `hosts = []` is a declaration, not an absence.
-                net_declared: manifest.net_declared,
-                net: manifest.net.clone(),
-                net_local: manifest.net_local.clone(),
-                adhoc_net: Vec::new(), // Phase5's install flow attaches
-                // ad hoc grants (FR-PERM-16) from user consent.
-                oauth: manifest.oauth.clone(),
-                credentials: manifest.credentials,
-                completion: manifest.completion,
-                tools: manifest.tools,
-                serve_http: manifest.serve_http.clone(),
-            },
+            manifest.capability_grants(),
             self.env.roots.clone(),
             self.env.prompt.clone(),
             self.env.grant_store.clone(),

@@ -162,6 +162,48 @@ impl Manifest {
             .any(|declared| lca_ext_abi::parse_world(declared) == Some(world))
     }
 
+    /// The capability grants this manifest declares, as the host enforces them.
+    ///
+    /// **The one mapping** (gh #456). Two hand-written copies of this used to
+    /// exist - `lca-ext-host`'s loader and `lca-cli`'s native provider path -
+    /// and they had already diverged: the native copy let
+    /// `..Default::default()` absorb `net_local` and `net_declared`, so a
+    /// provider declaring `[capabilities.net-local]` worked as a `.wasm` and
+    /// silently failed as a built-in. #294 had just added exactly that grant to
+    /// `openai-compatible` for its local presets, so the native build's
+    /// discovery was broken.
+    ///
+    /// Both paths now call this. The literal below is **exhaustive** - every
+    /// `CapabilityGrants` field is named - so adding a field to the struct is a
+    /// compile error here rather than a silent omission in one of two places.
+    /// That is the structural half of the fix; the equality row in
+    /// `tests/regressions/456-*` is the behavioural half.
+    ///
+    /// `adhoc_net` is deliberately empty: ad hoc grants are the *session's*
+    /// (FR-PERM-16, attached by user consent), never something a manifest can
+    /// carry, so each caller keeps filling it from its own grant store.
+    #[must_use]
+    pub fn capability_grants(&self) -> lca_tools::CapabilityGrants {
+        lca_tools::CapabilityGrants {
+            fs: self.fs.clone(),
+            // An empty declared scope set is rejected at parse, so this is
+            // exactly "the manifest declared fs".
+            fs_declared: !self.fs.is_empty(),
+            process: self.process,
+            pty: self.pty,
+            // Gh #302: `hosts = []` is a declaration, not an absence.
+            net_declared: self.net_declared,
+            net: self.net.clone(),
+            net_local: self.net_local.clone(),
+            adhoc_net: Vec::new(),
+            oauth: self.oauth.clone(),
+            credentials: self.credentials,
+            completion: self.completion,
+            tools: self.tools,
+            serve_http: self.serve_http.clone(),
+        }
+    }
+
     /// Parse and validate identity and capability declarations (the
     /// schema's rules; full JSON-schema validation lands with Phase 5).
     pub fn parse(toml_text: &str) -> Result<Manifest, LoadError> {

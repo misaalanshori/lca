@@ -926,3 +926,19 @@ mod tokens_per_second_plausible;
 // the seams - the key handler, the tab bar, and the per-session accounting.
 #[path = "462-background-turns-across-tabs.rs"]
 mod background_turns_across_tabs;
+
+// GitHub #456: the native provider path assembled its capability grants by hand
+// and let `..Default::default()` absorb what it forgot, dropping `net_local`
+// (and `net_declared`) while the WASM host copied both. A provider declaring
+// `[capabilities.net-local]` therefore worked as a `.wasm` and silently failed
+// as a built-in - the worse half of the #170 class, because a capability went
+// *missing* rather than a feature. #294 had just added exactly that grant to
+// `openai-compatible` for its `ollama`/`lmstudio` presets, so the native build's
+// local-preset discovery was broken at the time this was filed.
+//
+// The fix is one shared constructor (`Manifest::capability_grants`) so a new
+// grant field fails to compile rather than being silently omitted. The
+// deliverable is the equality row: native and WASM assembly compared field by
+// field over a manifest that populates every capability the schema allows.
+#[path = "456-capability-parity-across-delivery-modes.rs"]
+mod capability_parity_across_delivery_modes;

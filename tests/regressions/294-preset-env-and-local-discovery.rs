@@ -323,48 +323,41 @@ fn the_local_grant_does_not_reach_a_public_host() {
     );
 }
 
-/// The grant reaches the engine that `lca-ext-host` builds, and **not** the
-/// one the native CLI provider path builds.
+/// The grant reaches **both** engines: the one `lca-ext-host` builds and the one
+/// the native CLI provider path builds.
 ///
-/// This row exists because the live check found it: with the manifest's
+/// SANCTIONED CHANGE (gh #456, and predicted by this row's own comment). This
+/// row used to assert the *divergence*: that the WASM host carried the
+/// manifest's `net-local` and the native `provider_capabilities` did not. It
+/// existed because the live check found the asymmetry - with the manifest's
 /// `net-local` in place, a real `lca` pane running the `deepseek` preset against
-/// a loopback endpoint still failed with
+/// a loopback endpoint failed with
 ///
 /// ```text
 /// extension call failed: openai-compatible: permission denied: 127.0.0.1
 /// matches no granted local range
 /// ```
 ///
-/// The cause is not this cycle's change. `crates/lca-cli/src/secrets.rs`
-/// (`provider_capabilities`, the **native** delivery path) copies
-/// `manifest.net` and drops `manifest.net_local`:
+/// gh #456 closed it: both paths now call
+/// `lca_ext_host::Manifest::capability_grants`, so there is one mapping instead
+/// of two hand-written copies, and the field-by-field parity row lives in
+/// `tests/regressions/456-capability-parity-across-delivery-modes.rs`.
 ///
-/// ```rust
-/// let mut grants = lca_tools::CapabilityGrants {
-///     net: manifest.net.clone(),
-///     credentials: manifest.credentials,
-///     ..Default::default()          // <- net_local is never filled
-/// };
-/// ```
-///
-/// while `crates/lca-ext-host/src/lib.rs` (the **WASM** path) copies both. So
-/// the manifest is right and the declaration is right, but only one of the two
-/// delivery modes honours it — an NFR-25 dual-mode divergence that predates this
-/// cycle and that declaring the grant made reachable.
-///
-/// `crates/lca-cli/**` is outside this cycle's boundary, so this row records the
-/// state instead of fixing it: it fails the moment the native path is wired,
-/// which is when the live receipt becomes obtainable.
+/// What this row still guards, at the source level, is that neither path has
+/// gone back to building the set by hand: the WASM host must not name
+/// `net_local` itself, and the native builder must not either - both call the
+/// constructor, which is what makes a future grant field a compile error rather
+/// than a silent omission.
 #[test]
-fn only_the_wasm_host_wires_net_local_into_its_capabilities() {
+fn both_delivery_modes_wire_net_local_into_their_capabilities() {
     let host = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/crates/lca-ext-host/src/lib.rs"
     ))
     .expect("the ext host source is readable");
     assert!(
-        host.contains("net_local: manifest.net_local.clone()"),
-        "the WASM host carries the manifest's local grants"
+        host.contains("manifest.capability_grants()"),
+        "the WASM host takes its grants from the manifest's one mapping"
     );
 
     let cli = std::fs::read_to_string(concat!(
@@ -377,9 +370,18 @@ fn only_the_wasm_host_wires_net_local_into_its_capabilities() {
         .expect("provider_capabilities exists")..];
     let builder = &body[..body.find("\n}\n").unwrap_or(body.len().min(4000))];
     assert!(
-        !builder.contains("net_local"),
-        "the native provider path now wires `net_local` - the dual-mode \
-         divergence this row records is fixed, so replace it with a positive \
-         assertion and the live receipt becomes obtainable"
+        builder.contains("manifest.capability_grants()"),
+        "the native provider path takes its grants from the same mapping - that \
+         is the fix for #456, and a hand-built literal here is the divergence \
+         returning"
+    );
+    // The specific instance: whatever the call, the native builder carries the
+    // local grant. Asserted through the constructor rather than the source text
+    // so a rename cannot satisfy it.
+    let parsed = lca_ext_host::Manifest::parse(MANIFEST).expect("the manifest parses");
+    assert_eq!(
+        lca_ext_host::Manifest::capability_grants(&parsed).net_local,
+        parsed.net_local,
+        "the grant the native path builds carries the manifest's local ranges"
     );
 }
