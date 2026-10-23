@@ -402,17 +402,39 @@ impl Capabilities {
     /// Drive a future to completion from a host call. Capability calls
     /// run on a blocking thread (or a plain thread outside any runtime),
     /// never inside a runtime poll, so the ambient-handle path is always
-    /// legal there (ADR-0014's blocking-region rule). Outside any
-    /// runtime, one process-long shared runtime drives the call: a live
-    /// HTTP connection's background task must outlive the call that
-    /// opened it, or a streaming body reader finds the connection dead
-    /// on its second read (which is exactly what a throwaway runtime per
-    /// call did).
-    /// ponytail: callers already inside an async poll would panic on
-    /// `block_on`; every current caller is inside a blocking region.
+    /// legal there (ADR-0014's blocking-region rule). Outside any runtime,
+    /// one process-long shared runtime drives the call: a live HTTP
+    /// connection's background task must outlive the call that opened it,
+    /// or a streaming body reader finds the connection dead on its second
+    /// read (which is exactly what a throwaway runtime per call did).
+    ///
+    /// # Three caller shapes, and the one that used to panic (gh #476)
+    ///
+    /// To be precise about `block_on` on an ambient handle: it is legal from a
+    /// **worker** thread and from a **`block_on` frame**, and it panics from
+    /// inside a **poll**. `Handle::try_current()` succeeds in all three, so the
+    /// old code could not tell them apart; it documented the gap as an assumption
+    /// ("callers already inside an async poll would panic") rather than checking
+    /// it, and a TUI callback broke the assumption: `/mcp` → Sign in ran inside
+    /// `main`'s `Runtime::block_on` poll and killed the session.
+    ///
+    /// `block_in_place` closes the poll case on a **multi-threaded** runtime: it
+    /// re-enters a blocking region (tokio's own documented pairing), works from a
+    /// poll *and* a worker thread, and - the part that matters - stays on the
+    /// **ambient** runtime, so a connection's background task is not orphaned.
+    ///
+    /// It cannot be used unconditionally, though: `block_in_place` **panics** on a
+    /// current-thread runtime, where the old plain `block_on` is exactly right
+    /// (that runtime's only thread is running the frame, so a nested `block_on`
+    /// is not a poll). `tui/runner.rs` drives each turn on one of those, so both
+    /// branches are live paths - which is why the flavour is checked rather than
+    /// guessed.
     #[allow(clippy::expect_used)] // startup-fatal: a capability runtime that cannot start leaves no host calls runnable.
     pub(super) fn drive<F: std::future::Future>(future: F) -> F::Output {
         match tokio::runtime::Handle::try_current() {
+            Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+                tokio::task::block_in_place(|| handle.block_on(future))
+            }
             Ok(handle) => handle.block_on(future),
             Err(_) => SHARED_RUNTIME
                 .get_or_init(|| {
