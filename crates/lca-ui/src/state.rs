@@ -340,6 +340,11 @@ pub type ShellRunner =
     Arc<dyn Fn(&str, bool, std::sync::mpsc::SyncSender<ShellEvent>) -> ShellHandle + Send + Sync>;
 /// Opens the external editor on the prompt text.
 pub type ExternalEditor = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
+/// Runs an interactive `!` command with the terminal handed over (gh #407):
+/// called after the interface has stopped and before it restarts, so the child
+/// inherits the real TTY. The `Option<i32>` is its exit code, `None` when it was
+/// killed by a signal.
+pub type InteractiveShell = Arc<dyn Fn(&str) -> Option<i32> + Send + Sync>;
 /// Persists a runtime screen-mode change.
 pub type ScreenModePersist = Arc<dyn Fn(bool) + Send + Sync>;
 /// Persists a runtime setting choice (`ui.theme`, `thinking`) to the config
@@ -729,6 +734,8 @@ pub struct UiHooks {
     /// Open `$EDITOR`/`$VISUAL` on the prompt text; `None` aborts. The
     /// terminal is restored around the call.
     pub external_editor: Option<ExternalEditor>,
+    /// Run an interactive `!` command with the terminal handed to it (gh #407).
+    pub run_interactive: Option<InteractiveShell>,
     /// Persist a runtime screen-mode change (fullscreen = `true`).
     pub persist_screen_mode: Option<ScreenModePersist>,
     /// Persist a runtime setting choice to the config file (E2):
@@ -1051,6 +1058,11 @@ pub enum Action {
     CancelTurn,
     /// Open the external editor on the prompt text (FR-UI-15).
     ExternalEditor,
+    /// Hand the terminal to an interactive `!` command (gh #407): the loop
+    /// stops the interface, runs it with inherited stdio, and restarts - the
+    /// same shape as [`Action::ExternalEditor`], because a fullscreen program on
+    /// a pipe either refuses or blocks waiting for keys.
+    InteractiveShell(String),
     /// Exit the interface.
     Exit,
 }

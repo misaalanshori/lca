@@ -133,6 +133,16 @@ impl Ui {
         UiHooks {
             run_shell: Some(self.shell_runner()),
             external_editor: Some(Arc::new(external_editor)),
+            // Gh #407: an interactive `!` command inherits the terminal, the
+            // same way `$EDITOR` does. The loop has already stopped the
+            // interface (and its reader) before this runs, so the child gets the
+            // real TTY rather than a pipe.
+            run_interactive: {
+                let cwd = self.cwd.clone();
+                Some(Arc::new(move |command: &str| {
+                    crate::tui::editor::interactive_run(&cwd, command)
+                }) as lca_ui::state::InteractiveShell)
+            },
             persist_screen_mode: Some(Arc::new(persist_screen_mode)),
             persist_setting: Some(persist_setting),
             // Gh #397: the project layer's own writer, and the trust bit that
