@@ -31,8 +31,8 @@ const MAX_TRAILING_SEQUENCE: usize = 4096;
 /// `ESC` onward is dropped: it is a sequence that never terminated, so there is no
 /// safe way to render it.
 ///
-/// The search only looks back [`MAX_TRAILING_SEQUENCE`] bytes, so a pathological
-/// unterminated sequence costs bounded work.
+/// The search only looks back a bounded window (4 KiB), so a pathological
+/// unterminated sequence costs bounded work rather than an unbounded scan.
 #[must_use]
 pub fn sanitize_incomplete_escapes(text: &str) -> &str {
     let bytes = text.as_bytes();
