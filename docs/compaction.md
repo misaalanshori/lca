@@ -145,9 +145,20 @@ with walls of text nobody re-reads.
 ### The card (collapsed)
 
 ```
- [compaction] summarised via llm · u1a2b3c4..u9f8e7d6
-   expand (ctrl+o)
+ [compaction]
+ summarised via llm · 00000002-430c..00000009-430c (ctrl+o to expand)
 ```
+
+The label is its own row and the key hint rides inline, which is pi's shape
+(`compaction-summary-message.ts`): `[compaction]` over
+`Compacted from 48,213 tokens (ctrl+o to expand)`.
+
+**What differs from pi, and why.** pi prints a token count because its message
+carries `tokensBefore`. LCA's `compaction` record has no pre-compaction token count
+— its `usage` field is the *summarization call's* own cost — and the display view
+suppresses the records the compaction replaced, so a count is not derivable at
+render time either. The card therefore names the **record range**, which a reader can
+grep in the session log, instead of a figure it would have to invent.
 
 The card names its strategy and the record range it replaced, so **collapsed is
 not gone**: a reader who never expands still knows their context was rewritten and
@@ -159,8 +170,9 @@ opening one does not open the others, it survives a streaming delta on the same
 transcript, and a *new* compaction always arrives collapsed.
 
 A branch summary (`Record::BranchSummary`) gets the same card, labelled
-`branch summary`. Before gh #393 it rendered nowhere at all - the replay matched a
-catch-all and dropped it - so a resumed fork silently lost the text explaining it.
+`branch summary` - pi's wording. Before gh #393 it rendered nowhere at all - the
+replay matched a catch-all and dropped it - so a resumed fork silently lost the text
+explaining it.
 
 The stored record is untouched: the summary text, strategy, range and file lists
 all stay in the session log. Only the view is collapsed.
@@ -169,9 +181,11 @@ all stay in the session log. Only the view is collapsed.
 transcript gains the card at the point in the turn's entries where it happened:
 
 ```
- [compaction] summarised (threshold)
- [compaction] summarised (overflow)
- [compaction failed] compaction failed (manual) - the context is unchanged
+ [compaction]
+ summarised (threshold) (ctrl+o to expand)
+
+ [compaction failed]
+ compaction failed (manual) - the context is unchanged
 ```
 
 It names the reason (`manual` / `threshold` / `overflow`, the same words the

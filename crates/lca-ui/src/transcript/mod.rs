@@ -862,6 +862,15 @@ impl Transcript {
                 }
                 // Gh #393: a card, not a wall of prose. The record still holds
                 // the full summary - this is the view.
+                //
+                // No count: the display view has already **suppressed** the
+                // records this compaction replaced (`lca_session::view::
+                // suppress_compacted`), so the range's ends are not in this slice
+                // and the number is not derivable here. Pi shows "Compacted from N
+                // tokens" because its message carries `tokensBefore`; LCA's record
+                // carries no pre-compaction token count (its `usage` is the
+                // summarization call's own cost), so the card names the record
+                // range instead of inventing a figure.
                 Record::Compaction {
                     summary,
                     strategy,

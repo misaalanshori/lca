@@ -346,3 +346,36 @@ fn the_record_range_distinguishes_ids_that_share_a_timestamp_prefix() {
         "a single-group id survives whole"
     );
 }
+
+// Verifies: gh #393 + pi parity - **the card names a range because a count is not
+// available here, and that is the honest choice.**
+//
+// Pi shows "Compacted from N tokens": its message carries `tokensBefore`. LCA's
+// record has no pre-compaction token count (`usage` is the summarization call's own
+// cost), and the display view suppresses the records the compaction replaced, so
+// even a record count is not derivable at render time. The card therefore prints
+// the id range - which a reader can grep in the log - rather than a figure it would
+// have to invent.
+//
+// `Card::replay` still *accepts* a count, because a caller that does have one (the
+// live path after a future record change, or an export walking the full log) should
+// be able to pass it; this row pins what the replay path does today.
+#[test]
+fn the_card_names_the_range_because_no_token_count_is_recorded() {
+    let transcript = with_compaction("S");
+    let text = frame(&transcript);
+    assert!(text.contains("u1..u2"), "the range is named:\n{text}");
+    assert!(
+        !text.contains("replaced"),
+        "and no count is claimed, because none is derivable here:\n{text}"
+    );
+    // A caller that does know the count gets it rendered, so the field is not
+    // decoration.
+    let mut known = Transcript::default();
+    known.push_compaction_card(Card::replay("llm", "S", "a", "b", Some(6)));
+    assert!(
+        frame(&known).contains("6 entries replaced"),
+        "a supplied count renders:\n{}",
+        frame(&known)
+    );
+}
