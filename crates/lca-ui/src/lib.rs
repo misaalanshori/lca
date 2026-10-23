@@ -34,6 +34,7 @@ mod chat_tabs;
 mod chat_tree;
 mod chat_turn_events;
 mod command_help_table;
+mod copy_ladder;
 pub mod dialogs;
 pub mod ext_widgets;
 pub mod footer;
@@ -66,6 +67,7 @@ pub use chat_mcp::{
 pub use chat_pickers::HubRow;
 pub use chat_pickers::ModelPicker;
 pub use chat_render::ClickOutcome;
+pub use copy_ladder::route_a_copy;
 pub use ext_widgets::widget_lines;
 pub use footer::Footer;
 pub use lca_protocol::{QueuedMessage, SubmitMode, steer_queue};
@@ -78,14 +80,14 @@ pub use lca_tui::widgets::markdown::{
 pub use run::run;
 pub use separator::{CompactionReason, Separator, SeparatorState};
 pub use state::{
-    Action, CacheMissNotice, CommandInvoker, DialogExchange, DialogModal, LabelRecord, LoginCancel,
-    LoginComplete, LoginConfirm, LoginNext, LoginPick, LoginPoll, LoginRequest, McpAction,
-    McpBeginSignIn, McpCancelSignIn, McpDetail, McpList, McpPoll, McpServerDetail, McpServerRow,
-    McpSnapshot, McpSubmitRedirect, McpToolRow, ModelRow, PickerOption, ProjectOverride,
-    ProjectSettingPersist, PromptRequest, RegionInteractor, RegionRenderer, SettingRow,
-    SettingsRows, ShellEvent, ShellHandle, ShellRunner, SwitchConfirm, TreeFilterMode, TreeRow,
-    TreeRowKind, TurnChannels, TurnRunner, UiHooks, UiOptions, UiState, display_path,
-    sanitize_block, sanitize_text,
+    Action, CacheMissNotice, ClipboardWriter, CommandInvoker, DialogExchange, DialogModal,
+    LabelRecord, LoginCancel, LoginComplete, LoginConfirm, LoginNext, LoginPick, LoginPoll,
+    LoginRequest, McpAction, McpBeginSignIn, McpCancelSignIn, McpDetail, McpList, McpPoll,
+    McpServerDetail, McpServerRow, McpSnapshot, McpSubmitRedirect, McpToolRow, ModelRow,
+    PickerOption, ProjectOverride, ProjectSettingPersist, PromptRequest, RegionInteractor,
+    RegionRenderer, SettingRow, SettingsRows, ShellEvent, ShellHandle, ShellRunner, SwitchConfirm,
+    TreeFilterMode, TreeRow, TreeRowKind, TurnChannels, TurnRunner, UiHooks, UiOptions, UiState,
+    display_path, sanitize_block, sanitize_text,
 };
 pub use state::{CompactPoll, CompactState};
 pub use state_persona::{PersonaApply, PersonaBundle, PersonaCheck, PersonaList};

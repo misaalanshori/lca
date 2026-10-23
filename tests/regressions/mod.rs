@@ -981,3 +981,13 @@ mod capability_parity_across_delivery_modes;
 // correct by construction.
 #[path = "477-pty-read-waits-and-drains.rs"]
 mod pty_read_waits_and_drains;
+
+// GitHub #406: the text clipboard write spawned a helper per copy
+// (`pbcopy`/`clip`/`wl-copy`/`xclip`/`xsel`) while `arboard` - already a direct
+// `lca-cli` dependency, already doing the *image* read - sat linked and unused.
+// On a machine with none of those five (most Linux boxes, every container) a
+// copy degraded to OSC 52 or failed outright for no reason. The fix is seam
+// routing: one in-process backend, the helper ladder deleted, and a bound on the
+// read so a hung X11 selection owner cannot freeze the interface.
+#[path = "406-clipboard-through-the-linked-backend.rs"]
+mod clipboard_through_the_linked_backend;

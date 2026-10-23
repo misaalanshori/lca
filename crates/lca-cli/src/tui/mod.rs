@@ -8,6 +8,7 @@
 //! so `run` is orchestration and its helpers stay under the line budget.
 
 mod attach;
+mod clipboard;
 mod close;
 mod commands;
 pub(crate) use attach::stage_initial_attachments;

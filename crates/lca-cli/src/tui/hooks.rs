@@ -30,46 +30,9 @@ fn project_extensions_wait(cwd: &std::path::Path, data_dir: &std::path::Path) ->
 }
 
 use super::Ui;
+use super::clipboard::native_clipboard;
 use super::collect_markdown_transformers;
 use super::editor::external_editor;
-
-/// Write text to the system clipboard through a native command, returning
-/// `true` only when the command succeeded (R6). A `false` lets the
-/// interface fall back to OSC 52 and report it unverified.
-fn native_clipboard(text: &str) -> bool {
-    #[cfg(target_os = "macos")]
-    let candidates: &[(&str, &[&str])] = &[("pbcopy", &[])];
-    #[cfg(target_os = "windows")]
-    let candidates: &[(&str, &[&str])] = &[("clip", &[])];
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let candidates: &[(&str, &[&str])] = &[
-        ("wl-copy", &[]),
-        ("xclip", &["-selection", "clipboard"]),
-        ("xsel", &["--clipboard", "--input"]),
-    ];
-    for (program, args) in candidates {
-        let Ok(mut child) = std::process::Command::new(program)
-            .args(*args)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-        else {
-            continue;
-        };
-        if let Some(mut stdin) = child.stdin.take() {
-            use std::io::Write as _;
-            if stdin.write_all(text.as_bytes()).is_err() {
-                let _ = child.kill();
-                continue;
-            }
-        }
-        if child.wait().map(|status| status.success()).unwrap_or(false) {
-            return true;
-        }
-    }
-    false
-}
 
 /// Open a URL in the platform's browser (R6/S7, R3). Fire-and-forget:
 /// returns `Err` with the reason when no launcher is available or every
