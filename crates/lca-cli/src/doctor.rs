@@ -27,11 +27,17 @@ pub fn report(data_dir: &Path, cwd: &Path) -> String {
         "user config",
         &present(&data_dir.join("config.toml")),
     );
-    row(
-        &mut out,
-        "project config",
-        &present(&cwd.join(".lca").join("config.toml")),
-    );
+    // gh #481: from `$HOME` the project path and the user path are one file, so
+    // reporting it twice as two layers said "present" for a project layer that
+    // does not exist. Say so instead, and keep both rows so the paths stay
+    // visible.
+    let project_state =
+        if crate::project_ext::project_file_is_the_user_file(cwd, data_dir, "config.toml") {
+            "same file as the user config (no separate project layer)".to_string()
+        } else {
+            present(&cwd.join(".lca").join("config.toml"))
+        };
+    row(&mut out, "project config", &project_state);
     let ext_root = data_dir.join("extensions");
     let installed = if !ext_root.is_dir() {
         "none".to_string()
@@ -111,6 +117,44 @@ fn crashes(data_dir: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    // Verifies: gh #481 - **the dump does not invent a project layer.** From
+    // `$HOME` the project path and the user path are one file; reporting it as
+    // "present" twice named a layer that does not exist. Both rows stay, and the
+    // project row says what is actually true.
+    #[test]
+    fn the_dump_does_not_report_a_project_layer_that_is_the_user_file() {
+        let root = lca_testkit::scratch_path("lca-doctor-481");
+        let _ = std::fs::remove_dir_all(&root);
+        let home = root.join("home");
+        let data = home.join(".lca");
+        std::fs::create_dir_all(&data).expect("mkdir");
+        std::fs::write(
+            data.join("config.toml"),
+            "provider = \"openai-compatible\"\n",
+        )
+        .expect("write");
+        // `cwd` is the home itself: the coincidence.
+        let text = super::report(&data, &home);
+        assert!(
+            text.contains("user config: present"),
+            "the user file is there: {text}"
+        );
+        assert!(
+            text.contains("project config: same file as the user config"),
+            "and the project row says there is no separate layer: {text}"
+        );
+        // A genuinely different project still names its own file.
+        let project = root.join("checkout");
+        std::fs::create_dir_all(project.join(".lca")).expect("mkdir");
+        std::fs::write(project.join(".lca").join("config.toml"), "").expect("write");
+        let text = super::report(&data, &project);
+        assert!(
+            text.contains("project config: present"),
+            "a real project file is reported as itself: {text}"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     // Verifies: gh #81 (the dump prints: version rows plus one row per
     // section, absent files as rows rather than errors).
     #[test]

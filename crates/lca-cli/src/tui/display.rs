@@ -488,9 +488,22 @@ pub(super) fn settings_rows(
         // untrusted file is inert. So an untrusted project's key never shows
         // as an override the picker offers to change; it shows in the source
         // column as whatever actually won, which is the truth.
+        //
+        // gh #481: and only when the project file is a *different file* from the
+        // user file. From `$HOME` they are one file, so every key the user set
+        // would show up as a project override the picker offers to remove - and
+        // removing it would rewrite the user's own configuration. There is no
+        // project layer in that case, which is also what the loader concludes
+        // (the two paths are compared the same way in both places).
+        let project_config = ui.cwd.join(".lca").join("config.toml");
+        let user_config = crate::config_file();
         let project_layer = crate::lock(&ui.grants)
             .is_trusted_here(&ui.cwd)
-            .then(|| lca_config::layers::read_layer(&ui.cwd.join(".lca").join("config.toml")))
+            .then(|| {
+                (!crate::project_ext::same_path(&project_config, &user_config))
+                    .then(|| lca_config::layers::read_layer(&project_config))
+                    .flatten()
+            })
             .flatten()
             .unwrap_or_default();
         let row = |section: &str, key: &str, values: &[&str]| {

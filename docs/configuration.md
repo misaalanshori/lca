@@ -18,6 +18,8 @@ Table-valued keys (`thinking.budgets`, `models.thinking_levels`, `extensions.cat
 
 The project file is read only after the user marks the project as trusted. An untrusted project file cannot enable extensions or change permission defaults (FR-PERM-9).
 
+**When the project root *is* the data home, there is no project layer.** Running `lca` from `$HOME` makes `<cwd>/.lca/config.toml` and `~/.lca/config.toml` the same file, so reading it twice would classify the user's own settings as a project's — and FR-CFG-7 refuses `trust.default_project` in a project file, which turned a documented user setting into a fatal error (gh #481). The two paths are compared **canonically** (a symlinked `$HOME`, macOS's `/var` → `/private/var`, and Windows's verbatim path prefix all defeat a lexical comparison), and when they name the same file the project layer does not participate: every key keeps the `user file` source it earned, and `lca config` / `/settings` say so. A genuine project file — a different file — still participates normally and still cannot grant its own trust.
+
 The user file is **`~/.lca/config.toml`** on every platform (R7). Theme files live under `~/.lca/themes/`, the `/fullscreen` toggle writes `~/.lca/ui.json`, and `make`/provider preset overrides live at `~/.lca/provider-presets.toml`. The platform config directory (`$XDG_CONFIG_HOME` or `~/.config` on Linux, `~/Library/Application Support` on macOS, `%APPDATA%` on Windows) is *not* where the agent's own files live; it is what the `fs` capability's `home-config` scope resolves to, for reading another tool's configuration.
 
 Environment variables use the `LCA_` prefix with the key uppercased and dots replaced by underscores, so `tool.timeout_seconds` is `LCA_TOOL_TIMEOUT_SECONDS`.

@@ -21,7 +21,7 @@ use lca_ui::{ShellEvent, ShellHandle, UiHooks};
 /// project-local in it, so it does not wait.
 fn project_extensions_wait(cwd: &std::path::Path, data_dir: &std::path::Path) -> bool {
     let dir = cwd.join(".lca").join("extensions");
-    if crate::project_ext::same_directory(&dir, &data_dir.join("extensions")) {
+    if crate::project_ext::same_path(&dir, &data_dir.join("extensions")) {
         return false;
     }
     std::fs::read_dir(dir)
@@ -461,7 +461,7 @@ impl Ui {
                     // user's own when the project root is the data home.
                     let data_dir = crate::data_dir();
                     let project_config_is_the_user_file =
-                        crate::project_ext::same_directory(&cwd.join(".lca"), &data_dir);
+                        crate::project_ext::same_path(&cwd.join(".lca"), &data_dir);
                     !trusted
                         && !project_config_is_the_user_file
                         && (cwd.join(".lca").join("config.toml").is_file()

@@ -91,8 +91,24 @@ pub(crate) fn assemble(
     // the guard the turn-level test asserts with a spawn marker.
     let mcp_enabled =
         !flags.no_mcp && crate::lock(grants).extension_enabled(cwd, "mcp") != Some(false);
+    // gh #481: the fourth path with #463's root cause. `plan` reads
+    // `<data>/mcp.json` (the user file) and, when trusted,
+    // `<cwd>/.lca/mcp.json` (the project file). From `$HOME` those are the same
+    // file, so the user's own servers were loaded twice: once as user entries
+    // and again as project *overrides* of themselves. Visible in `lca mcp list`
+    // - the source column said `project` for a server in `~/.lca/mcp.json` - and
+    // not merely cosmetic: an override source routes later manager edits through
+    // `write_full_entry` to the user's own file instead of patching it.
+    //
+    // There is no separate project layer when the two paths name the same file,
+    // so `plan` is told there is no project (the user file is read either way).
+    // Compared canonically for the same three reasons as the config loader: a
+    // symlinked `$HOME`, macOS's `/var` -> `/private/var`, and Windows's `\\?\`
+    // prefix all defeat a lexical comparison (gh #436, #389, #463).
+    let project_mcp_is_the_user_file =
+        crate::project_ext::project_file_is_the_user_file(cwd, &data, "mcp.json");
     let (mut entries, mgrants, warnings, user_path, project_path) =
-        lca_mcp::manager::McpManager::plan(&data, cwd, trusted);
+        lca_mcp::manager::McpManager::plan(&data, cwd, trusted && !project_mcp_is_the_user_file);
     if !mcp_enabled {
         // Keep the entries so `/mcp` still lists the servers (as disabled),
         // but no worker starts for one.

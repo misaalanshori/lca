@@ -39,6 +39,16 @@ const LIST_WAIT_SECONDS: u64 = 10;
 /// Run one `lca mcp` verb and return the process exit code.
 pub(crate) fn run(cmd: &McpCmd, cwd: &Path, trusted: bool) -> i32 {
     let data = crate::data_dir();
+    // gh #481: from `$HOME`, `<cwd>/.lca/mcp.json` and `<data>/mcp.json` are one
+    // file, so trusting the project loaded the user's own servers twice - the
+    // second time as *project overrides of themselves*, which `list` reported in
+    // its source column as `project`. Not cosmetic: an override source routes a
+    // later manager edit to the user's own file as a full-entry write instead of
+    // a patch. There is no separate project layer when the two paths coincide,
+    // so every verb is told the project is not a distinct layer. Canonical
+    // comparison, same three reasons as the config loader (gh #436/#389/#463).
+    let trusted =
+        trusted && !crate::project_ext::project_file_is_the_user_file(cwd, &data, "mcp.json");
     // `add` and `remove` touch files only, so they need no engine and no
     // connection. Everything else may connect, so it builds the same
     // capability environment a session would.
@@ -175,7 +185,14 @@ pub(crate) fn run(cmd: &McpCmd, cwd: &Path, trusted: bool) -> i32 {
                 }
             } else {
                 print_list(&report);
-                if !cli.trusted() && cli.project_config().is_file() {
+                // gh #481: only say "ignored" when there is a project layer to
+                // ignore. From `$HOME` the project file *is* the user file, which
+                // was just read - reporting it as ignored blamed the user for the
+                // same root confusion as #463's false warning.
+                if !cli.trusted()
+                    && cli.project_config().is_file()
+                    && !crate::project_ext::same_path(cli.project_config(), &data.join("mcp.json"))
+                {
                     println!(
                         "{} is ignored because the project is not trusted.",
                         cli.project_config().display()
