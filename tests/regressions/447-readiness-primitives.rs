@@ -113,9 +113,14 @@ fn the_named_rows_wait_through_the_primitives() {
     );
 
     let consent = read("crates/lca-cli/tests/e2e_model_consent.rs");
+    // Gh #456 renamed this row: a manifest-covered endpoint is no longer asked
+    // about, so the row now proves the *absence* of the ask rather than the
+    // consent round-trip. It is the same row and the same readiness requirement
+    // (gh #446's bug was keys sent before the input thread was reading), so the
+    // guard follows the rename rather than dropping the coverage.
     let allow = row(
         &consent,
-        "fn an_ungranted_endpoint_prompts_before_the_model_list_and_lists_after",
+        "fn a_covered_endpoint_lists_without_a_consent_and_names_the_service",
     );
     assert!(
         allow.contains("wait_for_input_ready("),

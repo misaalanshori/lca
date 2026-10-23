@@ -118,7 +118,7 @@ pub use run::run;
 pub(crate) use secrets::{
     ad_hoc_host_from_authority, apply_enablement, extension_capabilities, prompt_roots,
     provider_ready, skills_roots, store_ad_hoc_grant, store_provider_secret,
-    stored_provider_preset, ungranted_host,
+    stored_provider_preset, ungranted_host, ungranted_host_in,
 };
 // Mirrors the source gating: the bundled provider's manifest grants
 // exist only with its feature (no-default builds have no provider
