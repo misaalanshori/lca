@@ -996,3 +996,14 @@ mod pty_read_waits_and_drains;
 // read so a hung X11 selection owner cannot freeze the interface.
 #[path = "406-clipboard-through-the-linked-backend.rs"]
 mod clipboard_through_the_linked_backend;
+
+// GitHub #496: a compaction that happens while the user is in the session
+// rendered nothing. `apply_turn_event` mapped `CompactionStarted |
+// CompactionEnded` to `{}` as "reconstruction events for headless/rpc; rendered
+// elsewhere" - but the live path is exactly where the user is when a threshold
+// or overflow compaction fires, and the transcript they are reading has just
+// been summarized underneath them. The replay path was already correct, so the
+// fix adds a bare marker (reason and success, no summary) on the live path and
+// pins replay so the working half cannot be traded away.
+#[path = "496-live-compaction-marker.rs"]
+mod live_compaction_marker;

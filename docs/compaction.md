@@ -134,3 +134,46 @@ follows pi exactly.
 None: the #36 epic is complete. The symmetrical head-preservation
 proposal (`keep_initial_tokens`, raised in review) stays out of
 scope: it is not pi behavior.
+
+## What the interface shows, live and on replay (gh #496)
+
+Two views of the same compaction, and they say different things on purpose.
+
+**Live.** When a compaction finishes while the user is in the session, the
+transcript gains a marker at the point in the turn's entries where it happened:
+
+```
+[compaction] summarised (threshold)
+[compaction] summarised (overflow)
+[compaction] failed (manual) - the context is unchanged
+```
+
+It names the reason (`manual` / `threshold` / `overflow`, the same words the
+separator uses while it runs) and whether the summary record was written. A
+failure is **not** rendered as a neutral marker: `success: false` means no record
+was written and the context is exactly as it was, so a neutral line would tell the
+user the opposite of the truth about their session.
+
+The marker carries no summary text. `TurnEvent::CompactionEnded` is
+`{ reason, success }`; the summary lives in the `Compaction` *record*, and
+`lca-ui` has no `lca-session` dependency to read it. Adding one to fetch text the
+user sees again on replay is a seam bought for cosmetics, so the live view states
+the event and the replay states the content.
+
+`CompactionStarted` deliberately adds no row. The separator already reads
+`Compacting (reason)` while it runs (#388 gap 2), and a second live indicator in
+the scrollback would be two views of one fact - with the transcript's being a
+spinner in a place that is supposed to be a record.
+
+**Replay.** `Transcript::replay_records` places the record's own summary at its own
+position:
+
+```
+[compaction] {summary} (via {strategy})
+```
+
+So a user who leaves and resumes gets the content in the right chronological slot,
+and a user who stays gets the fact when it happens. One compaction produces one
+row in each view however many end events arrive (a retried attempt does not
+duplicate the marker), and a `CompactionStarted` clears that dedupe so a genuine
+second compaction in the same session gets its own row.
