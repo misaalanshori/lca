@@ -7,6 +7,23 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **`/mcp` → Sign in no longer kills the whole session** (gh #476). Selecting *Sign
+  in* on a remote server died deterministically — no UI, session gone — with
+  `Cannot start a runtime from within a runtime` from the capability layer.
+  `Capabilities::drive` read the ambient runtime handle and called `block_on` on it,
+  which is legal from a worker thread and **panics** from inside a runtime *poll*;
+  `Handle::try_current()` succeeds in both cases, so the old code could not tell them
+  apart and documented the gap as an assumption ("every current caller is inside a
+  blocking region") that a TUI callback breaks — `main` holds `Runtime::block_on` on a
+  multi-threaded runtime, so every UI closure runs inside that poll. The fix is at the
+  seam rather than in the caller, because `oauth_flow_net_request` is not special:
+  `net_request`, the response-body readers and the `process` spawn path all drive
+  through the same function. `tokio::task::block_in_place` re-enters a blocking region
+  on a multi-threaded runtime, after which `block_on` is legal — tokio's own documented
+  pairing — and it keeps the work on the **ambient** runtime, so a connection's
+  background task is not orphaned. A current-thread runtime can neither do that nor
+  block from inside its poll, so that case is refused by name instead of unwinding.
+
 - **Tool annotations decode in the spelling everyone actually sends** (gh #454).
   `ToolAnnotations` derived `Deserialize` with no rename, so serde expected
   `read_only_hint` while every real payload says `readOnlyHint` — the MCP spelling,
