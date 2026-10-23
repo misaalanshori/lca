@@ -670,7 +670,15 @@ impl Ui {
         ) else {
             return false;
         };
-        if crate::ungranted_host(&self.grants, &self.cwd, Some(host.clone())).is_none() {
+        // Gh #456: a host inside the provider's own manifest-declared
+        // `net-local` range needs no ad hoc grant - the capability layer
+        // already carries it. Asking here would be one question twice.
+        let declared_local =
+            crate::provider_needs::provider_needs(&registry, &self.data, &self.live_name())
+                .map_or_else(Vec::new, |needs| needs.local);
+        if crate::ungranted_host_in(&self.grants, &self.cwd, Some(host.clone()), &declared_local)
+            .is_none()
+        {
             return false; // already granted: discovery is free to run
         }
         let in_flight = self.consent_in_flight.clone();
@@ -703,7 +711,14 @@ impl Ui {
                 // `trust folder` answers "allowed" but attaches no host
                 // - it is not a host's grant to give - so the discovery
                 // request that follows would be refused anyway.
-                _ if crate::ungranted_host(&ui.grants, &ui.cwd, Some(host.clone())).is_some() => {
+                _ if crate::ungranted_host_in(
+                    &ui.grants,
+                    &ui.cwd,
+                    Some(host.clone()),
+                    &declared_local,
+                )
+                .is_some() =>
+                {
                     Some(ungranted)
                 }
                 _ => {

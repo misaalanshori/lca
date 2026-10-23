@@ -21,6 +21,22 @@ Dates are UTC.
   all **start from JSON text** — the previous ones built the struct in Rust, which
   is why a decode bug survived them.
 
+- **A provider declaring `[capabilities.net-local]` now works as a built-in, not
+  just as a `.wasm`** (gh #456). The native provider path assembled its capability
+  grants as a partial literal and let `..Default::default()` absorb the rest, so
+  it silently dropped `net_local` *and* `net_declared` while the WASM host copied
+  both. #294 had just given `openai-compatible` exactly that grant for its
+  `ollama`/`lmstudio` presets, so the native build's local-endpoint discovery was
+  broken — the worse half of the #170 class, because a capability went *missing*
+  rather than a feature. Both paths now call one constructor,
+  `Manifest::capability_grants`, whose exhaustive literal makes a new grant field
+  a compile error instead of a silent omission in one of two places; a
+  field-by-field parity row over a manifest that populates every capability guards
+  the behaviour. Two consequences worth knowing: a loopback endpoint no longer
+  raises the redundant second consent prompt (the manifest already declared the
+  reach and the user approved it at install), and a consent-first provider that
+  ships `hosts = []` on purpose no longer risks "no network capability declared"
+  on its first request.
 - **The `openai-compatible` provider now declares the environment it reads, so the
   sandboxed build can see it** (gh #461, follow-up to gh #170). A WASM component is
   instantiated with an empty `WasiCtx`, so `std::env::var` inside it answers
