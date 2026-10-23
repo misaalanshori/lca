@@ -40,6 +40,7 @@ pub mod footer;
 mod mcp_types;
 pub mod render;
 pub mod resume;
+pub mod resume_command;
 pub mod run;
 pub mod run_early_input;
 mod run_keybindings;

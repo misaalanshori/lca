@@ -724,6 +724,21 @@ impl Tmux {
         ])
     }
 
+    /// Keep the pane (and its scrollback) after the process exits.
+    ///
+    /// tmux reaps a dead pane and with it the scrollback, so a row that reads
+    /// **what the process printed on the way out** - gh #403's exit hint - must
+    /// ask for this *before* sending the quit. Rows that assert a pane is gone
+    /// (`wait_for_pane_end`) deliberately do not.
+    pub fn remain_on_exit(&self) {
+        let out = Self::tmux(&["set-option", "-t", &self.name, "remain-on-exit", "on"]);
+        assert!(
+            out.status.success(),
+            "tmux set-option remain-on-exit: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
     pub fn send(&self, keys: &[&str]) {
         let mut args = vec!["send-keys", "-t", &self.name];
         args.extend_from_slice(keys);
