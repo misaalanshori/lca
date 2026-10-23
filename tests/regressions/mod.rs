@@ -757,6 +757,11 @@ mod deny_rule_actually_matches;
 #[path = "459-stderr-tail-never-blocks.rs"]
 mod stderr_tail_never_blocks;
 
+// Gh #484: every extension that reads the environment declares it, or its read is
+// gated out of the sandboxed build - the class-level audit behind #461 and this.
+#[path = "484-every-env-read-is-declared.rs"]
+mod every_env_read_is_declared;
+
 // Gh #476: a capability call made from inside a runtime poll returns instead of
 // unwinding - `/mcp` → Sign in used to kill the whole TUI session.
 #[path = "476-a-capability-call-never-unwinds-a-ui.rs"]

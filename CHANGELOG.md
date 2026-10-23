@@ -7,6 +7,24 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **An audit test now enforces that every extension declares the environment it
+  reads** (gh #484, follow-up to #461). A WASM component is instantiated with an
+  empty `WasiCtx`, so `std::env::var` inside it answers `NotPresent` unless the
+  manifest lists the name under `[capabilities.env]`. #461 found `openai-compatible`
+  reading eight variables and declaring none; the audit that found it named four more
+  manifests, and auditing by hand is how that issue came to exist — so the guard is
+  now a test over **every** `extensions/*/extension.toml`, comparing each crate's
+  literal env reads against its manifest and failing with the provider and the
+  missing name. It catches the fifth instance on the day it is written. The four
+  named manifests (`anthropic`, `antigravity`, `llama`, `openrouter`) turned out to
+  be **deliberately** native-only: their reads sit under
+  `#[cfg(not(target_arch = "wasm32"))]`, so the sandboxed build never executes them,
+  and granting `env` would forward a secret the guest has no code to read. Their
+  pages now say so — `anthropic`'s had gone stale ("that grant waits on #170", which
+  landed two cycles ago) — and an artifact-level check confirms the sandboxed
+  builds contain none of the secret variable names, while `openai-compatible`'s
+  contains all eight it declares.
+
 - **`/mcp` → Sign in no longer kills the whole session** (gh #476). Selecting *Sign
   in* on a remote server died deterministically — no UI, session gone — with
   `Cannot start a runtime from within a runtime` from the capability layer.

@@ -6,6 +6,8 @@ Source: `extensions/llama/`. Delivery: WASM or native; the management commands n
 
 Nothing, by default: the server is yours. An optional bearer rides when configured (stored key, native `LLAMA_API_KEY`); the endpoint is stored, native `LLAMA_BASE_URL`, else `http://127.0.0.1:8080` — normalized like pi (no trailing slash, no `/v1` tail). `/login llama` stores the endpoint and probes it, so a typo fails at login, not mid-turn. `logout` forgets the stored endpoint; the server keeps running — this extension never supervises it.
 
+**No `[capabilities.env]` section, deliberately** (gh #484). The environment reads in this extension sit under `#[cfg(not(target_arch = "wasm32"))]`, so the sandboxed build never executes them and the `env` capability would forward a value the guest has no code to read — a disclosure with no reader. The sandboxed build configures through `credentials` instead. `tests/regressions/484-*.rs` audits every extension and fails if a read ever moves out from under that gate without adding the declaration.
+
 ## Manifest
 
 ```toml
