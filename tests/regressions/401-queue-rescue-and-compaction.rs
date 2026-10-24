@@ -123,7 +123,9 @@ fn the_queue_dock_speaks_pi_and_hints_the_live_dequeue_key() {
         text.contains("Follow-up: then update the changelog"),
         "pi's follow-up label:\n{text}"
     );
-    let key = chat.keybindings.primary_key("app.message.dequeue");
+    let key = chat
+        .keybindings_manager()
+        .primary_key("app.message.dequeue");
     assert_eq!(key, "alt+up", "pi's dequeue key is the primary binding");
     assert!(
         text.contains(&format!("↳ {key} to edit all queued messages")),

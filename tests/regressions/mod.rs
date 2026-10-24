@@ -1130,3 +1130,13 @@ mod disabled_extension_runs_nothing;
 // fifth copy of the arithmetic waiting to be written.
 #[path = "331-tab-row-offset.rs"]
 mod tab_row_offset;
+
+// GitHub #332: `/reload` re-read the key map and replaced `Chat::keybindings`, while
+// `Chat::editor` kept the map it was built with - one fact with two owners and nothing
+// keeping them equal. The instance was already fixed by gh #410's single setter; what
+// this file guards is the *seam*, so the next place that replaces the map cannot forget
+// again: the field is no longer `pub`, exactly one function writes it, that function
+// updates all three holders, and the editor holds no parsed-binding cache that would
+// need its own invalidation. Behaviour rows: `crates/lca-ui/src/chat_reload_keys_tests.rs`.
+#[path = "332-reload-rebinds-editor.rs"]
+mod reload_rebinds_editor;
