@@ -138,7 +138,7 @@ impl MainScreenRenderer {
             }
             let buffer_length = (height as usize).max(new_lines.len());
             renderer.previous_viewport_top = buffer_length.saturating_sub(height as usize);
-            renderer.position_hardware_cursor(term, cursor_pos, new_lines.len());
+            renderer.position_hardware_cursor(term, cursor_pos, new_lines.len(), height);
             renderer.previous_lines = new_lines.clone();
             renderer.previous_width = width;
             renderer.previous_height = height;
@@ -198,27 +198,37 @@ impl MainScreenRenderer {
             if cursor_moved && let Some((row, _, _)) = cursor_pos {
                 // If only the caret moved, repaint its row to ensure visible caret update
                 let doc_row = (row as usize).min(new_lines.len().saturating_sub(1));
-                let line_diff = compute_line_diff(
-                    doc_row,
-                    hardware_cursor_row,
-                    prev_viewport_top,
-                    viewport_top,
-                );
-                let mut out = String::new();
-                out.push_str("\x1b[?2026h");
-                if line_diff > 0 {
-                    out.push_str(&format!("\x1b[{}B", line_diff));
-                } else if line_diff < 0 {
-                    out.push_str(&format!("\x1b[{}A", -line_diff));
+                // Gh #371 bug 1: repainting a row is a screen operation, so it only
+                // exists for a row that is on screen. A caret above the viewport sits
+                // in scrollback the terminal cannot address, so there is nothing to
+                // repaint and nothing to record - fall through to
+                // `position_hardware_cursor`, which hides the cursor for an
+                // unaddressable caret.
+                let on_screen = doc_row >= prev_viewport_top
+                    && doc_row < prev_viewport_top.saturating_add(height as usize);
+                if on_screen {
+                    let line_diff = compute_line_diff(
+                        doc_row,
+                        hardware_cursor_row,
+                        prev_viewport_top,
+                        viewport_top,
+                    );
+                    let mut out = String::new();
+                    out.push_str("\x1b[?2026h");
+                    if line_diff > 0 {
+                        out.push_str(&format!("\x1b[{}B", line_diff));
+                    } else if line_diff < 0 {
+                        out.push_str(&format!("\x1b[{}A", -line_diff));
+                    }
+                    out.push_str("\r\x1b[2K");
+                    out.push_str(&new_lines[doc_row]);
+                    out.push_str(SEGMENT_RESET);
+                    out.push_str("\x1b[?2026l");
+                    term.write(&out);
+                    self.hardware_cursor_row = doc_row;
                 }
-                out.push_str("\r\x1b[2K");
-                out.push_str(&new_lines[doc_row]);
-                out.push_str(SEGMENT_RESET);
-                out.push_str("\x1b[?2026l");
-                term.write(&out);
-                self.hardware_cursor_row = doc_row;
             }
-            self.position_hardware_cursor(term, cursor_pos, new_lines.len());
+            self.position_hardware_cursor(term, cursor_pos, new_lines.len(), height);
             self.previous_viewport_top = prev_viewport_top;
             self.previous_height = height;
             self.last_cursor = cursor_pos.map(|(r, c, _)| (r, c));
@@ -274,7 +284,7 @@ impl MainScreenRenderer {
                 self.cursor_row = target_row;
                 self.hardware_cursor_row = target_row;
             }
-            self.position_hardware_cursor(term, cursor_pos, new_lines.len());
+            self.position_hardware_cursor(term, cursor_pos, new_lines.len(), height);
             self.previous_lines = new_lines;
             self.previous_width = width;
             self.previous_height = height;
@@ -433,7 +443,7 @@ impl MainScreenRenderer {
         self.previous_viewport_top =
             prev_viewport_top.max((final_cursor_row + 1).saturating_sub(height as usize));
 
-        self.position_hardware_cursor(term, cursor_pos, new_lines.len());
+        self.position_hardware_cursor(term, cursor_pos, new_lines.len(), height);
 
         self.previous_lines = new_lines;
         self.previous_width = width;
@@ -448,6 +458,7 @@ impl MainScreenRenderer {
         term: &mut dyn Terminal,
         cursor: Option<(u16, u16, bool)>,
         total_lines: usize,
+        height: u16,
     ) {
         if total_lines == 0 {
             term.hide_cursor();
@@ -458,6 +469,29 @@ impl MainScreenRenderer {
             term.hide_cursor();
             return;
         };
+
+        // Gh #371 bug 1: the recorded row must be a row the terminal can be on.
+        //
+        // The defect was not a sign error - it was recording the wrong fact. We asked
+        // for `target_row`, the emulator clamped the *result* at the viewport top, and
+        // this function then stored the row it had asked for. The next frame's
+        // `compute_line_diff` therefore started from a screen row that never existed
+        // (`hw_cursor - p_view_top < 0`) and the differential rendering desynchronised
+        // permanently.
+        //
+        // A caret above the viewport is not a cursor position at all: the line it sits
+        // on has scrolled into the terminal's scrollback, which the hardware cursor
+        // cannot address. So hide it and leave `hardware_cursor_row` alone rather than
+        // "clamping and pretending" - clamping would park the IME candidate window on
+        // an unrelated visible line, which is worse than anchoring nothing. The painted
+        // caret still shows the caret's real position in the transcript, which is what
+        // a reader uses (ADR-0037: the painted caret is authoritative).
+        let viewport_top = self.previous_viewport_top;
+        let viewport_bottom = viewport_top.saturating_add(height as usize).max(1);
+        if (row as usize) < viewport_top || (row as usize) >= viewport_bottom {
+            term.hide_cursor();
+            return;
+        }
 
         let target_row = (row as usize).min(total_lines.saturating_sub(1));
         let row_delta = target_row as i64 - self.hardware_cursor_row as i64;
@@ -601,6 +635,188 @@ mod tests {
                 "the main screen must not emit {seq:?}:\n{out:?}"
             );
         }
+    }
+
+    // ---------------------------------------------------------------------
+    // gh #371 bug 1: a caret above the viewport must not corrupt the frame.
+    // ---------------------------------------------------------------------
+
+    /// A document taller than the pane, with the caret on `caret_row`.
+    fn tall_prompt(caret_row: usize, total: usize) -> Vec<String> {
+        use crate::engine::core::CURSOR_MARKER;
+        (0..total)
+            .map(|row| {
+                if row == caret_row {
+                    format!("line {row}{CURSOR_MARKER}")
+                } else {
+                    format!("line {row}")
+                }
+            })
+            .collect()
+    }
+
+    /// Every row the renderer believes the hardware cursor may be on.
+    ///
+    /// The invariant gh #371 is about: after any frame, the recorded row must be a
+    /// row the terminal can physically be on - i.e. inside the visible viewport.
+    fn assert_recorded_row_is_on_screen(r: &MainScreenRenderer, height: u16, frame: &str) {
+        let top = r.previous_viewport_top;
+        let bottom = top + height as usize;
+        assert!(
+            r.hardware_cursor_row >= top && r.hardware_cursor_row < bottom,
+            "after {frame}, hardware_cursor_row={} is outside the viewport \
+             [{top}, {bottom}) - the terminal cannot be there, so the next frame's diff \
+             is computed from a screen row that does not exist",
+            r.hardware_cursor_row
+        );
+    }
+
+    // Verifies: gh #371 bug 1 - the recorded cursor row is always addressable.
+    //
+    // The caret sits on a line that has scrolled above the viewport (a prompt taller
+    // than the pane, caret moved to its top). The old code emitted a cursor-up past row
+    // 0 (the terminal clamps at the viewport top) and then recorded the *requested* row,
+    // so the field described a place the terminal never went.
+    #[test]
+    fn a_caret_above_the_viewport_is_never_recorded_as_a_cursor_row() {
+        let (mut r, mut term) = renderer();
+        term.resize(20, 4);
+        // 40 lines in a 4-row pane: rows 0..35 have scrolled out.
+        r.render(&mut term, tall_prompt(38, 40), 20, 4);
+        let _ = term.take_output();
+        assert_recorded_row_is_on_screen(&r, 4, "the first frame");
+
+        // The caret moves to row 2 - far above the 4-row viewport at 36..40.
+        r.render(&mut term, tall_prompt(2, 40), 20, 4);
+        let out = term.take_output();
+        assert_recorded_row_is_on_screen(&r, 4, "a caret above the viewport");
+        // And no cursor-up sequence beyond the tallest possible viewport can appear:
+        // a 4-row pane can address at most 3 rows up from its bottom.
+        for up in 4..40 {
+            assert!(
+                !out.contains(&format!("\x1b[{up}A")),
+                "the frame moved the cursor {up} rows up in a 4-row pane: {out:?}"
+            );
+        }
+    }
+
+    // Verifies: gh #371 bug 1 - the *next* frame's diff is correct, which is the
+    // damage the issue describes rather than the clamp itself.
+    //
+    // A single-frame assertion cannot see it: frame 1 records a bogus row, and frame 2
+    // is the one that computes a negative screen row and renders into the wrong place.
+    #[test]
+    fn the_frame_after_a_scrolled_out_caret_still_renders_the_right_rows() {
+        let (mut r, mut term) = renderer();
+        term.resize(20, 4);
+        r.render(&mut term, tall_prompt(38, 40), 20, 4);
+        let _ = term.take_output();
+        // Frame 2: the caret scrolled out above the viewport.
+        r.render(&mut term, tall_prompt(2, 40), 20, 4);
+        assert_recorded_row_is_on_screen(&r, 4, "the caret left the viewport");
+        let _ = term.take_output();
+        // Frame 3: ordinary typing at the bottom - the diff must land on the rows it
+        // names, which it cannot do if the recorded row was never reachable.
+        let mut lines = tall_prompt(2, 40);
+        lines[39] = "line 39 typed".to_string();
+        r.render(&mut term, lines, 20, 4);
+        let out = term.take_output();
+        assert!(
+            out.contains("line 39 typed"),
+            "the changed row is written: {out:?}"
+        );
+        assert_recorded_row_is_on_screen(&r, 4, "the frame after");
+    }
+
+    // Verifies: gh #371 - the corruption is cumulative, so a journey of frames is what
+    // catches it. Each frame is checked, not just the last.
+    #[test]
+    fn a_tall_prompt_journey_keeps_every_frame_addressable() {
+        let (mut r, mut term) = renderer();
+        term.resize(20, 4);
+        r.render(&mut term, tall_prompt(39, 40), 20, 4);
+        let _ = term.take_output();
+        assert_recorded_row_is_on_screen(&r, 4, "frame 0");
+        // Walk the caret up out of the viewport and back down, one frame each.
+        for caret in [30usize, 20, 10, 2, 1, 0, 5, 12, 25, 36, 39] {
+            r.render(&mut term, tall_prompt(caret, 40), 20, 4);
+            let _ = term.take_output();
+            assert_recorded_row_is_on_screen(&r, 4, &format!("caret at {caret}"));
+        }
+    }
+
+    // Verifies: gh #371 - the invariant over *every* frame shape, not just the ones
+    // above.
+    //
+    // The three rows before this one drive the shapes I thought of. This one drives a
+    // mixed journey - appends, in-place edits, deletions, caret jumps above and below
+    // the viewport, and resizes - because gh #371's desync is cumulative and the write
+    // sites are spread across four render paths. A row per path would be a row per
+    // guess; this asserts the property each of them owes.
+    #[test]
+    fn every_frame_shape_keeps_the_cursor_row_addressable() {
+        let (mut r, mut term) = renderer();
+        term.resize(20, 4);
+        let mut lines = tall_prompt(39, 40);
+        r.render(&mut term, lines.clone(), 20, 4);
+        let _ = term.take_output();
+        assert_recorded_row_is_on_screen(&r, 4, "initial");
+
+        // A scripted journey: each step is a frame the real interface can produce.
+        let steps: Vec<Vec<String>> = vec![
+            // In-place edit at the bottom.
+            {
+                lines[39] = "line 39 edited".to_string();
+                lines.clone()
+            },
+            // Caret leaps to the top of the document (the bug's trigger).
+            tall_prompt(0, 40),
+            // Caret mid-document, still above the viewport.
+            tall_prompt(20, 40),
+            // Back to the bottom.
+            tall_prompt(39, 40),
+            // A deletion: two rows vanish, everything shifts.
+            tall_prompt(39, 38),
+            // Growth past the pane again.
+            tall_prompt(39, 60),
+            // Caret parked above a grown document.
+            tall_prompt(3, 60),
+            // An ordinary append at the bottom.
+            tall_prompt(60, 61),
+        ];
+        for (step, step_lines) in steps.iter().enumerate() {
+            r.render(&mut term, step_lines.clone(), 20, 4);
+            let _ = term.take_output();
+            assert_recorded_row_is_on_screen(&r, 4, &format!("step {step}"));
+        }
+    }
+
+    // Verifies: gh #371 bug 1's second half - a saturated row cannot be trusted
+    // either.
+    //
+    // `extract_cursor_position` stores the document row in a `u16` and saturates at
+    // `u16::MAX`. A document longer than that puts the marker on a row the reported
+    // position cannot express, so the recorded row would be *lower* than the truth (and
+    // the caret would be parked somewhere it is not). The viewport guard treats it as
+    // unaddressable, which is the honest answer for a row we cannot name.
+    #[test]
+    fn a_saturated_cursor_row_is_treated_as_unaddressable() {
+        let (mut r, mut term) = renderer();
+        term.resize(20, 4);
+        // A document taller than u16::MAX, with the caret on its first line: the
+        // extractor saturates, and the guard must not then position at 65535.
+        let total = usize::from(u16::MAX) + 10;
+        r.render(&mut term, tall_prompt(0, total), 20, 4);
+        let out = term.take_output();
+        assert_recorded_row_is_on_screen(&r, 4, "a saturated caret row");
+        assert!(
+            out.contains("\x1b[?25l"),
+            "an unnameable caret hides the hardware cursor: {out:?}"
+        );
+        assert!(
+            !out.contains("\x1b[65535A") && !out.contains("\x1b[65536A"),
+            "and never asks the terminal to move to a row it cannot reach: {out:?}"
+        );
     }
 
     // Verifies: S1 - genuine scrollback append as content exceeds terminal height.
