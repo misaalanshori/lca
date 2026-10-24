@@ -101,9 +101,8 @@ where it does not: `Ctrl+J` is the newline alternative when
 re-encoding of control bytes inside a paste is decoded, so a pasted
 newline is a newline, not a submit). Remap anything in
 `~/.lca/keybindings.toml` (`/hotkeys` shows the effective map,
-`/reload` applies an edit without restarting — except an already-created
-prompt editor, which keeps its startup key map until you restart; see
-[Configuration](configuration.md#key-bindings) and gh #332).
+`/reload` applies an edit without restarting — editor bindings
+included; see [Configuration](configuration.md#key-bindings)).
 
 ### Completion triggers: `/`, `@`, and `#`
 
