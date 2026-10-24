@@ -228,3 +228,39 @@ fn the_non_key_parts_of_a_reload_are_unchanged() {
         "the host's notice is shown: {notice}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The fixture's own precondition.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn the_rebind_key_is_unbound_at_startup() {
+    // This row exists because the first version of the rows above was **vacuous**: they
+    // rebound `cursorLineStart` to `ctrl+a`, which is already one of that action's
+    // defaults, so the "rebind" changed nothing and every row passed with the editor
+    // propagation removed. Mutation found it; this row would have found it first.
+    //
+    // PINNED: the key is `ctrl+l`/`\x0c`. A future default claiming it makes the rows
+    // above inert the same way, and this one fails loudly instead.
+    let defaults = KeybindingsManager::new();
+    let probe = "\u{c}";
+    assert!(
+        !defaults.matches(probe, "tui.editor.cursorLineStart"),
+        "`ctrl+l` must not already be a default for the action the rows rebind - \
+         otherwise 'rebound' and 'bound already' are indistinguishable"
+    );
+    // And no neighbouring cursor action claims it either, or a row would be measuring
+    // that action's default rather than the reload.
+    for action in [
+        "tui.editor.cursorLeft",
+        "tui.editor.cursorRight",
+        "tui.editor.cursorWordLeft",
+        "tui.editor.cursorWordRight",
+        "tui.editor.cursorLineEnd",
+    ] {
+        assert!(
+            !defaults.matches(probe, action),
+            "{action} must not already bind `ctrl+l`"
+        );
+    }
+}
