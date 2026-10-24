@@ -470,3 +470,8 @@ mod colour_query_lifecycle;
 // the 50 ms tick; input is still tried first, and 200 ms of idle still paints nothing.
 #[path = "370-loop-wakes-on-every-source.rs"]
 mod loop_wakes_on_every_source;
+
+// GitHub #384: table layout measured `natural`/`min_word` on raw Markdown,
+// so one linked cell starved every other column.
+#[path = "384-table-measures-rendered-cells.rs"]
+mod table_measures_rendered_cells;
