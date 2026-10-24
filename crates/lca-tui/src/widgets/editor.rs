@@ -959,9 +959,15 @@ impl Editor {
                 let offset = self.cursor_col - row.start;
                 let (before, cluster, after) = Self::caret_split(text, offset);
                 rendered = if self.paint_caret {
+                    // Gh #371 bug 2: close reverse video with `27m`, not `0m`. A full
+                    // reset here would strip the foreground, background and
+                    // decorations of everything after the caret - ADR-0037's
+                    // channel-scoped rule, which the painted caret is the most
+                    // visible violation of, because it sits *inside* a row rather
+                    // than around one.
                     match cluster {
-                        Some(g) => format!("{before}{CURSOR_MARKER}\x1b[7m{g}\x1b[0m{after}"),
-                        None => format!("{before}{CURSOR_MARKER}\x1b[7m \x1b[0m"),
+                        Some(g) => format!("{before}{CURSOR_MARKER}\x1b[7m{g}\x1b[27m{after}"),
+                        None => format!("{before}{CURSOR_MARKER}\x1b[7m \x1b[27m"),
                     }
                 } else {
                     // The cluster is still text: keep it, and put the
@@ -983,7 +989,8 @@ impl Editor {
             // map could not resolve). Park it at its line's end anyway.
             last.push_str(CURSOR_MARKER);
             if self.paint_caret {
-                last.push_str("\x1b[7m \x1b[0m");
+                // Gh #371 bug 2: same rule for the parked caret.
+                last.push_str("\x1b[7m \x1b[27m");
             }
         }
         out

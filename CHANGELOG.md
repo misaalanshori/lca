@@ -7,6 +7,34 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **A toast wiped the terminal's scrollback** (gh #372 bug 1). In the default scrollback
+  renderer the toast painter was handed the whole session document instead of the visible
+  frame, so it wrote the message into the document's second line - hundreds of rows above
+  what the user could see. The renderer saw a change it could not reach incrementally and
+  did a full redraw, which clears the screen *and* the scrollback: every notification
+  destroyed the history behind it, and the message itself was never visible. The painter
+  now takes a screen slice by contract, and the scrollback path slices the frame out first,
+  the same way the modal overlays already did.
+- **A long prompt hid part of itself with no sign, and the status row collided with
+  the overflow count** (gh #388 gap 1). The composer drew every line of the prompt, so a
+  long one pushed the input frame off the top of the screen; and had anything reported the
+  hidden rows on the border row, it would have written over `Working`. The composer now
+  shows a bounded window that follows the caret (30% of the terminal's height, never fewer
+  than five rows), and the border names what is out of view (`↑ N more` above, `↓ N more`
+  below) alongside the status, giving up the words before the count when the row is too
+  narrow to hold both - a bare spinner is the floor. Nothing hidden leaves the border
+  exactly as it was.
+- **A caret scrolled out of view could desynchronise the main screen, and the painted
+  caret reset the colour of the text after it** (gh #371). Two rendering-contract bugs:
+  the scrollback renderer recorded the cursor row it *asked* for while the terminal
+  clamped the result to the visible viewport, so a later frame's diff started from a
+  screen row that never existed and the differential rendering corrupts; and the painted
+  caret closed reverse video with a full `\x1b[0m`, stripping the foreground, background
+  and decorations of everything after it. A caret outside the viewport is now treated as
+  unaddressable (the hardware cursor hides rather than parking on an unrelated line), and
+  the caret closes with `\x1b[27m` so the text around it keeps its own style.
+
+### Added
 - **`/reload` now covers editor key bindings, so a new cursor or newline binding works
   without a restart** (gh #332). The prompt editor kept the key map it was built with,
   so a reloaded `tui.editor.*` or `tui.input.*` binding was accepted by app-level
