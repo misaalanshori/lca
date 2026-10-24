@@ -1,7 +1,6 @@
 //! gh #399 rows: the three-line header, its live key hints, and the width ladder.
 
 use super::*;
-use crate::logo::Mark;
 use crate::theme::Theme;
 
 fn version() -> VersionInfo {
