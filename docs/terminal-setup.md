@@ -136,6 +136,47 @@ modern terminal on the local end; the capability detection runs
 against the far end's report, so a dumb `TERM` export on the remote
 side is the usual culprit when colors or keys degrade.
 
+### Modified keys and `extended-keys`
+
+tmux reports `Ctrl+Shift+<key>` and `Shift+Enter` only when
+`extended-keys` is on, and it is **off by default**. That is a quiet
+failure: the key never arrives, so the editor looks broken rather than
+the terminal — `Shift+Enter` inserts nothing and `Ctrl+Shift+P` does
+not cycle models.
+
+lca checks this at launch and, when tmux is misconfigured, says so in
+the header's detail section (`ctrl+o`) — with the command, the file and
+the reason:
+
+```
+tmux extended-keys is off, so Ctrl+Shift chords and Shift+Enter never reach lca.
+Add `set -g extended-keys on` to ~/.tmux.conf, then restart tmux - `source-file`
+reloads only part of the config.
+```
+
+```
+set -g extended-keys on
+```
+
+Then **restart tmux**, not just source the config: `tmux source-file`
+reloads bindings but not this option, and a reader who only sourced it
+would conclude the advice does not work.
+
+The notice is **silent when tmux is fine**, silent when the check
+cannot run (no `tmux` binary, a refused or slow query), and suppressed
+by `quietStartup`. Outside tmux it costs nothing at all — no
+subprocess is started. It never prints into the conversation: it lives
+in the header, so it does not push your first message down or linger in
+scrollback.
+
+**`extended-keys-format` is not a defect here.** pi prefers `csi-u`;
+lca reads both of tmux's encodings, which was checked against tmux's
+own documented sequences (the `xterm` form `ESC[27;6;65~` and the
+`csi-u` form `ESC[65;6u` for `Ctrl+Shift+A` both parse). The notice
+mentions pinning `set -g extended-keys-format csi-u` as *stability*
+advice — so the encoding you rely on does not move with a tmux
+release — never as the thing that fixes a broken key.
+
 ## Windows and ConPTY
 
 On Windows, shell commands reach the child through temp script
