@@ -30,6 +30,10 @@ impl EventType {
 #[derive(Debug, Clone, Copy)]
 pub(super) struct ParsedKitty {
     pub(super) codepoint: i64,
+    /// The shifted key Kitty reports separately (gh #377), e.g. `'?'` for
+    /// `Ctrl+Shift+/`. This is the data a logical binding match needs; it used to be
+    /// parsed and thrown away.
+    pub(super) shifted_key: Option<u32>,
     pub(super) base_layout_key: Option<u32>,
     pub(super) modifier: u32,
     #[allow(dead_code)] // retained for parity with pi; release/repeat use substring sniffers
@@ -59,12 +63,17 @@ pub(super) fn parse_kitty_sequence(data: &str) -> Option<ParsedKitty> {
         let body = &bytes[2..bytes.len() - 1];
         let (cp, mut i) = digits(body, 0)?;
         let mut base_layout: Option<u64> = None;
+        let mut shifted: Option<u64> = None;
         // shifted key: `:digits?` (possibly empty)
         if body.get(i) == Some(&b':') {
             i += 1;
-            // optional digits for shifted key; skip
+            let start = i;
             while i < body.len() && body[i].is_ascii_digit() {
                 i += 1;
+            }
+            // Gh #377: keep it - a binding on the produced symbol needs it.
+            if i > start {
+                shifted = std::str::from_utf8(&body[start..i]).ok()?.parse().ok();
             }
             // base layout key: another `:digits`
             if body.get(i) == Some(&b':') {
@@ -97,6 +106,7 @@ pub(super) fn parse_kitty_sequence(data: &str) -> Option<ParsedKitty> {
         }
         return Some(ParsedKitty {
             codepoint: cp as i64,
+            shifted_key: shifted.map(|v| v as u32),
             base_layout_key: base_layout.map(|v| v as u32),
             modifier: u32::try_from(mod_value.saturating_sub(1)).unwrap_or(u32::MAX),
             event_type: EventType::from_str(event),
@@ -129,6 +139,7 @@ pub(super) fn parse_kitty_sequence(data: &str) -> Option<ParsedKitty> {
         };
         return Some(ParsedKitty {
             codepoint: cp,
+            shifted_key: None,
             base_layout_key: None,
             modifier: u32::try_from(mod_value.saturating_sub(1)).unwrap_or(u32::MAX),
             event_type: EventType::from_str(event),
@@ -168,6 +179,7 @@ pub(super) fn parse_kitty_sequence(data: &str) -> Option<ParsedKitty> {
         };
         return Some(ParsedKitty {
             codepoint: cp,
+            shifted_key: None,
             base_layout_key: None,
             modifier: u32::try_from(mod_value.saturating_sub(1)).unwrap_or(u32::MAX),
             event_type: EventType::from_str(event),
@@ -193,6 +205,7 @@ pub(super) fn parse_kitty_sequence(data: &str) -> Option<ParsedKitty> {
         }
         return Some(ParsedKitty {
             codepoint: if final_byte == b'H' { FN_HOME } else { FN_END },
+            shifted_key: None,
             base_layout_key: None,
             modifier: u32::try_from(mod_value.saturating_sub(1)).unwrap_or(u32::MAX),
             event_type: EventType::from_str(event),
@@ -208,9 +221,6 @@ pub(super) fn matches_kitty(data: &str, expected_codepoint: i64, expected_modifi
     };
     let actual_mod = parsed.modifier & !LOCK_MASK;
     let expected_mod = expected_modifier & !LOCK_MASK;
-    if actual_mod != expected_mod {
-        return false;
-    }
     let normalized = normalize_shifted_letter_identity_codepoint(
         normalize_kitty_functional_codepoint(parsed.codepoint),
         parsed.modifier,
@@ -219,8 +229,29 @@ pub(super) fn matches_kitty(data: &str, expected_codepoint: i64, expected_modifi
         normalize_kitty_functional_codepoint(expected_codepoint),
         expected_modifier,
     );
-    if normalized == normalized_expected {
+    // Physical match: the codepoint and every modifier agree. This runs before the
+    // modifier check below would reject a shifted-symbol event, because such an event
+    // carries Shift that the logical candidate is going to consume.
+    if actual_mod == expected_mod && normalized == normalized_expected {
         return true;
+    }
+    // Logical match (gh #377): a shifted symbol names the symbol it produces. Kitty
+    // reports `Ctrl+Shift+/` as codepoint `'/'` **plus** a separate shifted key `'?'`,
+    // so the binding has to be compared against the shifted key with the implicit
+    // Shift consumed. Same function `modifyOtherKeys` uses - one decision, two
+    // protocols.
+    if let Some(shifted) = parsed.shifted_key
+        && matches_logical_shifted_symbol(
+            i64::from(shifted),
+            expected_codepoint,
+            actual_mod,
+            expected_mod,
+        )
+    {
+        return true;
+    }
+    if actual_mod != expected_mod {
+        return false;
     }
     // Alternate match: base layout key, only when the codepoint is not a
     // recognized Latin letter or symbol (the remapped-layouts policy).

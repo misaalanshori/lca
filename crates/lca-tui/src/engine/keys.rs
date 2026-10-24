@@ -106,8 +106,46 @@ fn normalize_shifted_letter_identity_codepoint(cp: i64, modifier: u32) -> i64 {
 /// The 30 symbol keys pi treats specially in matching and name formatting.
 const SYMBOL_KEYS: &str = "`-=[]\\;',./!@#$%^&*()_+|~{}:<>?";
 
+/// The **shifted** forms a logical candidate may be built from (gh #377).
+///
+/// pi's `SHIFTED_SYMBOL_KEYS` (`keys.ts:292`), transcribed: `~!@#$%^&*()_+|{}:<>?`.
+/// Only these characters become a logical candidate, and the bound is the point -
+/// see [`logical_shifted_symbol`].
+const SHIFTED_SYMBOL_KEYS: &str = "~!@#$%^&*()_+|{}:<>?";
+
 fn is_known_symbol(cp: i64) -> bool {
     char::from_u32(cp as u32).is_some_and(|c| c.is_ascii() && SYMBOL_KEYS.contains(c))
+}
+
+/// The logical candidate for a shifted symbol (gh #377): `(codepoint, modifier)` with
+/// the **implicit Shift consumed** and every other modifier preserved, or `None` when
+/// there is no such candidate.
+///
+/// This is pi's `getLogicalShiftedSymbolCandidate` (`keys.ts:372`), and it is the
+/// **one** place the shifted-symbol rule lives: `matches_kitty` and
+/// `matches_printable_modify_other_keys` both call it, so the two protocols cannot
+/// grow two opinions about a shifted symbol - the seam this repo has closed four times
+/// in two days.
+///
+/// **Why the vocabulary is bounded.** Kitty reports `Ctrl+Shift+/` as codepoint `'/'`
+/// plus a separate shifted key `'?'`. Comparing the codepoint misses; comparing the
+/// shifted key matches. But a candidate built from *any* shifted character would make
+/// `shift+a` match a binding on `A` through this path while the physical path also
+/// matched, and the two could disagree about modifiers. Letters have their own
+/// identity rule ([`normalize_shifted_letter_identity_codepoint`]); only symbols take
+/// this route, and only the shifted forms a keyboard can actually produce.
+///
+/// `codepoint` is the already-functional-normalized shifted key; `modifier` is the
+/// event's modifier with lock bits already masked off.
+fn logical_shifted_symbol(codepoint: i64, modifier: u32) -> Option<(i64, u32)> {
+    if (modifier & MOD_SHIFT) == 0 {
+        return None;
+    }
+    let ch = char::from_u32(codepoint as u32)?;
+    if !SHIFTED_SYMBOL_KEYS.contains(ch) {
+        return None;
+    }
+    Some((codepoint, modifier & !MOD_SHIFT))
 }
 
 // =============================================================================
@@ -166,11 +204,39 @@ fn matches_printable_modify_other_keys(
     let Some((code, modifier)) = parse_modify_other_keys(data) else {
         return false;
     };
-    if modifier != expected_modifier {
-        return false;
+    let actual = modifier & !LOCK_MASK;
+    let expected = expected_modifier & !LOCK_MASK;
+    // Physical match: the codepoint and modifier the event reports.
+    if actual == expected
+        && normalize_shifted_letter_identity_codepoint(code, modifier)
+            == normalize_shifted_letter_identity_codepoint(expected_keycode, expected_modifier)
+    {
+        return true;
     }
-    normalize_shifted_letter_identity_codepoint(code, modifier)
-        == normalize_shifted_letter_identity_codepoint(expected_keycode, expected_modifier)
+    // Logical match (gh #377): a shifted symbol names the symbol it produces, so the
+    // implicit Shift is consumed and everything else must still match. Same function
+    // kitty uses, so one decision serves both protocols.
+    matches_logical_shifted_symbol(code, expected_keycode, actual, expected)
+}
+
+/// Whether `code`/`actual` is the logical candidate for `expected_keycode`/`expected`.
+///
+/// The shared tail of both protocols' logical rule (gh #377): consume the implicit
+/// Shift, preserve every other modifier, require the shifted *symbol* to equal what the
+/// binding names.
+fn matches_logical_shifted_symbol(
+    code: i64,
+    expected_keycode: i64,
+    actual_modifier: u32,
+    expected_modifier: u32,
+) -> bool {
+    let Some((candidate, candidate_modifier)) =
+        logical_shifted_symbol(normalize_kitty_functional_codepoint(code), actual_modifier)
+    else {
+        return false;
+    };
+    candidate_modifier == expected_modifier
+        && candidate == normalize_kitty_functional_codepoint(expected_keycode)
 }
 
 // =============================================================================
@@ -765,158 +831,5 @@ pub fn decode_printable_key(data: &str) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn with_kitty<T>(active: bool, f: T)
-    where
-        T: FnOnce(),
-    {
-        let prev = is_kitty_protocol_active();
-        set_kitty_protocol_active(active);
-        f();
-        set_kitty_protocol_active(prev);
-    }
-
-    // Verifies: gh #66 follow-up - the key vocabulary accepts every
-    // shape `matches_key` handles and rejects anything else, so a
-    // `ctrl+xyz` typo reports loud instead of never matching.
-    #[test]
-    fn the_key_vocabulary_accepts_named_and_single_keys_only() {
-        for valid in [
-            "up",
-            "down",
-            "left",
-            "right",
-            "pageUp",
-            "pageDown",
-            "home",
-            "end",
-            "escape",
-            "esc",
-            "enter",
-            "return",
-            "tab",
-            "space",
-            "backspace",
-            "delete",
-            "insert",
-            "clear",
-            "f1",
-            "f12",
-            "a",
-            "z",
-            "5",
-            ";",
-            "ctrl+x",
-            "ctrl+shift+n",
-            "alt+left",
-            "super+k",
-        ] {
-            assert!(is_valid_key_id(valid), "{valid} is a key");
-        }
-        for invalid in ["", "ctrl+xyz", "super-duper", "shift", "f13", "enter+"] {
-            assert!(!is_valid_key_id(invalid), "{invalid} is not a key");
-        }
-    }
-
-    // Verifies: I.1 key dialect tables (pi keys.ts golden cases).
-    #[test]
-    fn legacy_sequences_match_their_key_ids() {
-        assert!(matches_key("\x1b[A", "up"));
-        assert!(matches_key("\x1bOA", "up"));
-        assert!(matches_key("\x1b[B", "down"));
-        assert!(matches_key("\x1b[5~", "pageUp"));
-        assert!(matches_key("\x1b[6~", "pageDown"));
-        assert!(matches_key("\x1b[H", "home"));
-        assert!(matches_key("\x1b[F", "end"));
-        assert!(matches_key("\x1b[3~", "delete"));
-        assert!(matches_key("\x1b[2~", "insert"));
-        assert!(matches_key("\x1bOP", "f1"));
-        assert!(matches_key("\x1b[24~", "f12"));
-    }
-
-    #[test]
-    fn ctrl_letters_use_control_codes() {
-        assert!(matches_key("\x03", "ctrl+c"));
-        assert!(matches_key("\x1b[99;5u", "ctrl+c")); // Kitty CSI-u
-        assert!(matches_key("\x1b[27;5;99~", "ctrl+c")); // modifyOtherKeys
-        assert!(!matches_key("\x03", "ctrl+d"));
-    }
-
-    #[test]
-    fn shift_tab_and_shift_enter_dialects() {
-        assert!(matches_key("\x1b[Z", "shift+tab"));
-        assert!(matches_key("\x1b[9;2u", "shift+tab"));
-        assert!(matches_key("\x1b[13;2u", "shift+enter"));
-        with_kitty(true, || {
-            assert!(matches_key("\x1b\r", "shift+enter"));
-            assert!(matches_key("\n", "shift+enter"));
-            assert!(!matches_key("\x1b\r", "alt+enter"));
-        });
-        with_kitty(false, || {
-            assert!(matches_key("\x1b\r", "alt+enter"));
-        });
-    }
-
-    #[test]
-    fn base_layout_key_policy_prefers_recognizable_codepoints() {
-        // Latin recognisable -> codepoint authoritative, base layout ignored.
-        assert!(!matches_key("\x1b[118:118:107;5u", "ctrl+k")); // reports v with base k
-        // Cyrillic -> base layout key rescues the match.
-        assert!(matches_key("\x1b[1089:0:99;5u", "ctrl+c"));
-    }
-
-    #[test]
-    fn keypad_normalizes_to_ascii_equivalents() {
-        assert!(matches_key("\x1b[57404u", "5"));
-        assert!(matches_key("\x1b[57414u", "enter"));
-    }
-
-    #[test]
-    fn escape_alone_and_alt_prefixed_printables() {
-        assert!(matches_key("\x1b", "escape"));
-        assert!(matches_key("\x1b[27u", "escape"));
-        assert!(matches_key("\x1b[27;1u", "escape"));
-        assert!(matches_key("\x1b[27;1;27~", "escape"));
-        with_kitty(false, || {
-            assert!(matches_key("\x1bx", "alt+x"));
-            assert!(matches_key("\x1b\x03", "ctrl+alt+c"));
-        });
-    }
-
-    #[test]
-    fn arrow_modifier_dialects() {
-        assert!(matches_key("\x1b[1;3D", "alt+left"));
-        assert!(matches_key("\x1b[1;5C", "ctrl+right"));
-        assert!(matches_key("\x1bb", "alt+left"));
-        assert!(matches_key("\x1bf", "alt+right"));
-    }
-
-    #[test]
-    fn release_and_repeat_sniffing_vetoes_paste() {
-        assert!(is_key_release("\x1b[99;5:3u"));
-        assert!(is_key_repeat("\x1b[99;5:2u"));
-        assert!(!is_key_release("\x1b[200~90:62:3F:A5\x1b[201~"));
-        assert!(!is_key_repeat("\x1b[200~x:2F:y\x1b[201~"));
-    }
-
-    #[test]
-    fn parse_key_round_trips_common_inputs() {
-        assert_eq!(parse_key("\x1b[A").as_deref(), Some("up"));
-        assert_eq!(parse_key("\r").as_deref(), Some("enter"));
-        assert_eq!(parse_key("\x03").as_deref(), Some("ctrl+c"));
-        assert_eq!(parse_key("\x1b[Z").as_deref(), Some("shift+tab"));
-        assert_eq!(parse_key("a").as_deref(), Some("a"));
-        assert_eq!(parse_key("\x1b[13;2u").as_deref(), Some("shift+enter"));
-    }
-
-    #[test]
-    fn decode_printable_accepts_plain_and_shifted_only() {
-        assert_eq!(decode_printable_key("\x1b[97u").as_deref(), Some("a"));
-        assert_eq!(decode_printable_key("\x1b[97:65;2u").as_deref(), Some("A"));
-        assert_eq!(decode_printable_key("\x1b[27;2;97~").as_deref(), Some("a"));
-        assert!(decode_printable_key("\x1b[97;5u").is_none()); // ctrl rejected
-        assert!(decode_printable_key("\x1b[97;3u").is_none()); // alt rejected
-    }
-}
+#[path = "keys_tests.rs"]
+mod tests;

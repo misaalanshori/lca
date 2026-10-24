@@ -1180,3 +1180,8 @@ mod splice_pads_to_column;
 // guessing an escape length; an SGR arriving at the slice seam keeps its order.
 #[path = "378-fast-path-and-sgr-order.rs"]
 mod fast_path_and_sgr_order;
+
+// Gh #377: a binding on a shifted symbol (`?`, `ctrl+?`, `alt+~`) can be written down
+// naturally and matches, through one shared rule for both key protocols.
+#[path = "377-shifted-symbol-bindings.rs"]
+mod shifted_symbol_bindings;

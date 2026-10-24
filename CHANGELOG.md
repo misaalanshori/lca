@@ -7,6 +7,13 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **A keybinding on a shifted symbol could never fire** (gh #377). In a terminal that
+  reports the physical key (`Ctrl+Shift+/` arriving as `/` plus a separate `?`), a binding
+  written the natural way - `ctrl+?`, `alt+~` - compared the produced symbol against the
+  physical one and missed, so the only spelling that worked was `ctrl+shift+/`, which a
+  user had to discover by accident. Both spellings now work: a shifted symbol is matched
+  by the symbol it produces, with any other modifier preserved, and the physical spelling
+  keeps working unchanged.
 - **Text after a selected or overlaid run could inherit the wrong colour** (gh #378
   gaps 1-2). Two defects in the width/slice path: a style arriving exactly at the seam
   of a slice was emitted before the style it replaced, so a reset and a colour came out
