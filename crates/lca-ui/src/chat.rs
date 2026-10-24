@@ -338,11 +338,21 @@ impl Chat {
         // so a `/reload` rebind reaches the first line a user reads - it used to
         // be a pre-rendered `Raw` string and therefore baked the keys at startup.
         transcript.set_keybindings(keybindings.clone());
-        transcript.push_startup_hint();
-        // Gh #400 gaps 2 and 3: the header is an *entry*, so the expand key can
-        // reach it and a session switch can carry its state. Pushed before the
-        // initial lines so a resume's warnings stay under it, as they were.
-        if !startup_header.0.is_empty() || !startup_header.1.is_empty() {
+        // Gh #399: the owner's logo block replaces the bare hint line.
+        //
+        // One entry for all three `quietStartup` rungs: the **renderer** decides how
+        // much to draw, so `Hidden` prints nothing, `VersionOnly` keeps the version
+        // row and `Full` draws the owner's block - and a `/settings` cycle moves the
+        // rung without a restart. Pushing a different entry per rung would bake the
+        // choice at startup, which is the mistake #410 already taught this file not
+        // to make with keys.
+        // Gh #400 gaps 2 and 3 (worker 2) own the resource line and the expandable
+        // table behind `ctrl+o`. When the host supplied one it is the row that names
+        // the build, so the logo block drops its own version row rather than printing
+        // a second one.
+        let has_resources = !startup_header.0.is_empty() || !startup_header.1.is_empty();
+        transcript.push_startup_header(has_resources);
+        if has_resources {
             transcript.push_startup_resources(startup_header.0.clone(), startup_header.1.clone());
         }
         for line in &world.options.initial_lines {
@@ -464,6 +474,12 @@ impl Chat {
         // finds it.
         chat.seed_tabs();
         // S5: an invalid custom theme keeps the last-good palette and
+        // Gh #399: the transcript needs the tuning **before** the first frame, not
+        // on the first `tick()`. The startup header entry is pushed above and its
+        // version and rung come from this, so a caller that renders a fresh `Chat`
+        // without ticking first (a test, a screenshot, a resumed session) would
+        // otherwise draw the defaults - which is exactly what caught this.
+        chat.sync_display_tuning();
         // says so in history, never in editor chrome.
         if let Some(notice) = chat_head {
             chat.say(notice);
@@ -1134,6 +1150,9 @@ mod command_guards;
 #[cfg(test)]
 #[path = "chat_meter_tests.rs"]
 mod meter_tests;
+#[cfg(test)]
+#[path = "startup_header_wired_tests.rs"]
+mod startup_header_wired_tests;
 #[cfg(test)]
 #[path = "chat_tests.rs"]
 pub(crate) mod tests;

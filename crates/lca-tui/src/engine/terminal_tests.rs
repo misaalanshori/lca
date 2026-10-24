@@ -458,3 +458,64 @@ fn the_screen_switch_sequences_fold_into_the_drop_flag() {
         "the renderer's leave switches it off, so the drop has nothing to undo"
     );
 }
+
+// ---------------------------------------------------------------------------
+// gh #399: whether half-block glyph art renders (Apple_Terminal's rule)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn apple_terminal_is_the_platform_and_the_program_name_together() {
+    // pi's rule is a *pair* (`terminal.ts:44`). Each half alone is the guess
+    // this row exists to forbid: a Linux terminal can export Apple's name, and
+    // a Mac can be running something else entirely.
+    let mac = env_of(&[("TERM_PROGRAM", "Apple_Terminal")]);
+    assert!(
+        detect_apple_terminal(true, mac),
+        "macOS + Apple_Terminal is the terminal pi measured"
+    );
+
+    let linux_claiming_the_name = env_of(&[("TERM_PROGRAM", "Apple_Terminal")]);
+    assert!(
+        !detect_apple_terminal(false, linux_claiming_the_name),
+        "the name alone does not make it Apple's Terminal - half blocks render fine elsewhere"
+    );
+
+    let mac_elsewhere = env_of(&[("TERM_PROGRAM", "iTerm.app")]);
+    assert!(
+        !detect_apple_terminal(true, mac_elsewhere),
+        "iTerm handles half blocks; only Apple_Terminal has the gap bug"
+    );
+
+    let mac_unset = env_of(&[]);
+    assert!(
+        !detect_apple_terminal(true, mac_unset),
+        "an unset TERM_PROGRAM is unknown, not Apple's Terminal"
+    );
+}
+
+#[test]
+fn the_half_block_answer_can_be_forced_for_a_receipt() {
+    // The fallback has to be demonstrable on a machine that is not a Mac, the
+    // same way `LCA_HYPERLINKS` lets a receipt capture OSC 8 under tmux.
+    let forced_off = env_of(&[("LCA_HALF_BLOCKS", "0")]);
+    assert!(
+        detect_apple_terminal(false, forced_off),
+        "0 forces the fallback on any platform"
+    );
+
+    let forced_on = env_of(&[("LCA_HALF_BLOCKS", "1"), ("TERM_PROGRAM", "Apple_Terminal")]);
+    assert!(
+        !detect_apple_terminal(true, forced_on),
+        "1 keeps half blocks even where the rule would fall back"
+    );
+
+    // Anything other than `0`/`1` is not an override, like `LCA_HYPERLINKS`.
+    let other = env_of(&[
+        ("LCA_HALF_BLOCKS", "yes"),
+        ("TERM_PROGRAM", "Apple_Terminal"),
+    ]);
+    assert!(
+        detect_apple_terminal(true, other),
+        "a value that is not 0 or 1 does not count as an override"
+    );
+}

@@ -152,6 +152,26 @@ pub enum Entry {
         /// Whether the reader has expanded it this session.
         expanded_state: bool,
     },
+    /// The startup header's logo block (gh #399): the owner's mark beside the
+    /// version, the live key hints, and the onboarding nudge.
+    ///
+    /// A live entry rather than a pre-rendered `Raw` string for the same reason
+    /// [`Entry::StartupHint`] is: the key hints resolve at render time, so a
+    /// `/reload` rebind reaches the first thing a user reads, and the **width**
+    /// decides whether the mark draws beside the text, stacks above it, or gives
+    /// way to the version alone. Baking it would fix both at startup.
+    StartupHeader {
+        /// Whether the resource line (gh #400's `Entry::StartupResources`) is
+        /// printed beneath this block and therefore already names the version.
+        ///
+        /// Set when the host supplied one. Without it the two headers both print
+        /// `v0.6.0 (abi 0.6)` and `lca 0.6.0 (abi 0.6)`, which reads as a
+        /// duplicated startup - the mark then keeps only the hints and the nudge,
+        /// and the resource line becomes the one row that names the build (it is
+        /// also the expandable one, so the version and the expand hint stay
+        /// together).
+        beside_resources: bool,
+    },
     /// An image the terminal renders through the graphics ladder, or as a
     /// placeholder when it has no graphics support (FR-UI-13, R5).
     Image {
@@ -698,6 +718,17 @@ impl Transcript {
         self.invalidate_cache();
     }
 
+    /// Append the startup header block (gh #399). Like [`Self::push_startup_hint`]
+    /// its keys and its width rung resolve at render time, so this records the
+    /// *intent* rather than a rendered string.
+    ///
+    /// `beside_resources` says whether a resource line will print under it and
+    /// already name the version; see [`Entry::StartupHeader`].
+    pub fn push_startup_header(&mut self, beside_resources: bool) {
+        self.entries.push(Entry::StartupHeader { beside_resources });
+        self.invalidate_cache();
+    }
+
     /// Drop every entry (R3's session switch): the new session starts its
     /// own transcript.
     ///
@@ -1073,103 +1104,12 @@ impl Transcript {
         }
         out
     }
-
-    /// The entry owning a document row, if any, and whether the row
-    /// belongs to its reasoning run (gh #11's hit map): blank separator
-    /// rows belong to no entry. The render cache carries each entry's
-    /// line count, so this walks lengths, never re-renders.
-    /// What a transcript document row belongs to (gh #166): a
-    /// thinking row cycles its run, a tool card's first row toggles its
-    /// expansion, anything else is not clickable.
-    pub fn entry_at_row(&self, width: u16, theme: &Theme, row: usize) -> Option<EntryHit> {
-        let _ = self.render(width, theme);
-        let cache = self.cache.borrow();
-        let mut line = 0usize;
-        for (i, slot) in cache.iter().enumerate() {
-            if i > 0 {
-                if line == row {
-                    return None;
-                }
-                line += 1;
-            }
-            let Some((_, _, lines, thinking_rows)) = slot.as_ref() else {
-                continue;
-            };
-            if row >= line && row < line + lines.len() {
-                if row - line < *thinking_rows {
-                    return Some(EntryHit::Thinking(i));
-                }
-                // A tool card paints as a state band: a blank band row,
-                // then the header, then the output (`render_tool` owns
-                // this shape, so the header is always row 1). Body rows
-                // hit the card too (gh #247), so a click anywhere on
-                // an expanded card collapses it.
-                if matches!(self.entries.get(i), Some(Entry::Tool { .. })) {
-                    if row - line == 1 {
-                        return Some(EntryHit::ToolHeader(i));
-                    }
-                    return Some(EntryHit::ToolBody(i));
-                }
-                // Gh #393: the whole compaction card is the target, because the
-                // card is the thing being opened.
-                if matches!(self.entries.get(i), Some(Entry::Compaction { .. })) {
-                    return Some(EntryHit::Compaction(i));
-                }
-                return None;
-            }
-            line += lines.len();
-        }
-        None
-    }
-
-    /// The document line index where each user message starts, at `width`
-    /// (FR-UI-11's prompt jump).
-    pub fn user_offsets(&self, width: u16, theme: &Theme) -> Vec<usize> {
-        let mut offsets = Vec::new();
-        let mut line = 0usize;
-        for (i, entry) in self.entries.iter().enumerate() {
-            if i > 0 {
-                line += 1;
-            }
-            if matches!(entry, Entry::User(_)) {
-                offsets.push(line);
-            }
-            let mut tmp = Vec::new();
-            let _ = render_entry(
-                entry,
-                width,
-                theme,
-                self.tools_expanded,
-                self.thinking,
-                self.codeblock_border,
-                &self.markdown_transformers,
-                &self.tuning,
-                self.keybindings.as_ref(),
-                &mut tmp,
-            );
-            line += tmp.len();
-        }
-        offsets
-    }
-
-    /// The height (line count) at a width.
-    pub fn height(&self, width: u16, theme: &Theme) -> usize {
-        self.render(width, theme).len()
-    }
-}
-
-/// A one-line image label (media type, dimensions, size) for resume lines.
-pub fn image_label(media_type: &str, bytes: &[u8]) -> String {
-    let info = ImageInfo::new(media_type, bytes);
-    let dimensions = match (info.width, info.height) {
-        (Some(w), Some(h)) => format!("{w}×{h}"),
-        _ => "unknown size".to_string(),
-    };
-    format!("[image {media_type}, {dimensions}, {} bytes]", bytes.len())
 }
 
 mod compaction_card;
+mod measure;
 pub use compaction_card::Card;
+pub use measure::image_label;
 mod nested;
 mod startup_header;
 pub use nested::{COLLAPSED_CHILDREN, ChildCall, ChildStatus};

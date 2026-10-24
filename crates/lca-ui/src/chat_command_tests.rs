@@ -587,10 +587,35 @@ fn tick_syncs_display_tuning_live() {
         ..crate::state::DisplayTuning::default()
     }));
     let mut chat = Chat::new(opts, Arc::new(KeybindingsManager::new()));
-    assert_eq!(chat.editor.max_visible, 5, "defaults before the tick");
+    // Gh #399 changed this premise: the constructor now syncs the tuning once, so
+    // the hook's value is in place **before** the first frame rather than only
+    // after a tick. The startup header reads its version and rung from the tuning,
+    // and a caller that renders a fresh `Chat` without ticking (a screenshot, a
+    // resumed session, a test) was otherwise drawing the defaults.
+    assert_eq!(
+        chat.editor.max_visible, 8,
+        "the hook wins from construction, not from the first tick"
+    );
     chat.tick();
-    assert_eq!(chat.editor.max_visible, 8, "the hook wins");
+    assert_eq!(chat.editor.max_visible, 8, "and the tick keeps it");
     assert_eq!(chat.editor.padding_x, 2, "padding follows");
+    // The live behaviour the row was written for still holds: a hook that answers
+    // differently on a later tick reaches the editor without a restart. Driven
+    // through a cell rather than a test-only setter, so this is the real path.
+    let visible = Arc::new(std::sync::atomic::AtomicUsize::new(6));
+    let cell = visible.clone();
+    let mut opts = options();
+    opts.hooks.display_tuning = Some(Arc::new(move || crate::state::DisplayTuning {
+        autocomplete_max_visible: cell.load(std::sync::atomic::Ordering::SeqCst) as u8,
+        editor_padding_x: 3,
+        ..crate::state::DisplayTuning::default()
+    }));
+    let mut live = Chat::new(opts, Arc::new(KeybindingsManager::new()));
+    assert_eq!(live.editor.max_visible, 6, "the initial answer");
+    visible.store(7, std::sync::atomic::Ordering::SeqCst);
+    live.tick();
+    assert_eq!(live.editor.max_visible, 7, "a live change still lands");
+    assert_eq!(live.editor.padding_x, 3, "padding too");
 }
 
 // Verifies: FR-UI-16 - `/tree` selection without a host stays a
