@@ -41,7 +41,7 @@
 //! the full composition fit where it before did not, and the header should follow
 //! that rather than a number someone typed.
 
-use super::logo::{Mark, mark_for, mark_rows, mark_width, wordmark};
+use super::logo::{Mark, mark_for, mark_rows, mark_width};
 use super::theme::Theme;
 use lca_tui::engine::keybindings::KeybindingsManager;
 use lca_tui::engine::text::visible_width;
@@ -254,7 +254,8 @@ fn layout_for(width: usize, apple_terminal: bool, text: &[String]) -> Layout {
         .map(|line| visible_width(line))
         .max()
         .unwrap_or(0);
-    if width >= widest + beside_mark + 1 {
+    // The `+1` is the gap column beside the mark.
+    if width > widest + beside_mark {
         return Layout::Beside;
     }
     let version_width = visible_width(&text[0]);
