@@ -530,7 +530,7 @@ impl Chat {
         if !self.screen_mode {
             let mut lines = self.render(width);
             self.compose_overlays_bottom_anchored(&mut lines, width, height);
-            self.paint_toasts(&mut lines, width);
+            self.paint_toasts_at_bottom(&mut lines, width, height);
             return lines;
         }
         if !self.screen_mode {
@@ -639,15 +639,31 @@ impl Chat {
     }
 
     /// Float the toast stack top-right (gh #239): one accent line
-    /// per toast at viewport rows 1.., right-aligned, spliced over
-    /// the transcript beneath (ANSI-aware, like the dialog seams).
-    /// Row 0 stays the tab bar's. No toast steals a transcript row —
-    /// the text underneath simply shows again when they fade.
-    pub(crate) fn paint_toasts(&self, viewport: &mut [String], width: u16) {
+    /// per toast at **screen** rows 1.., right-aligned, spliced over the
+    /// transcript beneath (ANSI-aware, like the dialog seams). Row 0 stays
+    /// the tab bar's. No toast steals a transcript row — the text underneath
+    /// simply shows again when they fade.
+    ///
+    /// **The parameter is a screen slice, always** (gh #372 bug 1). The name
+    /// said `viewport` and every caller in fullscreen mode passed one, but the
+    /// scrollback path passed the whole session document — hundreds of rows —
+    /// so `i + 1` spliced the toast into **document row 1**, far above the
+    /// visible window. That index then sat below `prev_viewport_top`, the
+    /// renderer classified it as an out-of-viewport change, and it called
+    /// `full_render(true)` → `\x1b[2J\x1b[H\x1b[3J`: the screen *and the
+    /// scrollback* were destroyed every time a toast appeared or expired, and
+    /// the toast itself was never visible.
+    ///
+    /// So the contract is the type, not a convention: a slice whose length is
+    /// the frame height, whose index 0 is the tab-bar row. Callers that hold a
+    /// document must slice the window out first — [`Self::paint_toasts_at_bottom`]
+    /// is that seam, and it mirrors `compose_overlays_bottom_anchored`, which
+    /// had already been doing this correctly (§5 of the cycle report).
+    pub(crate) fn paint_toasts(&self, screen: &mut [String], width: u16) {
         use lca_tui::engine::text::{slice_by_column, truncate_to_width, visible_width};
         let max_w = (width as usize).saturating_sub(4).min(60);
         for (i, toast) in self.toasts.iter().enumerate() {
-            let Some(row) = viewport.get_mut(i + 1) else {
+            let Some(row) = screen.get_mut(i + 1) else {
                 break;
             };
             let cell =
@@ -660,6 +676,28 @@ impl Chat {
                 lca_tui::engine::core::SEGMENT_RESET,
             );
         }
+    }
+
+    /// Paint the toasts into a **document** by slicing the frame's bottom
+    /// `height` rows out of it first (gh #372 bug 1).
+    ///
+    /// This is the scrollback counterpart to [`Self::paint_toasts`], and it
+    /// exists so the document/ screen distinction is one call, not a
+    /// subtraction at each site. `compose_overlays_bottom_anchored` already
+    /// used exactly this rule for the modals two lines earlier, which is why
+    /// toasts were the only overlay that could reach document row 1.
+    ///
+    /// A document shorter than the frame gets no toast: `render` pads the
+    /// document itself, and inventing rows here would put the toast above the
+    /// content the user is reading.
+    pub(crate) fn paint_toasts_at_bottom(&self, lines: &mut [String], width: u16, height: u16) {
+        let height = height as usize;
+        if lines.len() <= height {
+            self.paint_toasts(lines, width);
+            return;
+        }
+        let start = lines.len() - height;
+        self.paint_toasts(&mut lines[start..], width);
     }
 
     /// The viewport cells of the footer's `[YOLO]` badge (gh #244),
