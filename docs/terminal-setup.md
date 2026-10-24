@@ -105,6 +105,19 @@ newline is a newline, not a submit). Remap anything in
 prompt editor, which keeps its startup key map until you restart; see
 [Configuration](configuration.md#key-bindings) and gh #332).
 
+Every single-line text field — the picker search boxes, the `/extensions` filter,
+the masked secret field, the transcript search — takes **parsed text**, not raw
+input bytes. That distinction matters when a terminal sends an escape sequence: a
+key the field does not handle (`Left`, `PageUp`, `End`) is not text, so it does
+nothing rather than typing a fragment. Before, `/extensions`' filter scanned the
+raw payload for its first printable character, and since a sequence begins with
+`ESC` and continues with `[`, an arrow key typed `[` — a few presses left `[[[`,
+which matches nothing (gh #329).
+
+A **typed** `[` is still text, so filtering for `[draft]` works; and a bracketed
+paste fills the field with its payload whether the terminal delivers it whole or in
+pieces.
+
 ### Completion triggers: `/`, `@`, and `#`
 
 Three things complete in the prompt editor, and they never compete:

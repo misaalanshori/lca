@@ -1130,3 +1130,12 @@ mod disabled_extension_runs_nothing;
 // fifth copy of the arithmetic waiting to be written.
 #[path = "331-tab-row-offset.rs"]
 mod tab_row_offset;
+
+// GitHub #329: the Extension Hub filter typed `[` on unhandled keys. The arm scanned
+// raw input bytes for the first printable character, so an ANSI sequence's second
+// byte (`[`) became text. The field now takes parsed text
+// (`printable`/`paste_text`), the path every other inline field already used - which
+// is why they were immune. Behaviour rows live in `chat_hub_tests.rs`; this file
+// guards the shape and proves the character-blacklist "fix" stays rejected.
+#[path = "329-hub-filter-takes-parsed-text.rs"]
+mod hub_filter_takes_parsed_text;
