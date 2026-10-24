@@ -71,13 +71,10 @@ themes, and the key map `/hotkeys` prints); the provider/model
 generation, credentials, the shell backend, markdown transformers, and
 already-applied interface chrome follow after restart.
 
-One exception, tracked as gh #332: a reloaded `tui.editor.*` or
-`tui.input.*` binding is updated everywhere except the prompt editor,
-which keeps the key map it was built with, so a new cursor or newline
-binding does not take effect until you restart. Use `/hotkeys` to
-confirm what was read — it prints the reloaded map — and restart if the
-binding you changed is an editor one. Everything else, including
-app-level hotkeys, reloads in place.
+Editor bindings — `tui.editor.*` and `tui.input.*` — reload with
+everything else: a new cursor or newline binding takes effect on the
+next keystroke, with no restart. `/hotkeys` prints the map the editor
+is actually accepting keys with, so it is a check rather than a guess.
 
 ## Diagnostics
 
