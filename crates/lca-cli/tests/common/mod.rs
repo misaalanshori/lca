@@ -946,6 +946,31 @@ impl Tmux {
         );
         self.wait_for_layout_width(cols)
     }
+
+    /// Issue the `tmux resize-window` and return at once, with **no** wait for the
+    /// app to notice (gh #522).
+    ///
+    /// [`Self::resize`] deliberately waits for the layout, which is what a row wants
+    /// when it is *setting up* a scenario. A row that wants to **inject** a resize
+    /// at a precise moment - or several in a burst faster than one poll tick - must
+    /// not wait, or the first resize would settle before the second was sent and the
+    /// race under test could not happen.
+    pub fn send_resize_immediately(&self, cols: u32, rows: u32) {
+        let out = Self::tmux(&[
+            "resize-window",
+            "-t",
+            &self.name,
+            "-x",
+            &cols.to_string(),
+            "-y",
+            &rows.to_string(),
+        ]);
+        assert!(
+            out.status.success(),
+            "tmux resize-window: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
 }
 
 #[cfg(unix)]

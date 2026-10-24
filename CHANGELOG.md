@@ -99,6 +99,14 @@ Dates are UTC.
   of tmux's encodings, unlike pi, which needs `csi-u`.
 
 ### Fixed
+- **The harness no longer mistakes a padded row for a stale layout** (gh #522).
+  `wait_for_layout_width` measured the pane with `capture-pane -J`, which joins
+  tmux's soft wraps. A row the app pads to *exactly* the pane width fills it, so
+  tmux treats the next row as a continuation and the join concatenates them: a
+  healthy 60-column pane reported 140. The width is now measured on the plain
+  capture with a wrapping run detector, so a stale layout is still caught and a
+  correct one is no longer reported as broken.
+
 - **The real-terminal harness waits for a resize to take effect, not 500 ms**
   (#489). `Tmux::resize` slept a fixed half-second and hoped; under a parallel
   suite the app can still be laying out at the old width when a row starts, and

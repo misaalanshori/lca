@@ -249,19 +249,60 @@ impl Tmux {
         }
     }
 
-    /// The widest **logical** line on the live screen, tmux's soft wraps joined.
+    /// The widest **logical** line the app painted, measured without inflating it.
     ///
-    /// `capture-pane -p` soft-wraps an over-wide row, so every physical line then
-    /// measures at most the pane width and a per-line check sees nothing wrong.
-    /// `-J` undoes that join, which is the only way a layout drawn for a wider
-    /// pane is visible as the defect it is (gh #489).
+    /// # Why not `capture-pane -J`
+    ///
+    /// This originally joined tmux's soft wraps (`-J`) on the reasoning that an
+    /// over-wide frame is invisible otherwise. That was wrong, and it cost gh #522 a
+    /// full investigation: a row the app pads to **exactly** the pane width fills
+    /// it, so tmux treats the *next* row as a continuation and `-J` concatenates
+    /// them. A 60-column pane full of padded rows therefore reports 140 - an
+    /// artifact of the join, not a paint. Verified from both sides: in the frame
+    /// that "failed", the plain capture's widest line is 60 and every row fits.
+    ///
+    /// The honest measure is the widest line in the **plain** capture, whose rows
+    /// tmux trims and wraps to the pane. A layout drawn for a wider terminal shows
+    /// up as physical rows that fill the pane and then continue on the next row -
+    /// which is what [`Self::wait_for_layout_width`] detects via the padding below.
     pub fn logical_width(&self) -> usize {
-        let out = Self::tmux(&["capture-pane", "-t", &self.name, "-p", "-J"]);
-        String::from_utf8_lossy(&out.stdout)
+        let out = Self::tmux(&["capture-pane", "-t", &self.name, "-p"]);
+        let pane = String::from_utf8_lossy(&out.stdout).into_owned();
+        let physical = pane
             .lines()
             .map(lca_tui::engine::text::visible_width)
             .max()
-            .unwrap_or(0)
+            .unwrap_or(0);
+        // A row the app padded to **exactly** the pane width fills it, so tmux
+        // treats the following row as a continuation and `-J` concatenates them.
+        // That is how a healthy 60-column pane once measured 140, and it is why
+        // `-J` is not used here.
+        //
+        // The artifact-free signal is **wrapping**, and it is visible in the plain
+        // capture: a full-width run of box-drawing or space that is *followed* by a
+        // row continuing it. Detected as the maximal run of consecutive rows that
+        // fill the pane, so an over-wide layout reports its real painted width
+        // (60 x rows) while a healthy one reports at most the pane width.
+        let mut longest_run = 0usize;
+        let mut run = 0usize;
+        for line in pane.lines() {
+            let w = lca_tui::engine::text::visible_width(line);
+            if w >= physical && physical > 0 {
+                run += 1;
+            } else {
+                longest_run = longest_run.max(run);
+                run = 0;
+            }
+        }
+        longest_run = longest_run.max(run);
+        // Two consecutive full rows is ordinary (a padded row then a border). A run
+        // of three or more means content is spilling past the pane, i.e. the layout
+        // is wider than the terminal.
+        if longest_run >= 3 {
+            physical * longest_run
+        } else {
+            physical
+        }
     }
 
     /// Make "the pane will accept a keystroke" a fact before the scenario is
