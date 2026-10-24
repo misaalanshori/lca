@@ -6,6 +6,50 @@ use super::chat_commands::{paste_text, printable};
 use super::chat_pickers::TRUST_OPTIONS;
 use super::state::{Action, TrustChoice};
 
+/// Which way the fullscreen viewport was asked to jump (gh #375 gap 4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewportScroll {
+    /// `tui.altScreen.top` - the transcript's first row.
+    Top,
+    /// `tui.altScreen.bottom` - the live bottom.
+    Bottom,
+    /// `tui.altScreen.pageUp` - one page towards the top (gh #375 gap 5).
+    PageUp,
+    /// `tui.altScreen.pageDown` - one page towards the live bottom.
+    PageDown,
+}
+
+/// Rows a page scroll overlaps so a reader keeps their place (pi's
+/// `PAGE_SCROLL_OVERLAP`).
+pub const PAGE_SCROLL_OVERLAP: usize = 4;
+
+/// One page's scroll distance for a window of `window` rows: the whole window
+/// less [`PAGE_SCROLL_OVERLAP`], never less than one row - pi's
+/// `Math.max(1, viewportHeight - PAGE_SCROLL_OVERLAP)`.
+pub fn page_scroll_rows(window: usize) -> u16 {
+    window
+        .saturating_sub(PAGE_SCROLL_OVERLAP)
+        .max(1)
+        .min(u16::MAX as usize) as u16
+}
+
+/// The scroll a viewport-scroll key asks for, given the current scroll, the
+/// content extent and the window height (gh #375 gaps 4 + 5).
+///
+/// One place decides what each target means, so the four cases cannot drift from
+/// pi's arithmetic: `top` is content-less-window, `bottom` is the live end, and a
+/// page is [`page_scroll_rows`] clamped to the scrollable range, so repeated
+/// presses stop at the edge rather than running past it.
+pub fn scroll_target(target: ViewportScroll, current: u16, content: usize, window: usize) -> u16 {
+    let max = content.saturating_sub(window).min(u16::MAX as usize) as u16;
+    match target {
+        ViewportScroll::Bottom => 0,
+        ViewportScroll::Top => max,
+        ViewportScroll::PageUp => current.saturating_add(page_scroll_rows(window)).min(max),
+        ViewportScroll::PageDown => current.saturating_sub(page_scroll_rows(window)),
+    }
+}
+
 impl Chat {
     /// Whether a picker owns the keyboard (the modal is `modal_active`'s
     /// own question): the overlay test the viewport draws with, and the
@@ -75,14 +119,47 @@ impl Chat {
     /// no modal, picker, or the transcript search has the keyboard,
     /// mirroring pi's `shouldDeferViewportInputToOverlay`.
     pub fn alt_screen_bottom(&self, data: &str) -> bool {
-        if !self.screen_mode
-            || self.world.modal_active()
-            || self.picker_open()
-            || self.search.is_some()
-        {
-            return false;
+        self.viewport_owns(data) && self.keybindings.matches(data, "tui.altScreen.bottom")
+    }
+
+    /// Whether the fullscreen **viewport** owns this key at all (gh #35).
+    ///
+    /// One gate for every viewport-scroll action, so a new one cannot be wired
+    /// without the fullscreen / modal / picker / search checks. Mirrors pi's
+    /// `shouldDeferViewportInputToOverlay`.
+    fn viewport_owns(&self, _data: &str) -> bool {
+        self.screen_mode
+            && !self.world.modal_active()
+            && !self.picker_open()
+            && self.search.is_none()
+    }
+
+    /// The viewport-scroll target this key names, if the viewport owns it.
+    ///
+    /// Gh #375 gap 4: one gate for every viewport-scroll action, so a new one
+    /// cannot be wired without the fullscreen / modal / picker / search checks.
+    /// `tui.altScreen.top` was declared but never acted on, which is how `Home`
+    /// came to be claimed by two actions whose matchers disagreed.
+    ///
+    /// Returns [`ViewportScroll::Top`] for `tui.altScreen.top` and
+    /// [`ViewportScroll::Bottom`] for `tui.altScreen.bottom`.
+    pub fn viewport_scroll(&self, data: &str) -> Option<ViewportScroll> {
+        if !self.viewport_owns(data) {
+            return None;
         }
-        self.keybindings.matches(data, "tui.altScreen.bottom")
+        if self.keybindings.matches(data, "tui.altScreen.top") {
+            return Some(ViewportScroll::Top);
+        }
+        if self.keybindings.matches(data, "tui.altScreen.bottom") {
+            return Some(ViewportScroll::Bottom);
+        }
+        if self.keybindings.matches(data, "tui.altScreen.pageUp") {
+            return Some(ViewportScroll::PageUp);
+        }
+        if self.keybindings.matches(data, "tui.altScreen.pageDown") {
+            return Some(ViewportScroll::PageDown);
+        }
+        None
     }
 
     /// The text a copy request names when nothing is selected (gh #9,

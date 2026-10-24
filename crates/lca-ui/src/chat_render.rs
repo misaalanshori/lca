@@ -46,7 +46,7 @@ pub fn anchor_scroll(scroll: u16, before: usize, after: usize) -> u16 {
     scroll.saturating_sub(shed)
 }
 
-use lca_tui::engine::text::{truncate_to_width, visible_width};
+use lca_tui::engine::text::{get_active_background_ansi, truncate_to_width, visible_width};
 
 use super::chat::Chat;
 use crate::theme::Role;
@@ -591,10 +591,35 @@ impl Chat {
                 } else {
                     Role::ScrollbarTrack
                 };
+                // Gh #375 gap 2: the cell must keep the **block's** background.
+                // Truncating, padding and appending the glyph discarded it, so on a
+                // shaded user band or a code block the rightmost column rendered in
+                // the terminal default - a 1-cell hole down the right edge of every
+                // coloured block. pi's `replaceScrollbarCell` resets and re-applies
+                // the background that was active at that cell; the scrollbar keeps
+                // the foreground and the glyph, the block keeps its background.
                 let mut cell = truncate_to_width(line, content_width, "", false);
                 let pad = content_width.saturating_sub(visible_width(&cell));
                 cell.push_str(&" ".repeat(pad));
+                // Measure *after* padding: the padding is what carries the band to
+                // the bar's column, and it is the part that used to reset.
+                // Measured on the **source line's** prefix at the bar's column, the
+                // way pi measures its target cell: the truncation above emits its own
+                // reset, so measuring the truncated string would always answer "no
+                // background" - which is precisely the defect being fixed.
+                let background = get_active_background_ansi(
+                    &lca_tui::engine::text::slice_by_column(line, 0, content_width, false),
+                );
+                // A reset first, so no foreground, decoration or hyperlink from the
+                // block reaches the glyph, then the block's background back on.
+                cell.push_str("\x1b[0m");
+                cell.push_str(&background);
                 cell.push_str(&self.theme.role(role)(glyph));
+                // Close the background the cell reopened, so the next row starts
+                // from the same state as before the fix.
+                if !background.is_empty() {
+                    cell.push_str("\x1b[49m");
+                }
                 *line = cell;
             }
         }

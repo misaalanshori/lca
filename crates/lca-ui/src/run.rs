@@ -18,6 +18,7 @@ use lca_tui::engine::main_screen::MainScreenRenderer;
 use lca_tui::engine::terminal::{InputHandler, ResizeHandler, Terminal};
 
 use crate::chat::Chat;
+
 use crate::chat_mouse::{PickerHit, ScrollbarHit};
 use crate::chat_poll::{poll_login, poll_pending_models, tick_permission};
 use crate::chat_render::ClickOutcome;
@@ -609,12 +610,19 @@ fn handle_input(
             });
         }
     }
-    // gh #35: pi's `tui.altScreen.bottom` - End returns the fullscreen
-    // viewport to the live bottom. Fullscreen only: in main-screen mode
-    // End belongs to the editor (its scrollback is the terminal's), and
-    // the gates live in the key's own check.
-    if chat.alt_screen_bottom(data) {
-        screen.set_scroll(0);
+    // Gh #35 + gh #375 gap 4: the fullscreen viewport's own scroll keys.
+    // `Ctrl+End` returns it to the live bottom and `Ctrl+Home` to the transcript's
+    // top; both leave the caret alone, because plain `Home`/`End` now belong to the
+    // editor unconditionally (pi's split). Gh #375 gap 5 adds paging. What each
+    // target means lives in `scroll_target`, so the arithmetic has one home.
+    if let Some(target) = chat.viewport_scroll(data) {
+        let (content, window) = chat.scroll_extent(terminal.columns(), terminal.rows());
+        screen.set_scroll(crate::chat_keys::scroll_target(
+            target,
+            screen.scroll(),
+            content,
+            window,
+        ));
         return InputResult::Continue;
     }
     match chat.handle_key(data) {
@@ -1182,3 +1190,7 @@ impl TurnState {
 #[cfg(test)]
 #[path = "run_tests.rs"]
 pub(crate) mod tests;
+
+#[cfg(test)]
+#[path = "run_viewport_keys_tests.rs"]
+mod viewport_keys_tests;

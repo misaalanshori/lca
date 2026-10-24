@@ -7,6 +7,27 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **The scrollbar no longer punches a hole in shaded blocks** (gh #375 gap 2).
+  The scrollbar cell was built by truncating the line, padding with spaces and
+  appending the thumb glyph, which discarded the line's background: on a shaded
+  user message or a banded code block the rightmost column rendered on the
+  terminal's default background, a one-cell hole down the right edge. The cell
+  now re-applies the block's own background behind the glyph - the scrollbar owns
+  the foreground, the block keeps its background - and the `get_active_background_ansi`
+  extractor that already existed for this is finally called on that path. The
+  `▲`/`▼` stepper cells had the same hole and are fixed with it.
+
+- **`Home` and `End` no longer fight the editor for the transcript** (gh #375
+  gap 4). `home` was bound both to `tui.editor.cursorLineStart` and to
+  `tui.altScreen.top`, and `run` returned early on the viewport's matcher before
+  the editor saw the key, so `End` always jumped to the live bottom and `Home`
+  could teleport the view instead of moving the caret. Plain `Home`/`End` now
+  belong to the editor unconditionally; the viewport's top and bottom are
+  `Ctrl+Home`/`Ctrl+End`, which is pi's split. Only the defaults changed, so a
+  user remap still wins. `tui.altScreen.top` had never been acted on at all and
+  now works; `tui.altScreen.pageUp`/`pageDown` were dead bindings and now scroll
+  by a page less a four-row overlap (gh #375 gap 5).
+
 - **Overlays drawn over short lines landed in the wrong place** (gh #373 bug 1). The
   splice that places the panel's drawer tab `◀` and the `↓ Jump to latest message`
   indicator never padded the row up to the column it was asked for, so on any line shorter
