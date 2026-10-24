@@ -29,6 +29,7 @@ mod pending_step;
 mod runner;
 mod session_hooks;
 pub mod startup;
+pub mod tmux_doctor;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -303,10 +304,10 @@ pub fn run(
         );
         return Ok(crate::exit::USAGE);
     }
-    // Gh #400 (type-while-loading): claim the terminal **before** the load
-    // below, so the keyboard is read from the first frame. See
-    // `startup::claim_terminal` for the measured window and what it cost.
-    let early_input = startup::claim_terminal();
+    // Gh #400: claim the terminal **before** the load below, so the keyboard is
+    // read from the first frame, and start the tmux probe there too - the load
+    // hides its cost. See `startup::claim_terminal`.
+    let (early_input, tmux_doctor) = startup::claim_terminal();
     let ui = Arc::new(Ui::new(
         cwd,
         resume,
@@ -319,7 +320,7 @@ pub fn run(
         session_id,
         allow_host,
         flags,
-        early_input,
+        (early_input, tmux_doctor),
     )?);
     // Gh #400: the checkpoint. A `Ctrl+C` typed during the load above asked to
     // leave; honour it now rather than entering a loop the user already
@@ -649,7 +650,7 @@ impl Ui {
         session_id: Option<&str>,
         allow_host: &[String],
         flags: &crate::CliFlags,
-        early_input: lca_ui::run_early_input::EarlyInput,
+        (early_input, tmux_doctor): (lca_ui::run_early_input::EarlyInput, tmux_doctor::Cell),
     ) -> anyhow::Result<Ui> {
         let Opened {
             _volatile: volatile,
@@ -822,10 +823,11 @@ impl Ui {
         {
             initial_head.push(warning);
         }
-        // Gh #131/#400: the startup header names the loaded resources; since
-        // gh #400 gaps 2/3 it is one compact line with the long-form table behind
-        // `ctrl+o`, and the registry's collision notices ride it too.
-        let initial_header = startup::launch_header(&data, cwd, trusted, flags, &registry, &config);
+        // Gh #131/#400: the header names the loaded resources - one compact line
+        // with the table behind `ctrl+o` since gaps 2/3, plus the registry's
+        // collision notices and the tmux doctor's finding (gap 4).
+        let initial_header =
+            startup::launch_header(&data, cwd, trusted, flags, &registry, &config, &tmux_doctor);
         // `--model <pattern>[:thinking]` resolves against the provider's
         // list the way pi's resolver does (EFG-041), inside `--provider`'s
         // scope when a profile is named; the `:thinking` suffix becomes

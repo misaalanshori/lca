@@ -320,3 +320,173 @@ fn the_header_sections_are_optional_by_construction() {
         "and each resource count is named only when non-zero:\n{resources}"
     );
 }
+
+// ===========================================================================
+// gh #400 gap 4: the tmux keyboard doctor
+// ===========================================================================
+//
+// The doctor's decisions live in `crates/lca-cli/src/tui/tmux_doctor.rs` with
+// eight unit rows. This is the NFR-24 named guard: it fails if the *mechanism*
+// that makes the doctor safe stops holding, which is four things a behavioural
+// row cannot see - that the probe is spawned before the load rather than after
+// it, that it never blocks, that it is bounded, and that the format is not
+// reported as a defect.
+
+// Verifies: gh #400 gap 4 - **the probe starts before the load, so nothing on the
+// first frame waits for it.** Measured: one `tmux show` is 34 ms and a launch
+// asks two, while the startup load is 200-300 ms. The ordering is what turns
+// 68 ms of subprocess into zero frame latency, so it is asserted on position in
+// the function rather than on a timing that a fast machine would hide.
+#[test]
+fn the_tmux_probe_starts_before_the_load_that_hides_it() {
+    let startup = read("crates/lca-cli/src/tui/startup.rs");
+    let claim = startup
+        .split("pub(super) fn claim_terminal(")
+        .nth(1)
+        .and_then(|rest| rest.split("/// Load the extension registry").next())
+        .expect("claim_terminal exists");
+    assert!(
+        claim.contains("tmux_doctor::spawn()"),
+        "the probe is spawned while the terminal is claimed, before the load:\n{claim}"
+    );
+    // And the launch actually uses the pair, rather than dropping the cell.
+    let module = read("crates/lca-cli/src/tui/mod.rs");
+    assert!(
+        module.contains("let (early_input, tmux_doctor) = startup::claim_terminal();"),
+        "the launch keeps the cell"
+    );
+    assert!(
+        module.contains("startup::launch_header(") && module.contains("&tmux_doctor"),
+        "and hands it to the header that composes the expanded section"
+    );
+}
+
+// Verifies: gh #400 gap 4 - **the notice goes in the header's expanded section,
+// never into the compact line.** A diagnostic in the default one-liner prints on
+// every launch in the one place the reader did not ask; in scrollback it is in the
+// conversation an hour later.
+//
+// Asserted on **values through the real launch function**, not on statement
+// position: an earlier version of this row compared two `find` offsets and passed
+// a build that fed the doctor rows into `compact`, because the call site was
+// rebinding a variable rather than moving. The launch is cheap to call, so there
+// is no reason to accept a proxy for the answer.
+#[test]
+fn the_doctor_reports_into_the_expanded_header_only() {
+    use lca_cli::tui::tmux_doctor::{Cell, Doctor};
+    let cell: Cell = std::sync::Arc::new(std::sync::OnceLock::new());
+    let _ = cell.set(Doctor::ExtendedKeysOff {
+        format: Some("xterm".into()),
+    });
+    let dir = std::env::temp_dir();
+    let registry = lca_core::ExtensionRegistry::new();
+    let config = lca_config::Config::default();
+    let flags = lca_cli::CliFlags::default();
+    let (compact, expanded) =
+        lca_cli::tui::startup::launch_header(&dir, &dir, false, &flags, &registry, &config, &cell);
+
+    let compact_text = compact.join("\n");
+    assert!(
+        !compact_text.contains("extended-keys"),
+        "the launch's compact line carries no doctor row: {compact_text}"
+    );
+    let expanded_text = expanded.join("\n");
+    assert!(
+        expanded_text.contains("set -g extended-keys on"),
+        "the expanded section carries the command: {expanded_text}"
+    );
+
+    // And the transcript is not a route: nothing in the launch path pushes it.
+    let module = read("crates/lca-cli/src/tui/mod.rs");
+    assert!(
+        !module.contains("push_notice(tmux_doctor") && !module.contains("note_tmux"),
+        "no transcript path carries it"
+    );
+}
+
+// Verifies: gh #400 gap 4 - **the probe is bounded.** A hung tmux server is
+// precisely the case that must not become a startup hang, and it is the one a
+// behavioural row cannot reach without wedging the suite. Asserted on the
+// mechanism: a deadline and a kill, not a `wait()` that trusts the child.
+#[test]
+fn the_tmux_probe_cannot_wait_forever() {
+    let doctor = read("crates/lca-cli/src/tui/tmux_doctor.rs");
+    assert!(
+        doctor.contains("public const PROBE_BUDGET") || doctor.contains("pub const PROBE_BUDGET"),
+        "the budget is a named constant, so the bound is visible"
+    );
+    let show = doctor
+        .split("fn show(option: &str, tmux: &str)")
+        .nth(1)
+        .and_then(|rest| rest.split("/// Run the doctor for real").next())
+        .expect("show exists");
+    assert!(
+        show.contains("Instant::now() + PROBE_BUDGET"),
+        "the deadline is set before waiting:\n{show}"
+    );
+    assert!(
+        show.contains("child.kill()"),
+        "and a probe past it is killed rather than awaited:\n{show}"
+    );
+    assert!(
+        !show.contains(".output()"),
+        "no unbounded `Command::output()` - that is the shape this guards against"
+    );
+}
+
+// Verifies: gh #400 gap 4 - **`extended-keys-format` is not reported as a
+// defect.** This is the guard against copying pi's advice: pi requires `csi-u`,
+// and LCA's parser reads both tmux encodings, so warning that `xterm` is broken
+// would be a false claim in a notice whose whole value is being right once.
+//
+// Asserted two ways: the decision table has no format-only failure, and the
+// parser really does accept both of tmux's documented encodings.
+#[test]
+fn an_xterm_format_is_not_a_defect_for_lca() {
+    use lca_cli::tui::tmux_doctor::{Doctor, decide};
+    assert_eq!(
+        decide(Some("on"), Some("xterm")),
+        Doctor::Silent,
+        "extended-keys on with the xterm format is healthy here"
+    );
+    assert_eq!(
+        decide(Some("always"), Some("xterm")),
+        Doctor::Silent,
+        "and `always` is healthy too"
+    );
+
+    // The reason it is not a defect: both documented encodings parse. These are
+    // tmux's own examples from `man tmux`'s `extended-keys-format` entry.
+    assert!(
+        lca_tui::engine::keys::matches_key("\x1b[27;6;65~", "ctrl+shift+a"),
+        "the xterm encoding of C-S-a is understood"
+    );
+    assert!(
+        lca_tui::engine::keys::matches_key("\x1b[65;6u", "ctrl+shift+a"),
+        "the csi-u encoding of C-S-a is understood"
+    );
+}
+
+// Verifies: gh #400 gap 4 - **outside tmux the doctor costs nothing.** Most users
+// are not in tmux; a subprocess spawned and discarded on every launch would be a
+// cost paid by the many for a notice meant for the few. The gate is asserted
+// before anything else in the probe.
+#[test]
+fn outside_tmux_the_probe_returns_before_any_subprocess() {
+    let doctor = read("crates/lca-cli/src/tui/tmux_doctor.rs");
+    let examine = doctor
+        .split("pub fn examine_with(")
+        .nth(1)
+        .and_then(|rest| rest.split("/// The launch's doctor cell").next())
+        .expect("examine_with exists");
+    let gate_at = examine.find("env(\"TMUX\")");
+    let spawn_at = examine.find("show(EXTENDED_KEYS");
+    assert!(
+        matches!((gate_at, spawn_at), (Some(gate), Some(spawn)) if gate < spawn),
+        "the TMUX gate precedes any probe:\n{examine}"
+    );
+    assert!(
+        examine.contains("Doctor::Silent"),
+        "and a missing TMUX returns silence, not an error"
+    );
+}
