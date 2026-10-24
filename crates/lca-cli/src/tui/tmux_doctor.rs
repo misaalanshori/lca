@@ -4,9 +4,9 @@
 //! Outside tmux this costs nothing - `TMUX` unset returns [`Doctor::Silent`]
 //! before a subprocess exists, which is most users. Inside tmux the probe is
 //! **spawned, never awaited**: one `tmux show` measured 34 ms on this machine and
-//! the load it runs beside is 200-300 ms, so a probe started at
-//! [`super::startup::claim_terminal`] has finished long before the header is
-//! composed. Nothing on the first-frame path waits for it.
+//! the load it runs beside is 200-300 ms, so a probe started while the terminal is
+//! claimed (`startup::claim_terminal`, private) has finished long before the header
+//! is composed. Nothing on the first-frame path waits for it.
 //!
 //! ## What is actually broken - measured, not copied
 //!
