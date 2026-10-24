@@ -1101,3 +1101,13 @@ mod fork_tree;
 // the save from their live bindings.
 #[path = "396-model-search-and-thinking-default.rs"]
 mod model_search_and_thinking_default;
+
+// GitHub #399: the owner-approved logo and the three-line startup header. The
+// brief treats the logo as a **supplied asset**, so these rows guard the three ways
+// a supplied asset silently stops being supplied: the grid gets prettified, the
+// logo's three colours drift into the theme (the owner was explicit they are icon
+// colours), or the Apple_Terminal fallback turns back into a guess. Behaviour rows
+// live beside their modules - `logo_tests`, `startup_header_tests`,
+// `startup_header_wired_tests`, and `terminal_tests`.
+#[path = "399-logo-and-startup-header.rs"]
+mod logo_and_startup_header;
