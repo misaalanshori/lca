@@ -19,6 +19,14 @@ Dates are UTC.
   itself is chosen from `COLORFGBG`/defaults at startup, so a terminal that answers
   nothing still gets one immediately.
 
+
+- **One long link no longer starves every other column in a table** (gh #384). The
+  table layout measured its columns on the raw Markdown, so `[link](https://…/a/very/long/path)`
+  counted 42 columns while painting 4, and `count`/`status` beside it were squeezed to a
+  single character each and wrapped down the pane one letter per row. Cells are now
+  rendered once and that rendered form is measured *and* painted, so the layout and the
+  painter cannot disagree. Fixed with it: a wrapped link inside a table lost the
+  terminator of its hyperlink, which made the rest of the row disappear as link payload.
 - **`Ctrl+W` deleted a whole path instead of a word** (gh #383 gap 1). Word motion only
   knew about spaces, so on `crates/lca-tui/src/widgets/editor.rs:42` a single `Ctrl+W`
   erased all 43 characters, and on `foo.bar(baz_qux)` it erased the entire call. A word

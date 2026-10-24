@@ -208,3 +208,26 @@ fn plain_text_is_untouched() {
     assert_eq!(sanitize_incomplete_escapes("plain ascii"), "plain ascii");
     assert_eq!(sanitize_incomplete_escapes("日本語"), "日本語");
 }
+
+// Gh #384 bug 1's upstream defect: **a trailing OSC `ST` is a complete
+// sequence, not an incomplete one.** `ST` is `ESC \`; the sanitizer looked
+// at the last `ESC`, found `\` at the next byte, and - because the closed
+// vocabulary knew only `CSI`, `OSC` and `APC` openers - called it
+// unterminated and chopped it. Every rendered link ends this way
+// (`render_inline` closes OSC 8 with ST), so a wrap silently left a
+// dangling `ESC ] 8 ; ;` with no terminator, and everything after it -
+// including, in a table, the rest of the row's cells - became OSC payload
+// and vanished from the screen.
+#[test]
+fn a_trailing_osc_string_terminator_is_not_dropped() {
+    let text = "\x1b]8;;https://x\x1b\\lbl\x1b]8;;\x1b\\";
+    let out = sanitize_incomplete_escapes(text);
+    assert_eq!(
+        out, text,
+        "a complete OSC-8 open/close pair survives whole, ST included"
+    );
+    assert!(
+        out.ends_with("\x1b]8;;\x1b\\"),
+        "the close keeps its terminator: {out:?}"
+    );
+}
