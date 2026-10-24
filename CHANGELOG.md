@@ -7,6 +7,12 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **`Ctrl+W` deleted a whole path instead of a word** (gh #383 gap 1). Word motion only
+  knew about spaces, so on `crates/lca-tui/src/widgets/editor.rs:42` a single `Ctrl+W`
+  erased all 43 characters, and on `foo.bar(baz_qux)` it erased the entire call. A word
+  is now a run of letters, digits and `_`, a run of punctuation (`...`, `()->`), or
+  whitespace - so `Alt+Left` stops at each path segment and `Ctrl+W` removes exactly what
+  `Alt+Left` crosses. A pasted block's marker moves as one token.
 - **A keybinding on a shifted symbol could never fire** (gh #377). In a terminal that
   reports the physical key (`Ctrl+Shift+/` arriving as `/` plus a separate `?`), a binding
   written the natural way - `ctrl+?`, `alt+~` - compared the produced symbol against the
