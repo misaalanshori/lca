@@ -519,3 +519,53 @@ fn the_half_block_answer_can_be_forced_for_a_receipt() {
         "a value that is not 0 or 1 does not count as an override"
     );
 }
+
+// Verifies: gh #379 gap 1 - the DA1 answer must reach the interface **as well as**
+// being consumed by the key-layer negotiation. It is the sentinel that closes the
+// startup colour query, and the negotiation layer swallowing it entirely made
+// `close_theme_query` unreachable on a real terminal: the query window never shut,
+// so every stray `OSC 11` printed later by a child process was applied forever.
+//
+// Found by driving a real pane: an injected `ESC [?1;2c` never appeared in the
+// interface's input at all, while a following keystroke did.
+#[test]
+fn a_device_attributes_answer_reaches_the_interface_too() {
+    use std::sync::mpsc;
+
+    let term = ProcessTerminal::new();
+    let shared = &term.shared;
+    let (tx, rx) = mpsc::channel::<String>();
+    *shared.input.lock().unwrap_or_else(|p| p.into_inner()) = Box::new(move |seq: String| {
+        let _ = tx.send(seq);
+    });
+
+    let mut out: Vec<String> = Vec::new();
+    assert!(
+        dispatch(shared, StdinEvent::Data("\x1b[?1;2c".into()), &mut |s| out
+            .push(s.to_string())),
+        "the answer is still consumed by the negotiation layer"
+    );
+    assert_eq!(
+        rx.try_recv().ok().as_deref(),
+        Some("\x1b[?1;2c"),
+        "and forwarded, so the theme's query can close"
+    );
+
+    // A Kitty answer is **not** the sentinel and must not be forwarded: its only
+    // consumer is the negotiation layer, and forwarding it would type `ESC[?7u`.
+    assert!(dispatch(
+        shared,
+        StdinEvent::Data("\x1b[?7u".into()),
+        &mut |s| out.push(s.to_string())
+    ));
+    assert!(
+        rx.try_recv().is_err(),
+        "a Kitty flags answer is negotiation only, not input"
+    );
+
+    // Ordinary keys still reach the interface, unchanged.
+    assert!(!dispatch(shared, StdinEvent::Data("a".into()), &mut |s| {
+        out.push(s.to_string())
+    }));
+    assert_eq!(rx.try_recv().ok().as_deref(), Some("a"));
+}

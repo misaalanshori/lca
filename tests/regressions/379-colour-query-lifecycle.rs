@@ -70,6 +70,15 @@ fn run_source() -> String {
     .expect("run.rs is readable")
 }
 
+/// The terminal reader, where the DA1 answer is routed.
+fn terminal_source() -> String {
+    std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/crates/lca-tui/src/engine/terminal.rs"
+    ))
+    .expect("terminal.rs is readable")
+}
+
 /// The lifecycle module that owns the dispatch, the recogniser choice and the grace.
 fn theme_query_source() -> String {
     std::fs::read_to_string(concat!(
@@ -176,5 +185,27 @@ fn the_reply_path_consults_the_query_lifecycle() {
         gated >= 2,
         "both apply_terminal_background and apply_detected_scheme are gated, \
          found {gated}"
+    );
+}
+
+// Verifies: gh #379 gap 1 - **the sentinel actually reaches the interface**. The
+// key-layer negotiation consumes `DA1` too (it starts `modifyOtherKeys`), and its
+// first version swallowed the answer outright - so `close_theme_query` was
+// unreachable on a real terminal and the query window never shut. Found by driving
+// a real pane: an injected `ESC [?1;2c` never appeared in the interface's input at
+// all, while a following keystroke did. Pinned on the source because the shape is
+// what regresses (someone tidying the arm into a bare `true`).
+#[test]
+fn the_da1_answer_is_forwarded_as_well_as_consumed() {
+    let source = terminal_source();
+    let arm = source
+        .find("Some(Negotiation::DeviceAttributes) =>")
+        .expect("the DA1 negotiation arm exists");
+    let body = &source[arm..];
+    let end = body.find("\n        None => false,").unwrap_or(body.len());
+    let body = &body[..end];
+    assert!(
+        body.contains("shared.forward_input"),
+        "the DA1 arm must forward the answer, or the theme's query never closes:\n{body}"
     );
 }
