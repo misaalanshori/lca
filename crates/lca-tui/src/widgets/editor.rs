@@ -376,18 +376,16 @@ impl Editor {
         self.refresh_suggestions(false);
     }
 
-    /// Delete the word before the cursor.
+    /// Delete the word before the cursor (gh #383 gap 1).
+    ///
+    /// The span is exactly what [`Self::cursor_word_left`] would cross - one shared
+    /// classifier, so the two cannot disagree. On `foo.bar(baz_qux)` that is `baz_qux`,
+    /// then `(`, then `bar`, then `.`, then `foo`; on a path it is one path segment.
     pub fn delete_word_backward(&mut self) {
         self.preferred_col = None;
         self.snapshot();
         let chars: Vec<char> = self.current().chars().collect();
-        let mut col = self.cursor_col;
-        while col > 0 && chars[col - 1].is_whitespace() {
-            col -= 1;
-        }
-        while col > 0 && !chars[col - 1].is_whitespace() {
-            col -= 1;
-        }
+        let col = crate::engine::text::word_start_before(&chars, self.cursor_col);
         let start = self.char_to_byte(col);
         let end = self.char_to_byte(self.cursor_col);
         let killed = self.current()[start..end].to_string();
@@ -544,32 +542,22 @@ impl Editor {
         self.cursor_col = self.current().chars().count();
     }
 
-    /// Move the cursor one word left.
+    /// Move the cursor one word left (gh #383 gap 1).
+    ///
+    /// One segment: whitespace first, then a run of whatever class follows - a word, or
+    /// a punctuation run such as `...` or `()->` which moves as a single unit.
     pub fn cursor_word_left(&mut self) {
         self.preferred_col = None;
         let chars: Vec<char> = self.current().chars().collect();
-        let mut col = self.cursor_col;
-        while col > 0 && chars[col - 1].is_whitespace() {
-            col -= 1;
-        }
-        while col > 0 && !chars[col - 1].is_whitespace() {
-            col -= 1;
-        }
-        self.cursor_col = col;
+        self.cursor_col = crate::engine::text::word_start_before(&chars, self.cursor_col);
     }
 
-    /// Move the cursor one word right.
+    /// Move the cursor one word right (gh #383 gap 1): the mirror of
+    /// [`Self::cursor_word_left`].
     pub fn cursor_word_right(&mut self) {
         self.preferred_col = None;
         let chars: Vec<char> = self.current().chars().collect();
-        let mut col = self.cursor_col;
-        while col < chars.len() && chars[col].is_whitespace() {
-            col += 1;
-        }
-        while col < chars.len() && !chars[col].is_whitespace() {
-            col += 1;
-        }
-        self.cursor_col = col;
+        self.cursor_col = crate::engine::text::word_end_after(&chars, self.cursor_col);
     }
 
     fn text_before_cursor(&self) -> String {
