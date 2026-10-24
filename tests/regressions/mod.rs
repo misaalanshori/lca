@@ -1170,3 +1170,8 @@ mod status_badge_coexistence;
 // is a screen slice by contract, and the scrollback path slices the frame out.
 #[path = "372-toast-does-not-wipe-scrollback.rs"]
 mod toast_does_not_wipe_scrollback;
+
+// Gh #373 bug 1: a spliced overlay lands at its column, not at the end of the row's
+// text; both seams go through the style-tracking instrument.
+#[path = "373-splice-pads-to-column.rs"]
+mod splice_pads_to_column;
