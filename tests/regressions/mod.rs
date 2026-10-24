@@ -1191,3 +1191,9 @@ mod fast_path_and_sgr_order;
 // naturally and matches, through one shared rule for both key protocols.
 #[path = "377-shifted-symbol-bindings.rs"]
 mod shifted_symbol_bindings;
+
+// Gh #379 gap 1: the terminal colour query is a lifecycle closed by a DA1 sentinel,
+// with one recogniser for every reply kind - so a slow link's answer still lands and a
+// stray OSC 11 from a child process cannot repaint the palette mid-session.
+#[path = "379-colour-query-lifecycle.rs"]
+mod colour_query_lifecycle;

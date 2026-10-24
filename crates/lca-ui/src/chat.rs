@@ -239,6 +239,8 @@ pub struct Chat {
     /// (gh #10): the `system` theme rebuilds from this on every scheme
     /// or background answer.
     terminal_bg: Option<lca_tui::engine::colors::RgbColor>,
+    /// The startup colour query's lifecycle (gh #379 gap 1).
+    theme_query: crate::theme_query::ThemeQuery,
     /// The open `/theme` picker with live preview, when any.
     pub theme_picker: Option<ThemePicker>,
     /// The `/settings` selector (gh #30): open while it owns the
@@ -444,6 +446,7 @@ impl Chat {
             theme_names,
             theme_auto,
             terminal_bg: None,
+            theme_query: crate::theme_query::ThemeQuery::new(),
             theme_picker: None,
             settings_picker: None,
             thinking_picker: None,
@@ -924,7 +927,7 @@ impl Chat {
     /// theme rebuilds from the last reported background (gh #10), so a
     /// scheme-only answer never drops a known background.
     pub fn apply_detected_scheme(&mut self, scheme: lca_tui::engine::colors::ColorScheme) {
-        if !self.theme_auto {
+        if !self.theme_auto || !self.theme_query.accepts_reply() {
             return;
         }
         let (theme, _) = if self.theme_setting == "system" {
@@ -940,18 +943,27 @@ impl Chat {
         self.transcript.invalidate();
     }
 
+    /// Whether the startup colour query is still accepting replies (gh #379 gap 1).
+    pub fn theme_query_open(&self) -> bool {
+        self.theme_query.is_open()
+    }
+
+    /// Close the startup colour query on the `DA1` sentinel (gh #379 gap 1).
+    pub fn close_theme_query(&mut self) {
+        self.theme_query.close();
+    }
+
     /// Apply a terminal background answer (gh #10): the OSC 11 reply's
     /// own color. A `system` theme rebuilds from it and repaints;
     /// anything else takes the reply's scheme through the existing
     /// detection path.
     pub fn apply_terminal_background(&mut self, background: lca_tui::engine::colors::RgbColor) {
+        if !self.theme_query.accepts_reply() {
+            return;
+        }
         self.terminal_bg = Some(background);
-        // Gh #387: `theme_auto` already means "the theme follows the
-        // terminal" for `""`/`auto`/`system` - the three spellings the default
-        // and `/theme` produce. Testing the literal `"system"` here meant the
-        // *default* theme (`auto`) never rebuilt from a probed background, so
-        // the panel derivation this issue adds would never have run on a real
-        // session. Found by driving an OSC 11 reply through `handle_input`.
+        // Gh #387: `theme_auto` covers `""`/`auto`/`system`; testing the literal
+        // `"system"` meant the default theme never rebuilt from a probed background.
         if self.theme_auto {
             self.theme = crate::theme::Theme::system_theme(Some(background), None);
             self.theme_name = self.theme.name.clone();
