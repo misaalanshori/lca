@@ -217,6 +217,19 @@ their own `/`-commands to the same menu.
 | `/paste` | paste the clipboard image to the next message |
 | `/permissions` | manage allow/deny rules (session, project, global) |
 | `/persona` | apply a named bundle of model, thinking, tools, and instructions |
+| `/reload` | re-run discovery without restarting |
+| `/rename <name>` | rename this session (`/name` is pi's spelling) |
+| `/resume` | search and reopen a session |
+| `/scoped-models` | choose the quick-cycle rotation (`Ctrl+P`) |
+| `/session` | show this session's tokens, cache, and cost |
+| `/settings` | show the merged configuration and where each value came from |
+| `/skill [name]` | list or load a skill |
+| `/stats` | show session statistics (a native extension fills this slot) |
+| `/theme` | pick a theme with live preview |
+| `/thinking` | set the reasoning level |
+| `/tree` | browse the session's entry tree and branch in place |
+| `/trust` | trust the project folder |
+| `/usage` | show the provider's usage, when it has one |
 
 ### Permission rules
 
@@ -257,19 +270,6 @@ anything is worse than no rule — the whole reason this is documented:
 - a path of only wildcards (`read *`), which would be every file on the machine.
 
 Deny beats allow at any scope, and a deny never prompts.
-| `/reload` | re-run discovery without restarting |
-| `/rename <name>` | rename this session (`/name` is pi's spelling) |
-| `/resume` | search and reopen a session |
-| `/scoped-models` | choose the quick-cycle rotation (`Ctrl+P`) |
-| `/session` | show this session's tokens, cache, and cost |
-| `/settings` | show the merged configuration and where each value came from |
-| `/skill [name]` | list or load a skill |
-| `/stats` | show session statistics (a native extension fills this slot) |
-| `/theme` | pick a theme with live preview |
-| `/thinking` | set the reasoning level |
-| `/tree` | browse the session's entry tree and branch in place |
-| `/trust` | trust the project folder |
-| `/usage` | show the provider's usage, when it has one |
 
 `/bug`, `/export`, and `/import` do the same work as their CLI
 spellings (`lca bug`, `lca export`, `lca import`), so either surface
