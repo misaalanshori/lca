@@ -1193,6 +1193,8 @@ mod fast_path_and_sgr_order;
 mod shifted_symbol_bindings;
 
 // Gh #383 gap 1: `Ctrl+W` deletes a segment, not a path - one classifier for
-// `Alt+Left`, `Alt+Right` and deletion, with punctuation as its own class.
+// `Alt+Left`, `Alt+Right` and deletion. Gh #384: table cells measured raw.
+#[path = "384-table-measures-rendered-cells.rs"]
+mod table_measures_rendered_cells;
 #[path = "383-word-motion-segments.rs"]
 mod word_motion_segments;

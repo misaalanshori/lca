@@ -59,6 +59,7 @@ pub(super) fn render_table(
     raw: &[&str],
     width: usize,
     theme: &MarkdownTheme,
+    options: &MarkdownOptions,
     out: &mut Vec<String>,
 ) {
     #[allow(clippy::needless_range_loop)] // columns index parallel width vectors
@@ -77,9 +78,34 @@ pub(super) fn render_table(
         }
         return;
     }
+    // Gh #384: render every cell's inline tokens exactly once, here, and
+    // measure *this* - pi pre-renders the cells and measures the rendered
+    // form, which is the whole fix: a measurement function must not take a
+    // different input than the painter. The same strings are what the paint
+    // below wraps, so the two cannot drift apart when the inline renderer
+    // changes. Before this, `natural`/`min_word` read raw Markdown, so a
+    // `[link](https://…)` counted ~42 columns while painting as 4 and
+    // starved every other column to its 1-column minimum.
+    //
+    // The options are the caller's, not `MarkdownOptions::default()`: the
+    // link mode alone changes a cell's painted width between OSC 8 (the
+    // label) and the inline fallback (`text (url)`), and measuring a
+    // different mode than the one painted would reintroduce the same bug
+    // in the other direction.
+    let rendered: Vec<Vec<String>> = rows
+        .iter()
+        .map(|row| {
+            (0..cols)
+                .map(|c| {
+                    render_inline(row.get(c).map(String::as_str).unwrap_or(""), theme, options)
+                })
+                .collect()
+        })
+        .collect();
     let natural: Vec<usize> = (0..cols)
         .map(|c| {
-            rows.iter()
+            rendered
+                .iter()
                 .map(|r| visible_width(r.get(c).map(String::as_str).unwrap_or("")))
                 .max()
                 .unwrap_or(0)
@@ -87,7 +113,8 @@ pub(super) fn render_table(
         .collect();
     let min_word: Vec<usize> = (0..cols)
         .map(|c| {
-            rows.iter()
+            rendered
+                .iter()
                 .flat_map(|r| r.get(c).into_iter().flat_map(|s| s.split_whitespace()))
                 .map(visible_width)
                 .max()
@@ -148,15 +175,16 @@ pub(super) fn render_table(
         (theme.code_block_border)(&s)
     };
     out.push(border("┌", "┬", "┐"));
-    for (r, row) in rows.iter().enumerate() {
-        // Wrap each cell to its column width, then emit as many lines as the
-        // tallest cell needs (pi's `wrapCellText`). A long cell wraps instead
-        // of being truncated.
-        let cells: Vec<Vec<String>> = (0..cols)
-            .map(|c| {
-                let raw = row.get(c).map(String::as_str).unwrap_or("");
-                let rendered = render_inline(raw, theme, &MarkdownOptions::default());
-                let mut lines = wrap_text_with_ansi(&rendered, widths[c].max(1));
+    for (r, row) in rendered.iter().enumerate() {
+        // Wrap each already-rendered cell to its column width, then emit as
+        // many lines as the tallest cell needs (pi's `wrapCellText`). A long
+        // cell wraps instead of being truncated. Gh #384: this wraps the
+        // same string the layout measured, not a fresh render of it.
+        let cells: Vec<Vec<String>> = row
+            .iter()
+            .enumerate()
+            .map(|(c, rendered_cell)| {
+                let mut lines = wrap_text_with_ansi(rendered_cell, widths[c].max(1));
                 // pi's wrapCellText: the narrow styles reset after every
                 // non-final fragment, so a style inside a multi-line cell
                 // cannot bleed into the next fragment or the padding.
