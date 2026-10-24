@@ -1145,6 +1145,9 @@ pub(super) fn highlight_matches(line: &str, query: &str) -> String {
 }
 
 #[cfg(test)]
+#[path = "chat_offset_tests.rs"]
+mod chat_offset_tests;
+#[cfg(test)]
 #[path = "chat_command_guards.rs"]
 mod command_guards;
 #[cfg(test)]

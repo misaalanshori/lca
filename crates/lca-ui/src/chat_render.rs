@@ -343,8 +343,22 @@ impl Chat {
         if !self.screen_mode {
             return ClickOutcome::Ignored;
         }
-        let (transcript, dock) = self.sections(width);
-        let window = height.saturating_sub(dock.len() as u16) as usize;
+        let (transcript, _dock) = self.sections(width);
+        let window = self.transcript_window(width, height);
+        // Gh #331: the tab bar owns the top `tab_top` rows, so a frame row is a
+        // *transcript* row only after that many are taken off. Everything below -
+        // the popup check, the steppers, the jump indicator, the entry hit - then
+        // works in transcript rows, which is the coordinate system `window` is
+        // measured in. Stated once, here, rather than as a `+1` at each reader: an
+        // offset added in one place and subtracted in another is this same bug
+        // wearing a different name.
+        let tab_rows = self.tab_top(width);
+        if row < tab_rows {
+            // The bar's own gesture runs before this (gh #209's `handle_tab_mouse`);
+            // a click here is chrome, not a transcript row.
+            return ClickOutcome::Ignored;
+        }
+        let row = row - tab_rows;
         // gh #175: a click on a popup row applies that offer (pi's
         // select-list click-to-confirm); the scroll hint is not an offer.
         if window == 0 || row as usize >= window {
@@ -419,12 +433,32 @@ impl Chat {
         editor + footer + 2
     }
 
-    /// The transcript window's height for this frame (gh #35): the
-    /// viewport's `height - dock_height`, the same arithmetic `viewport`
-    /// slices by.
-    pub(super) fn window_height(&self, width: u16, height: u16) -> usize {
+    /// The transcript window for a frame: how many rows the transcript paints into.
+    ///
+    /// **This is the one place that turns a terminal height into a transcript
+    /// window** (gh #331). The renderer, the click hit-test, the scroll clamp, the
+    /// scrollbar, the tooltip and the drawer tab all read it, so the four symptoms
+    /// that issue filed - clicks a row off, a top stepper that never fired, a scroll
+    /// extent one short, a tooltip firing a row low - cannot drift apart again. They
+    /// were four copies of this subtraction, and three of them had forgotten the tab
+    /// bar: patching each would have left the fifth copy to be written next time.
+    ///
+    /// The subtraction is `height - dock - tab rows`, and the tab term comes from
+    /// [`Self::tab_top`], which answers `0` off fullscreen. That is deliberate: the
+    /// scrollback renderer has no tab bar above the transcript (it is the dock's last
+    /// row there, already inside `dock`), so subtracting it again would introduce the
+    /// mirror of this bug in the default renderer.
+    pub(crate) fn transcript_window(&self, width: u16, height: u16) -> usize {
         let (_, dock) = self.sections(width);
-        height.saturating_sub(dock.len() as u16) as usize
+        height
+            .saturating_sub(dock.len() as u16)
+            .saturating_sub(self.tab_top(width)) as usize
+    }
+
+    /// The transcript window's height for this frame (gh #35, gh #331): the same
+    /// number [`Self::transcript_window`] gives, and nothing else.
+    pub(super) fn window_height(&self, width: u16, height: u16) -> usize {
+        self.transcript_window(width, height)
     }
 
     /// The viewport the renderer paints.
@@ -455,12 +489,11 @@ impl Chat {
             return lines;
         }
         let (transcript, dock) = self.sections(width);
-        // gh #209: the tab bar owns row 0; the transcript window
-        // shrinks past it.
+        // gh #209: the tab bar owns row 0; the transcript window shrinks past it.
+        // Gh #331: the shrinkage is `transcript_window`'s job now, so the frame and
+        // the hit-test cannot compute two different heights.
         let tab_rows = self.tab_bar_alt(width);
-        let window = height
-            .saturating_sub(dock.len() as u16)
-            .saturating_sub(tab_rows.len() as u16) as usize;
+        let window = self.transcript_window(width, height);
         let content = transcript.len();
         let from_bottom = (scroll as usize).min(content.saturating_sub(window));
         let end = content - from_bottom;
@@ -615,17 +648,9 @@ impl Chat {
     /// The scrollbar geometry, the drag math, and the hit-test all read
     /// this one rule, so they can never disagree.
     pub(crate) fn scroll_extent(&self, width: u16, height: u16) -> (usize, usize) {
-        let (transcript, dock) = self.sections(width);
-        // gh #209: the fullscreen tab bar owns row 0, like viewport.
-        let tabs = if self.screen_mode {
-            self.tab_bar_alt(width).len()
-        } else {
-            0
-        };
-        let window = height
-            .saturating_sub(dock.len() as u16)
-            .saturating_sub(tabs as u16) as usize;
-        (transcript.len(), window)
+        // Gh #331: the window is `transcript_window`'s, not a second opinion about it.
+        let (transcript, _dock) = self.sections(width);
+        (transcript.len(), self.transcript_window(width, height))
     }
 
     /// The scrollbar `viewport` paints for this frame (gh #35): the same
@@ -664,9 +689,11 @@ impl Chat {
     /// transcript, so the growth it reports is not new output - the
     /// clamp applies and the offset does not move.
     pub fn clamp_scroll(&mut self, scroll: u16, width: u16, height: u16) -> u16 {
-        let (transcript, dock) = self.sections(width);
-        let window = height.saturating_sub(dock.len() as u16) as usize;
-        let content = transcript.len();
+        // Gh #331: the ceiling is `content - window`, and the window already has the
+        // tab row taken out of it. Computing it here as `height - dock` made the
+        // maximum one row short, so the last line could never reach the top.
+        let content = self.transcript_len(width);
+        let window = self.transcript_window(width, height);
         let max = content.saturating_sub(window) as u16;
         // Growth only counts as new output when the width did not move: a
         // re-wrap changes the line count without adding a word.

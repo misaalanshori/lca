@@ -759,6 +759,28 @@ impl Chat {
         if self.drawer_rect(width, height) == Some((col, row)) {
             return Some("Toggle extension panel\nAlt+X".to_string());
         }
+        // Gh #244: the footer's `[YOLO]` badge explains itself on hover. This is a
+        // **frame** row (`yolo_badge_cells` already accounts for the tab bar the way
+        // the painter does), so it is checked against the frame row, before the
+        // transcript offset below.
+        if let Some((badge_row, first, past_last)) = self.yolo_badge_cells(width, height)
+            && row == badge_row
+            && col >= first
+            && col < past_last
+        {
+            return Some("every permission prompt auto-approved (--yolo)".to_string());
+        }
+        // Gh #331: everything from here down addresses the **transcript** window,
+        // which starts `tab_top` rows below the frame's top. The scrollbar and the
+        // drawer already subtracted that themselves, so a hover over a tool header
+        // named the entry one row lower - the pointer sat on one card and the tooltip
+        // described the next. One subtraction, in one place, before any transcript
+        // reader; no `+1` at any of them.
+        let tab_rows = self.tab_top(width);
+        if row < tab_rows {
+            return None;
+        }
+        let row = row - tab_rows;
         let geometry = self.scrollbar_for_frame(width, height, scroll);
         if let Some(geometry) = &geometry
             && col == geometry.column
@@ -779,15 +801,6 @@ impl Chat {
             return None;
         }
         let (content, window) = self.scroll_extent(width, height);
-        // Gh #244: the footer's `[YOLO]` badge explains itself on
-        // hover (the dock rows below own no other tips).
-        if let Some((badge_row, first, past_last)) = self.yolo_badge_cells(width, height)
-            && row == badge_row
-            && col >= first
-            && col < past_last
-        {
-            return Some("every permission prompt auto-approved (--yolo)".to_string());
-        }
         if window == 0 || row as usize >= window {
             return None;
         }
