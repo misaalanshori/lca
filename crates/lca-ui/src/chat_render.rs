@@ -258,15 +258,27 @@ impl Chat {
         // and no `>` marker, so terminal selection copies code
         // cleanly; the bottom cap closes plain. No side pipes, by the
         // same copying rule.
-        dock.push(self.separator.render_top(width, &self.theme, &border));
+        // Gh #388 gap 1: the editor shows a bounded window, so a long prompt
+        // cannot push the composer's frame off the screen - and the cap is
+        // what makes the `↑ N more` badge have something to report. pi's rule
+        // (`editor.ts` layout): 30% of the terminal's rows, never fewer than
+        // five.
+        let (visible, hidden_above, hidden_below) = self.editor_view();
+        dock.push(
+            self.separator
+                .render_top_with(width, &self.theme, &border, hidden_above),
+        );
         // The editor widget already pads by `padding_x` and paints
         // its own caret inside, so the dock adds exactly the frame's
         // cell; the marker rides inside, so geometry follows it.
         let editor_rows = self.editor.render(width.saturating_sub(1));
-        for row in editor_rows.into_iter() {
+        for row in editor_rows.into_iter().skip(hidden_above).take(visible) {
             dock.push(format!(" {row}"));
         }
-        dock.push(self.separator.render_bottom(width, &border));
+        dock.push(
+            self.separator
+                .render_bottom_with(width, &border, hidden_below),
+        );
 
         // The footer.
         dock.extend(self.footer_lines(width));
@@ -310,6 +322,39 @@ impl Chat {
         Some((top as u16, (rows + hint) as u16))
     }
 
+    /// How many editor rows are visible, and how many are hidden above and
+    /// below that window (gh #388 gap 1).
+    ///
+    /// `(visible, above, below)`. The window follows the caret: pi's
+    /// `editor.ts` scrolls the offset so the cursor's row is always inside,
+    /// then clamps to the buffer. Without the follow, growing a prompt at the
+    /// bottom would scroll away the line being typed.
+    ///
+    /// The height comes from [`UiState::size`](crate::UiState), not from a
+    /// parameter: `sections` is called *by* `transcript_window`, so threading
+    /// height through it would be a cycle. The size is the live terminal size,
+    /// recorded by `resize`, so it is the same fact either way.
+    pub(crate) fn editor_view(&self) -> (usize, usize, usize) {
+        // pi's rule: 30% of the terminal's rows, never fewer than five.
+        let rows = self.world.size.1 as usize;
+        let visible = (rows * 3 / 10).max(5);
+        let rendered = self.editor.render(self.world.size.0.saturating_sub(1));
+        let total = rendered.len();
+        if total <= visible {
+            return (total, 0, 0);
+        }
+        // Follow the caret: the row carrying the marker, if it is inside the
+        // rendered set at all.
+        let caret = rendered
+            .iter()
+            .position(|row| row.contains(lca_tui::engine::core::CURSOR_MARKER))
+            .unwrap_or(0);
+        // The offset that keeps the caret visible with the least movement.
+        let above = caret.saturating_sub(visible.saturating_sub(1));
+        let above = above.min(total.saturating_sub(visible));
+        (visible, above, total.saturating_sub(above + visible))
+    }
+
     /// The editor's viewport rows (gh #165): `(top, len)` covering the
     /// editor text rows above the footer (the gh #249 frame caps sit
     /// directly outside and focus through [`Self::place_editor_caret`]).
@@ -319,7 +364,12 @@ impl Chat {
         if !self.screen_mode {
             return None;
         }
-        let editor = self.editor.render(width.saturating_sub(1)).len().max(1);
+        // Gh #388 gap 1: the *visible* window, not every rendered row. The
+        // frame paints `visible` rows, so a hit-test built from `total` would
+        // address rows the frame never drew - the gh #331 lesson in the other
+        // direction.
+        let (visible, _, _) = self.editor_view();
+        let editor = visible.max(1);
         let footer = self.footer_lines(width).len().max(1);
         // Gh #249: one row down for the frame's top cap.
         let top = (height as usize).saturating_sub(footer + editor + 1);

@@ -7,6 +7,15 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **A long prompt hid part of itself with no sign, and the status row collided with
+  the overflow count** (gh #388 gap 1). The composer drew every line of the prompt, so a
+  long one pushed the input frame off the top of the screen; and had anything reported the
+  hidden rows on the border row, it would have written over `Working`. The composer now
+  shows a bounded window that follows the caret (30% of the terminal's height, never fewer
+  than five rows), and the border names what is out of view (`↑ N more` above, `↓ N more`
+  below) alongside the status, giving up the words before the count when the row is too
+  narrow to hold both - a bare spinner is the floor. Nothing hidden leaves the border
+  exactly as it was.
 - **A caret scrolled out of view could desynchronise the main screen, and the painted
   caret reset the colour of the text after it** (gh #371). Two rendering-contract bugs:
   the scrollback renderer recorded the cursor row it *asked* for while the terminal
