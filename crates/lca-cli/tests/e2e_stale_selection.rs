@@ -46,74 +46,6 @@ mod common;
 #[cfg(unix)]
 use common::*;
 
-/// Whether the captured bytes carry a **transcript** selection span.
-///
-/// Not simply "is `\x1b[7m` present": the editor paints its caret with the
-/// same escape (`widgets/editor.rs`, `\x1b[7m \x1b[0m`), so a naive check
-/// reports a highlight on every frame and asserts nothing. A selection is
-/// distinguishable by width - it spans more than the single caret cell - and
-/// by living above the composer. Both are required here.
-#[cfg(unix)]
-fn has_highlight(sgr: &str) -> bool {
-    sgr.lines().any(|line| {
-        let mut rest = line;
-        while let Some(at) = rest.find("\x1b[7m") {
-            let after = &rest[at + "\x1b[7m".len()..];
-            // The caret is exactly one cell; a selection is at least two.
-            let width = after
-                .find("\x1b[")
-                .map(|end| &after[..end])
-                .unwrap_or(after);
-            if width.chars().count() > 1 {
-                return true;
-            }
-            rest = after;
-        }
-        false
-    })
-}
-
-/// The **screen** row and column of `needle`, as 0-based cells.
-///
-/// `capture-pane -e` is not one output line per screen row: a row whose
-/// content carries SGR is emitted with its escapes intact, and tmux can
-/// break it across output lines (a trailing caret cell lands on the next
-/// line). Counting `lines()` therefore points at the wrong row, and an SGR
-/// drag sent to that row selects nothing - a silent vacuous pass.
-///
-/// So count *screen* rows the way the terminal does: a line is a new screen
-/// row only when the previous one is a complete row. tmux pads a full row
-/// with spaces, and a row that ended without a newline break is continued.
-/// The robust form is to strip the escapes from the SGR capture and locate
-/// the needle there, then map that index against the plain capture, which
-/// does emit one line per row.
-#[cfg(unix)]
-fn locate(pane: &str, plain: &str, needle: &str) -> Option<(u16, u16)> {
-    // The plain capture is one line per screen row. Find the needle there
-    // for the row, then use the plain row's own column offset.
-    plain
-        .lines()
-        .enumerate()
-        .find_map(|(row, line)| line.find(needle).map(|col| (row as u16, col as u16)))
-        .or_else(|| {
-            // Fallback: the needle may only be visible in the SGR capture.
-            let _ = pane;
-            None
-        })
-}
-
-/// Drag a selection across the row holding `needle`, in SGR-1006 bytes.
-///
-/// The press and the motion carry button 0 (`\x1b[<0;…M` / `\x1b[<32;…M`);
-/// the release is the `m` form. Coordinates are 1-based cells.
-#[cfg(unix)]
-fn drag_over(session: &Tmux, row: u16, start_col: u16, end_col: u16) {
-    let y = row + 1;
-    session.send_literal(&format!("\x1b[<0;{};{y}M", start_col + 1));
-    session.send_literal(&format!("\x1b[<32;{};{y}M", end_col + 1));
-    session.send_literal(&format!("\x1b[<0;{};{y}m", end_col + 1));
-}
-
 // Verifies: gh #403 gap 1 - after a transcript replacement the selection is
 // gone, and the pane shows no reverse-video span.
 #[cfg(unix)]
@@ -278,7 +210,17 @@ fn a_resize_keeps_the_highlighted_rows() {
 
     // A resize: same transcript, new geometry. tmux resizes the pane, the
     // interface repaints, and the selection above must survive.
-    session.resize(100, 30);
+    //
+    // **Height, not width** (gh #399). The property this row guards is "a resize
+    // must not *clear* the selection" - the mirror-image of gh #403's
+    // reset-fires-too-often bug - and only a height change tests it. A width
+    // change *reflows*: text rewraps, rows move, and a selection held as screen
+    // coordinates (which is what it is) legitimately no longer covers the same
+    // sentences. Asserting a highlight survives a reflow would be asserting
+    // something the architecture does not promise, and it only passed before
+    // because a one-row header happened to reflow to the same height. The
+    // startup header legitimately grows a row when its prose nudge rewraps.
+    session.resize(140, 30);
     std::thread::sleep(Duration::from_millis(600));
     let after = session.capture_e();
     assert!(

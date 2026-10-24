@@ -45,9 +45,17 @@ use super::logo::{Mark, mark_for, mark_rows, mark_width};
 use super::theme::Theme;
 use lca_tui::engine::keybindings::KeybindingsManager;
 use lca_tui::engine::text::visible_width;
+use lca_tui::engine::text::wrap_text_with_ansi;
 
 /// The wordmark's width, which is the middle rung's cost.
 const WORDMARK_WIDTH: usize = 3;
+
+/// The narrowest text column worth wrapping beside the mark.
+///
+/// A column narrower than this reads as a ragged stripe rather than a paragraph, so
+/// the header stacks instead. Chosen as roughly a quarter of the owner's 79-column
+/// hint line, which leaves that line's first clause intact.
+const MIN_TEXT_COLUMN: usize = 20;
 
 /// The product identity the header prints: what `lca --version` reports, from the
 /// same source, so the two can never disagree.
@@ -198,13 +206,8 @@ pub fn compose(
     };
 
     match layout {
-        Layout::Beside => beside(theme, mark, &lines),
-        Layout::Stacked => {
-            let mut out = mark_rows(theme, mark);
-            out.extend(lines.iter().map(|line| paint_text(theme, line)));
-            out
-        }
-        Layout::VersionOnly => {
+        Layout::Beside => beside(theme, mark, &lines, width),
+        _ => {
             let mut out = mark_rows(theme, mark);
             out.extend(lines.iter().map(|line| paint_text(theme, line)));
             out
@@ -217,15 +220,23 @@ pub fn compose(
 /// The column is measured from the rows actually printed, not from the grid's
 /// width: the wordmark is three cells where the half-block mark is nine, and padding
 /// by the grid would leave six dead columns between the fallback and the version.
-fn beside(theme: &Theme, mark: Mark, lines: &[String]) -> Vec<String> {
+fn beside(theme: &Theme, mark: Mark, lines: &[String], width: usize) -> Vec<String> {
     let rows = mark_rows(theme, mark);
     let column = rows.iter().map(|row| visible_width(row)).max().unwrap_or(0);
-    lines
+    // Wrap to the column that is left, not to the terminal's whole width: wrapping
+    // at the full width would run the hint line straight through the mark column on
+    // every row past the mark's last one.
+    let text_width = width.saturating_sub(column + 1).max(1);
+    let wrapped: Vec<String> = lines
+        .iter()
+        .flat_map(|line| wrap_text_with_ansi(line, text_width))
+        .collect();
+    wrapped
         .iter()
         .enumerate()
         .map(|(index, line)| {
             // A shorter mark still reserves the column, so the text stays in one
-            // block instead of stepping left on the last row.
+            // block instead of stepping left.
             let left = rows.get(index).cloned().unwrap_or_default();
             let gap = " ".repeat(column.saturating_sub(visible_width(&left)) + 1);
             format!("{left}{gap}{}", paint_text(theme, line))
@@ -249,13 +260,18 @@ fn layout_for(width: usize, apple_terminal: bool, text: &[String]) -> Layout {
     } else {
         mark_width()
     };
-    let widest = text
+    // The version row is `text[0]`, the hint row `text[1]`; the third is prose. Only
+    // the non-prose rows are measured: the nudge is a sentence that wraps inside the
+    // text column (the owner's own sketch shows it on two lines), so measuring it
+    // would make the beside rung unreachable on a normal terminal - a 130-column
+    // sentence beside a nine-column mark asks for 140, and a real pane is 100.
+    let structured = text
         .iter()
+        .take(2)
         .map(|line| visible_width(line))
         .max()
         .unwrap_or(0);
-    // The `+1` is the gap column beside the mark.
-    if width > widest + beside_mark {
+    if width > structured + beside_mark && width >= beside_mark + 1 + MIN_TEXT_COLUMN {
         return Layout::Beside;
     }
     let version_width = visible_width(&text[0]);

@@ -437,6 +437,15 @@ pub struct DisplayTuning {
     pub code_block_indent: String,
     /// Mermaid rendering: `off`, `final`, or `streaming`.
     pub mermaid: String,
+    /// How much of the startup header draws (gh #399).
+    ///
+    /// The three rungs `ui.quiet_startup` already documents, named for what they
+    /// draw rather than for the setting's spellings - `lca-ui` maps the setting, it
+    /// does not learn it.
+    pub startup_header: StartupHeaderRung,
+    /// The product version and ABI the header prints - `lca --version`'s own two
+    /// values, so the header and `--version` cannot disagree.
+    pub startup_version: (String, String),
 }
 
 impl Default for DisplayTuning {
@@ -456,8 +465,26 @@ impl Default for DisplayTuning {
             auto_resize_images: true,
             code_block_indent: "  ".to_string(),
             mermaid: "streaming".to_string(),
+            startup_header: StartupHeaderRung::default(),
+            startup_version: (String::new(), String::new()),
         }
     }
+}
+
+/// How much of the startup header draws (gh #399).
+///
+/// The three rungs are `ui.quiet_startup`'s own, named for what they print. A
+/// quiet startup is the setting's whole point, so the host maps the setting onto
+/// this and the renderer only has to know three cases.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum StartupHeaderRung {
+    /// Nothing at all (`true`).
+    Hidden,
+    /// The version row only, as before #399 (`"header"`).
+    VersionOnly,
+    /// The logo block: mark, version, live hints, nudge (`false`, the default).
+    #[default]
+    Full,
 }
 
 /// The live display tunables; absent keeps the product defaults.
