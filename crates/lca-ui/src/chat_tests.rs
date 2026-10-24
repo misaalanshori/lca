@@ -31,6 +31,7 @@ pub(crate) fn options() -> UiOptions {
         theme_extra_dirs: Vec::new(),
         themes: crate::theme::THEMES.iter().map(|s| s.to_string()).collect(),
         initial_lines: Vec::new(),
+        initial_header: (Vec::new(), Vec::new()),
         initial_records: Vec::new(),
         initial_tail_lines: Vec::new(),
         initial_messages: Vec::new(),
@@ -1062,6 +1063,10 @@ mod resume_tree_tests;
 // The `/resume` overlay row, split from `chat_overlay_tests.rs` at the ceiling.
 #[path = "chat_resume_wired_tests.rs"]
 mod resume_wired_tests;
+
+// Gh #400 gaps 2 and 3: the expandable header and its collision notices.
+#[path = "chat_header_tests.rs"]
+mod header_tests;
 
 #[path = "chat_hub_tests.rs"]
 mod hub_tests;

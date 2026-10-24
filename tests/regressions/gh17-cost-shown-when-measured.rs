@@ -31,6 +31,7 @@ fn chat() -> Chat {
                 .map(|s| s.to_string())
                 .collect(),
             initial_lines: Vec::new(),
+            initial_header: (Vec::new(), Vec::new()),
             initial_records: Vec::new(),
             initial_tail_lines: Vec::new(),
             initial_messages: Vec::new(),

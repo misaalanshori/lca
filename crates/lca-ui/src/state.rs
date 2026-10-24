@@ -930,6 +930,11 @@ pub struct UiOptions {
     /// Conversation lines already resolved for display: warnings and
     /// status notices that surround the transcript (resume).
     pub initial_lines: Vec<String>,
+    /// The startup header (gh #400 gaps 2 and 3): the compact line(s) and the
+    /// expanded table, kept separately from `initial_lines` because the header is
+    /// an *entry* with state rather than a baked string - it toggles, and it must
+    /// outlive `/new`.
+    pub initial_header: (Vec<String>, Vec<String>),
     /// The resumed session's records, replayed with the live rendering
     /// (FR-UI-7) - user band, markdown, tool cards, image labels.
     pub initial_records: Vec<lca_protocol::Record>,

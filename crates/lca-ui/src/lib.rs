@@ -37,6 +37,7 @@ pub mod chat_shell;
 mod chat_tabs;
 mod chat_tree;
 mod chat_turn_events;
+mod collisions;
 mod command_help_table;
 mod copy_ladder;
 pub mod dialogs;
@@ -72,6 +73,7 @@ pub use chat_mcp::{
 pub use chat_pickers::HubRow;
 pub use chat_pickers::ModelPicker;
 pub use chat_render::ClickOutcome;
+pub use collisions::{CollisionEntry, CollisionSummary};
 pub use copy_ladder::route_a_copy;
 pub use ext_widgets::widget_lines;
 pub use footer::Footer;

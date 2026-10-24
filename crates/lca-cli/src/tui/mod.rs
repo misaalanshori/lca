@@ -28,7 +28,7 @@ mod model_select;
 mod pending_step;
 mod runner;
 mod session_hooks;
-mod startup;
+pub mod startup;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -226,6 +226,11 @@ pub(crate) struct Ui {
     /// The initial transcript: warnings that frame it (head), the session's
     /// records for the rich replay (FR-UI-7), and trailing notices.
     initial_head: Vec<String>,
+    /// The startup header's two prepared states (gh #400 gaps 2 and 3): the compact
+    /// line and the expanded table, kept apart from `initial_head` because the
+    /// header is a live entry (it toggles, and it outlives `/new`) rather than a
+    /// baked string.
+    initial_header: (Vec<String>, Vec<String>),
     initial_records: Vec<lca_protocol::Record>,
     initial_tail: Vec<String>,
     /// Positional CLI messages (#109), submitted on open in order.
@@ -817,17 +822,10 @@ impl Ui {
         {
             initial_head.push(warning);
         }
-        // Gh #131: the startup header names the loaded resources
-        // (pi's header shape); warnings above stay on top.
-        initial_head.extend(startup::startup_header(
-            env!("PRODUCT_VERSION"),
-            lca_session::ABI_VERSION,
-            config.ui_quiet_startup(),
-            &crate::prompt::context_sources(&data, cwd, trusted, flags.no_context_files),
-            registry.registered_names().len(),
-            lca_tools::skills::collect(&crate::skills_roots(cwd, flags)).len(),
-            lca_tools::prompts::collect(&crate::prompt_roots(cwd)).len(),
-        ));
+        // Gh #131/#400: the startup header names the loaded resources; since
+        // gh #400 gaps 2/3 it is one compact line with the long-form table behind
+        // `ctrl+o`, and the registry's collision notices ride it too.
+        let initial_header = startup::launch_header(&data, cwd, trusted, flags, &registry, &config);
         // `--model <pattern>[:thinking]` resolves against the provider's
         // list the way pi's resolver does (EFG-041), inside `--provider`'s
         // scope when a profile is named; the `:thinking` suffix becomes
@@ -980,6 +978,7 @@ impl Ui {
             render_regions,
             ui_events,
             initial_head,
+            initial_header,
             initial_records,
             initial_tail,
             initial_messages: initial.to_vec(),
