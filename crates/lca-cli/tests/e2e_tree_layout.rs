@@ -47,6 +47,14 @@ fn a_long_linear_session_paints_flat_in_a_narrow_real_pane() {
         );
     }
 
+    // Gh #489: the navigator must be laid out at the pane's width before its rows
+    // are read. A frame drawn for the 140-column spawn geometry is soft-wrapped by
+    // tmux into this 60-column pane — invisible to a per-line width check, since
+    // every physical line still fits — and the box's row window then shrinks, so a
+    // row the assertions need falls outside it. Waiting on the layout is the fix
+    // the ledger promised; a longer sleep would be the same guess with a bigger
+    // number.
+    session.wait_for_layout_width(60);
     session.send(&["/tree", "Enter"]);
     // Every row's text must be on screen in one frame: the flat layout's
     // promise, and the thing the old diagonal march broke.

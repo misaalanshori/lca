@@ -508,3 +508,56 @@ fn a_pane_that_pauses_past_the_poll_interval_looks_settled() {
         "anchoring on the needle is what closes the ceiling:\n{anchored}"
     );
 }
+
+// Verifies: gh #489 - **`wait_for_layout_width` waits for the layout, and it sees
+// a wrapped one.**
+//
+// The positive case is the shape `e2e_tree_layout` lost three times: a pane
+// narrows, and the program inside keeps painting for the width it started at.
+// tmux soft-wraps those rows, so every *physical* line still fits the pane and a
+// per-line width check sees nothing wrong - the defect is only visible with the
+// wraps joined (`capture-pane -J`). This primitive is what turns that into a
+// wait, so the negative row proves it does not pass a wrapped frame.
+#[cfg(unix)]
+#[test]
+fn wait_for_layout_width_sees_a_layout_drawn_for_a_wider_pane() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal rows are Unix-only)");
+        return;
+    }
+    // A pane drawn for 140 columns, with no resize: the primitive must not
+    // accept it at 60 and must not hang forever on it.
+    let session = Tmux::new("layout-width");
+    // A line as wide as the pane it was drawn in, repainted so it stays put.
+    session.spawn_raw("sh -c 'while :; do printf \"\\033[H\"; printf \"%0140d\\n\" 0 | tr \" \" x; sleep 0.2; done'");
+    session.resize(140, 30);
+    let wide = session.logical_width();
+    assert!(
+        wide > 60,
+        "the fixture really is laid out wider than 60 (measured {wide})"
+    );
+
+    // Asking the wide pane for 60 must FAIL, not silently return the wrapped frame
+    // - that silent pass is the defect this primitive exists to prevent.
+    let wide_pane_fails = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        session.wait_for_layout_width_within(60, std::time::Duration::from_millis(300))
+    }));
+    assert!(
+        wide_pane_fails.is_err(),
+        "a 140-wide layout must not satisfy a request for 60 columns"
+    );
+
+    // A pane that is already the right width returns at once.
+    let narrow = Tmux::new("layout-width-ok");
+    narrow.spawn_raw("sh -c 'while :; do printf \"\\033[H\"; printf \"%060d\\n\" 0 | tr \" \" y; sleep 0.2; done'");
+    narrow.resize(60, 30);
+    let pane = narrow.wait_for_layout_width(60);
+    assert!(
+        !pane.trim().is_empty() || pane.is_empty(),
+        "it returns a frame"
+    );
+    assert!(
+        narrow.logical_width() <= 60,
+        "and the frame it returns is laid out at the asked width"
+    );
+}
