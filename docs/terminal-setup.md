@@ -31,6 +31,7 @@ terminal lacks corrupts rendering.
 | Truecolor | Detected | `ui.color=never` forces plain text |
 | Taskbar progress (OSC 9;4) | On while the agent is busy — a turn, a background `/compact`, or a `!`/`!!` run — refreshed once a second (gh #369) | `terminal.show_progress=false` silences it |
 | Tab status (OSC 7501, gh #213) | On after the terminal answers the support query; off under `screen` | `LCA_PROGRAM_STATUS=1` forces reports, `=0` silences them |
+| Theme light/dark (OSC 11 + `CSI ? 996 n`, gh #379) | Asked once at startup and closed with a `DA1` sentinel (`ESC [ c`), which every terminal answers whether or not it reports colours. The theme is chosen from `COLORFGBG`/defaults **immediately**; a colour answer refines it when it arrives, including one that arrives late over a slow link. Once the sentinel has closed the query, an `OSC 11` printed by another program cannot repaint the palette | No key: `ui.theme` pins a theme and stops the refresh |
 
 `terminal.hyperlinks`, `terminal.images`, and `terminal.true_color`
 exist as accepted-but-inert keys (pi's names, gh #82): detection

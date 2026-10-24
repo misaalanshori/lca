@@ -118,6 +118,47 @@ pub fn parse_osc11_background_color(data: &str) -> Option<RgbColor> {
     Some(RgbColor { r, g, b })
 }
 
+/// The startup colour query: the background (OSC 11) and the colour-scheme
+/// preference (DEC private `? 996`), followed by **`DA1` (`ESC [ c`)** as a
+/// sentinel (gh #379 gap 1).
+///
+/// Every terminal answers `DA1` whether or not it understands `OSC 11`, and
+/// terminals answer **in order**. So `DA1` arriving means "everything before this
+/// has been answered or ignored" — which is what lets the theme resolve the
+/// moment the query completes instead of waiting out a timeout on a terminal that
+/// ignores colours. The ordering is the whole mechanism: put `DA1` first and it
+/// proves nothing, because the `OSC 11` answer could still be in flight behind it.
+pub const TERMINAL_COLOR_QUERY: &str = "\x1b]11;?\x07\x1b[?996n\x1b[c";
+
+/// Whether this input is the `DA1` sentinel that closes [`TERMINAL_COLOR_QUERY`].
+///
+/// The reply is `CSI ? <params> c` with at least one parameter (`ESC [ ? 1 ; 2 c`
+/// from an xterm, `ESC [ ? 62 ; 4 ; 6 ; 22 c` from others); `ESC [ ? c` with no
+/// parameters is not a DA1 answer.
+pub fn is_device_attributes_report(data: &str) -> bool {
+    let Some(body) = data
+        .strip_prefix("\x1b[?")
+        .and_then(|s| s.strip_suffix('c'))
+    else {
+        return false;
+    };
+    !body.is_empty()
+        && body.bytes().all(|b| b.is_ascii_digit() || b == b';')
+        && body.bytes().any(|b| b.is_ascii_digit())
+}
+
+/// Whether the input is a capability reply the startup query can elicit.
+///
+/// One recogniser for the three replies, so the *late* path and the *startup* path
+/// cannot disagree about what counts as a reply - and so a reply-shaped sequence
+/// that arrives after startup is still recognised as a reply rather than typed
+/// into the composer (the guard, gh #379 gap 1).
+pub fn is_startup_query_reply(data: &str) -> bool {
+    is_osc11_background_color_response(data)
+        || parse_terminal_color_scheme_report(data).is_some()
+        || is_device_attributes_report(data)
+}
+
 /// Parse a DEC color-scheme report (`CSI ? 997 ; 1 n` dark / `; 2 n` light),
 /// including a repeated form.
 pub fn parse_terminal_color_scheme_report(data: &str) -> Option<ColorScheme> {
@@ -217,5 +258,79 @@ mod tests {
             ColorScheme::Light
         );
         assert_eq!(RgbColor { r: 0, g: 0, b: 0 }.scheme(), ColorScheme::Dark);
+    }
+    // Verifies: gh #379 gap 1 - the query ends with the DA1 sentinel, and the
+    // sentinel is **last**. Ordering is the entire mechanism: a DA1 written first
+    // would be answered before the colour replies could arrive, so its arrival
+    // would prove nothing about them.
+    #[test]
+    fn the_query_asks_for_colours_then_closes_with_da1() {
+        let query = TERMINAL_COLOR_QUERY;
+        let da1 = query.find("\x1b[c").expect("the DA1 sentinel is present");
+        let bg = query
+            .find("\x1b]11;?")
+            .expect("the OSC 11 query is present");
+        let scheme = query
+            .find("\x1b[?996n")
+            .expect("the scheme query is present");
+        assert!(bg < da1, "OSC 11 is asked before the sentinel: {query:?}");
+        assert!(
+            scheme < da1,
+            "the colour-scheme query is asked before the sentinel: {query:?}"
+        );
+        assert_eq!(
+            da1 + "\x1b[c".len(),
+            query.len(),
+            "the sentinel is the last thing written: {query:?}"
+        );
+    }
+
+    // Verifies: gh #379 gap 1 - a DA1 reply is recognised in the shapes terminals
+    // actually send, and a DA1-*shaped* thing that is not an answer (no
+    // parameters) is not.
+    #[test]
+    fn a_device_attributes_report_is_recognised() {
+        assert!(is_device_attributes_report("\x1b[?1;2c"));
+        assert!(is_device_attributes_report("\x1b[?62;4;6;22c"));
+        assert!(is_device_attributes_report("\x1b[?64c"));
+        assert!(!is_device_attributes_report("\x1b[?c"), "no parameters");
+        assert!(!is_device_attributes_report("\x1b[c"), "bare DA1 request");
+        assert!(
+            !is_device_attributes_report("\x1b[1;2c"),
+            "not a private DA1"
+        );
+        assert!(!is_device_attributes_report("\x1b[?1;2n"), "a DSR report");
+        assert!(!is_device_attributes_report("x"), "not an escape at all");
+    }
+
+    // Verifies: gh #379 gap 1 - **one** recogniser decides what a startup reply
+    // is. The late-reply path and the composer guard both go through it, so a
+    // reply-shape one of them accepts cannot be typed by the other.
+    #[test]
+    fn one_recogniser_covers_every_startup_reply() {
+        for reply in [
+            "\x1b]11;#1e1e2e\x07",
+            "\x1b]11;rgb:1e1e/1e1e/2e2e\x1b\\",
+            "\x1b[?997;1n",
+            "\x1b[?997;2n\x1b[?997;2n",
+            "\x1b[?1;2c",
+        ] {
+            assert!(
+                is_startup_query_reply(reply),
+                "{reply:?} is a startup reply"
+            );
+        }
+        // Things that are neither a reply nor a sentinel must still be input.
+        for typed in [
+            "a",
+            "\x1b[A",
+            "\x1b[?1;2n",
+            "\x1b]7501;state=idle:app=lca\x1b\\",
+        ] {
+            assert!(
+                !is_startup_query_reply(typed),
+                "{typed:?} must reach the interface as input"
+            );
+        }
     }
 }

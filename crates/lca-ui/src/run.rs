@@ -417,18 +417,11 @@ fn handle_input(
     cancel_flag: &Option<lca_tools::CancelFlag>,
     aborted: &mut bool,
 ) -> InputResult {
-    // Terminal capability replies (R10): the OSC 11 background
-    // and the DSR color-scheme report drive the auto theme.
-    if lca_tui::engine::colors::is_osc11_background_color_response(data) {
-        if let Some(rgb) = lca_tui::engine::colors::parse_osc11_background_color(data) {
-            // gh #10: the reply carries the background itself, not just
-            // its scheme - a `system` theme rebuilds from it.
-            chat.apply_terminal_background(rgb);
-        }
-        return InputResult::Continue;
-    }
-    if let Some(scheme) = lca_tui::engine::colors::parse_terminal_color_scheme_report(data) {
-        chat.apply_detected_scheme(scheme);
+    // Terminal capability replies (R10 + gh #379 gap 1): the OSC 11 background,
+    // the DSR colour-scheme report, and the `DA1` sentinel that closes the query.
+    // `theme_query::handle_reply` owns the dispatch and the lifecycle, so the
+    // apply path and the composer guard share one recogniser.
+    if crate::theme_query::handle_reply(chat, data) {
         return InputResult::Continue;
     }
     // Mouse (selection, wheel) is the renderer's - except wheel motion
@@ -789,9 +782,14 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
         chat.world.options.workspace.to_string_lossy()
     ));
     chat.world.resize(terminal.columns(), terminal.rows());
-    // R10: ask the terminal for its background color and color-scheme
-    // preference; the replies set the auto theme when they arrive.
-    terminal.write("\x1b]11;?\x07\x1b[?996n");
+    // R10 + gh #379 gap 1: ask for the background and the colour-scheme
+    // preference, then close with a `DA1` sentinel. Terminals answer `DA1`
+    // whether or not they understand `OSC 11` and answer in order, so its
+    // arrival proves the colour replies are answered or absent - which is what
+    // lets the theme stop listening instead of waiting out a timeout on a
+    // terminal that ignores colours. The sentinel is **last** by construction;
+    // see `colors::TERMINAL_COLOR_QUERY` and the row that pins the ordering.
+    terminal.write(lca_tui::engine::colors::TERMINAL_COLOR_QUERY);
 
     let mut turns = TurnState::new(prompt_tx, prompt_rx, dialog_rx);
     // Gh #400: keystrokes that arrived during the load are the first thing the
@@ -1194,3 +1192,7 @@ pub(crate) mod tests;
 #[cfg(test)]
 #[path = "run_viewport_keys_tests.rs"]
 mod viewport_keys_tests;
+
+#[cfg(test)]
+#[path = "run_theme_query_tests.rs"]
+mod theme_query_tests;

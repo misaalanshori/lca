@@ -15,6 +15,8 @@ mod chat_ext_commands;
 mod chat_extman;
 mod chat_hub;
 mod chat_keys;
+mod theme_query;
+
 /// The `/mcp` manager modal (gh #418 Phase G).
 mod chat_mcp;
 mod chat_mcp_keys;

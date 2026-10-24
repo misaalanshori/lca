@@ -7,6 +7,18 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **A program that prints `OSC 11` could repaint LCA's theme mid-session** (gh #379
+  gap 1). The terminal-colour reply handler had no lifecycle: it applied every
+  background answer it ever saw, so `ls` with colour, `git`, or any program echoing
+  its own background could switch the palette under the user. The startup query now
+  closes with a `DA1` sentinel (`ESC [ c`) — which every terminal answers whether or
+  not it understands `OSC 11`, and answers **in order**, so its arrival proves the
+  colour replies are done or absent — and a reply is applied only while the query is
+  open or within 250 ms of it closing. That window is what keeps a late answer over a
+  slow SSH link landing while a stray one printed seconds later does not. The theme
+  itself is chosen from `COLORFGBG`/defaults at startup, so a terminal that answers
+  nothing still gets one immediately.
+
 - **`Ctrl+W` deleted a whole path instead of a word** (gh #383 gap 1). Word motion only
   knew about spaces, so on `crates/lca-tui/src/widgets/editor.rs:42` a single `Ctrl+W`
   erased all 43 characters, and on `foo.bar(baz_qux)` it erased the entire call. A word

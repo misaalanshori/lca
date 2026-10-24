@@ -718,7 +718,7 @@ fn reader_loop(shared: Arc<Shared>, escape_timeout_ms: u64) {
                 Ok(n) => {
                     last_data = Instant::now();
                     for event in buffer.process_bytes(&buf[..n]) {
-                        dispatch(&shared, event, &mut |seq| write_stdout(seq));
+                        let _ = dispatch(&shared, event, &mut |seq| write_stdout(seq));
                     }
                 }
                 Err(_) => break,
@@ -731,7 +731,7 @@ fn reader_loop(shared: Arc<Shared>, escape_timeout_ms: u64) {
             && last_data.elapsed().as_millis() as u64 >= timeout
         {
             for event in buffer.flush() {
-                dispatch(&shared, event, &mut |seq| write_stdout(seq));
+                let _ = dispatch(&shared, event, &mut |seq| write_stdout(seq));
             }
         }
 
@@ -747,7 +747,7 @@ fn reader_loop(shared: Arc<Shared>, escape_timeout_ms: u64) {
     shared.reader_done.store(true, Ordering::SeqCst);
 }
 
-fn dispatch(shared: &Shared, event: StdinEvent, out: &mut dyn FnMut(&str)) {
+fn dispatch(shared: &Shared, event: StdinEvent, out: &mut dyn FnMut(&str)) -> bool {
     match event {
         StdinEvent::Data(seq) => {
             // Gh #213: OSC 7501 traffic is negotiation, never input -
@@ -757,15 +757,17 @@ fn dispatch(shared: &Shared, event: StdinEvent, out: &mut dyn FnMut(&str)) {
                 if is_program_status_reply(&seq) {
                     shared.program_status.store(true, Ordering::SeqCst);
                 }
-                return;
+                return true;
             }
             if apply_negotiation(shared, &seq, out) {
-                return;
+                return true;
             }
             shared.forward_input(seq);
+            false
         }
         StdinEvent::Paste(content) => {
             shared.forward_input(format!("\x1b[200~{content}\x1b[201~"));
+            false
         }
     }
 }
@@ -801,6 +803,14 @@ fn apply_negotiation(shared: &Shared, seq: &str, out: &mut dyn FnMut(&str)) -> b
                 out("\x1b[>4;2m");
                 shared.modify_other_keys.store(true, Ordering::SeqCst);
             }
+            // Gh #379 gap 1: the DA1 answer is **also** the sentinel that closes
+            // the startup colour query, so it must reach the interface as well as
+            // being consumed here. Swallowing it entirely meant the theme's query
+            // window never closed: `close_theme_query` was unreachable on a real
+            // terminal, which left every stray OSC 11 applying forever. Forwarded
+            // as input *after* the negotiation work, so a consumer that ignores it
+            // sees no behaviour change.
+            shared.forward_input(seq.to_string());
             true
         }
         None => false,
