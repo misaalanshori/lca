@@ -57,7 +57,7 @@ mod rpc;
 pub use persist::{
     persist_project_setting, persist_setting, persist_setting_list, project_config_file,
 };
-mod registry;
+pub mod registry;
 mod session_cmds;
 /// The session's inbound HTTP listener lifecycle (gh #363, ADR-0049).
 pub mod session_http;

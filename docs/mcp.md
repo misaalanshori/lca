@@ -479,6 +479,20 @@ Three ways, in increasing persistence:
 All three are checked **before** any connection is attempted, so a disabled server
 does not spawn, does not connect, and does not hold up the turn.
 
+That ordering is the whole contract, and it is enforced at two levels (gh #266).
+The decision is read once, early, and **the entries are marked disabled before the
+manager is constructed** — so a disabled server cannot reach the code that spawns
+it, rather than being filtered afterwards. `/mcp` still lists it (as `disabled`),
+because knowing what is configured and switched off is the point of the list.
+
+Anything registered into a **live** registry after startup — the compaction
+strategy, on every `/reload` — goes through `registry::register_gated`, which
+registers and then applies the enablement decision to that one name. The order
+matters because there is no later sweep to rely on: registering first and sweeping
+later is exactly how a disabled extension came back to life after a reload. A
+disabled extension is inert, not deleted, so re-enabling it takes effect on the
+next launch without re-installing anything.
+
 ## Startup and the first turn
 
 Server connections run on background workers. `registry::assemble` returns

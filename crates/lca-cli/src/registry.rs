@@ -196,6 +196,75 @@ pub(crate) fn assemble(
     (registry, manager, warnings)
 }
 
+/// Register one handle and then let the enablement decision reach it
+/// (gh #266's seam, applied to every registration path).
+///
+/// `assemble` can sweep the registry after it has registered everything, because
+/// it knows the whole set up front. A path that registers into a **live** registry
+/// afterwards cannot: `registry::register_compaction` runs in `Ui::new` (after
+/// `assemble`'s sweep) and again on `/reload` (whose sweep has already run), so a
+/// handle registered there was never consulted against the project's disablement.
+/// That is #266's exact shape - "the decision did not precede the registration" -
+/// in a second place, and ordering the calls cannot fix it because there is no
+/// later sweep to order it before.
+///
+/// So the seam is here: register, then immediately apply the same predicate.
+/// Anything registered through `register_gated` is covered however the caller is
+/// sequenced, which is the property the brief calls for - a future registration
+/// path cannot reintroduce the bug by forgetting a sweep.
+pub fn register_gated(
+    registry: &mut ExtensionRegistry,
+    handle: Arc<dyn lca_ext_abi::ExtensionDispatch>,
+    disabled_here: &dyn Fn(&str) -> bool,
+) {
+    let name = handle.name().to_string();
+    let disabled = disabled_here(&name);
+    registry.register(handle);
+    if disabled {
+        registry.set_enabled(&name, false);
+    }
+}
+
+/// A bare `CompactionDefault` handle over a scratch data dir, for rows that need a
+/// **real** handle without a provider.
+///
+/// `register_compaction` needs a `Provider` and a session, which a registry-only
+/// row has no business building; the seam it is gated by (`register_gated`) only
+/// reads a name and the predicate. This is the handle the `/reload` path really
+/// registers, so the row exercises the same type rather than a look-alike stub.
+#[doc(hidden)]
+pub fn compaction_handle_for_tests(data: &Path) -> Arc<dyn lca_ext_abi::ExtensionDispatch> {
+    let cap = extension_capabilities_for_tests(data);
+    Arc::new(compaction_default::CompactionDefault::new(cap))
+}
+
+/// The minimal capability engine: enough for a handle to exist.
+#[doc(hidden)]
+fn extension_capabilities_for_tests(data: &Path) -> Arc<lca_tools::Capabilities> {
+    let roots = lca_permissions::ScopeRoots {
+        workspace: data.to_path_buf(),
+        private: data.join("private"),
+        home_config: data.join("config"),
+        temp: data.join("tmp"),
+        state_dir: data.to_path_buf(),
+    };
+    for part in ["private", "config", "tmp"] {
+        let _ = std::fs::create_dir_all(data.join(part));
+    }
+    Arc::new(lca_tools::Capabilities::new(
+        "compaction-default",
+        lca_tools::CapabilityGrants::default(),
+        roots,
+        Arc::new(Mutex::new(lca_permissions::SharedPrompt::default())),
+        Arc::new(Mutex::new(
+            lca_permissions::GrantStore::open(&data.join("grants.json"))
+                .unwrap_or_else(|_| lca_permissions::GrantStore::empty()),
+        )),
+        data.to_path_buf(),
+        None,
+    ))
+}
+
 /// Register the bundled compaction strategy and return its backend.
 #[cfg(feature = "bundled-compaction-default")]
 #[allow(clippy::too_many_arguments)] // one more explicit than a regroup: every arg is used once, at one call site.
@@ -227,7 +296,14 @@ pub(crate) fn register_compaction(
     cap.set_completion(backend.clone());
     // Gh #97: note the engine for the host-side turn-boundary reset.
     registry.note_engine("compaction-default", &cap);
-    registry.register(Arc::new(compaction_default::CompactionDefault::new(cap)));
+    // Gh #266's seam: this runs both after `assemble`'s sweep (`Ui::new`) and on
+    // `/reload`, which is why the decision has to travel with the registration
+    // rather than depend on a later sweep reaching it.
+    register_gated(
+        registry,
+        Arc::new(compaction_default::CompactionDefault::new(cap)),
+        &|name| crate::lock(grants).extension_enabled(cwd, name) == Some(false),
+    );
     Some(backend)
 }
 
