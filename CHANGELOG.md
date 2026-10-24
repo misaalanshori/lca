@@ -7,6 +7,12 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **`/reload` now covers editor key bindings, so a new cursor or newline binding works
+  without a restart** (gh #332). The prompt editor kept the key map it was built with,
+  so a reloaded `tui.editor.*` or `tui.input.*` binding was accepted by app-level
+  hotkeys while the editor ignored it — and `/hotkeys` printed a map the editor was not
+  using. The key map now has one owner: replacing it updates the editor, the rendered
+  hints and the map `/hotkeys` prints together, and it cannot be replaced from outside.
 - **In fullscreen, everything below the session tab bar was one row out** (gh
   #331). The tab bar owns the top row, and four separate places computed the
   transcript window without taking it off — so a click on a tool card or reasoning

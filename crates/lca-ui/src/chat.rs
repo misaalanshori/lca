@@ -75,9 +75,18 @@ pub struct Chat {
     pub editor: Editor,
     /// The footer data (cwd, session).
     pub footer: Footer,
-    /// The keybinding registry (app actions are looked up here, so an
-    /// embedder that rebinds is honored).
-    pub keybindings: Arc<KeybindingsManager>,
+    /// The keybinding registry: app actions are looked up here.
+    ///
+    /// **Not `pub`, and that is the fix for gh #332.** It used to be `pub`, so an
+    /// embedder could assign a new map and silently leave `editor` — which holds its
+    /// own clone — on the old one. That is exactly the bug this cycle closed: one fact
+    /// with two owners and nothing keeping them equal. Reads stay `pub(crate)` because
+    /// a dozen call sites in this crate resolve actions against it; **writes** go
+    /// through [`Chat::set_keybindings`], which updates the transcript's hint manager,
+    /// the editor and this field together, so replacing one without the others is not
+    /// expressible outside this module. [`Chat::keybindings_manager`] is the borrow an
+    /// embedder gets.
+    pub(crate) keybindings: Arc<KeybindingsManager>,
     /// The theme.
     pub theme: Theme,
     /// Accumulated session usage: the true, single-counted sum of every
@@ -880,6 +889,15 @@ impl Chat {
         self.keybindings = keybindings;
     }
 
+    /// The key map the interface is accepting keys with.
+    ///
+    /// The reader half of [`Self::set_keybindings`]: what `/hotkeys` prints and what
+    /// the editor does both come from this one object, which is the promise gh #332
+    /// broke when the field was public and could be replaced alone.
+    pub fn keybindings_manager(&self) -> &Arc<KeybindingsManager> {
+        &self.keybindings
+    }
+
     /// Apply a theme by name and remember it (S5: built-in or custom file).
     /// Picking `system` re-arms detection-following (gh #10); any other
     /// explicit pick clears it.
@@ -1147,6 +1165,9 @@ pub(super) fn highlight_matches(line: &str, query: &str) -> String {
 #[cfg(test)]
 #[path = "chat_offset_tests.rs"]
 mod chat_offset_tests;
+#[cfg(test)]
+#[path = "chat_reload_keys_tests.rs"]
+mod chat_reload_keys_tests;
 #[cfg(test)]
 #[path = "chat_command_guards.rs"]
 mod command_guards;
