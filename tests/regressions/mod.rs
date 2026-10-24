@@ -1160,3 +1160,8 @@ mod reload_rebinds_editor;
 // stay open on the issue.
 #[path = "371-caret-row-and-sgr-close.rs"]
 mod caret_row_and_sgr_close;
+
+// Gh #388 gap 1: the separator's status and its `↑ N more` badge coexist on one
+// row instead of overwriting each other.
+#[path = "388-status-badge-coexistence.rs"]
+mod status_badge_coexistence;
