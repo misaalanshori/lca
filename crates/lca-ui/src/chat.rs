@@ -1169,6 +1169,9 @@ mod chat_offset_tests;
 #[path = "chat_reload_keys_tests.rs"]
 mod chat_reload_keys_tests;
 #[cfg(test)]
+#[path = "chat_toast_scrollback_tests.rs"]
+mod chat_toast_scrollback_tests;
+#[cfg(test)]
 #[path = "chat_command_guards.rs"]
 mod command_guards;
 #[cfg(test)]

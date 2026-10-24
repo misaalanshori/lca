@@ -7,6 +7,14 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **A toast wiped the terminal's scrollback** (gh #372 bug 1). In the default scrollback
+  renderer the toast painter was handed the whole session document instead of the visible
+  frame, so it wrote the message into the document's second line - hundreds of rows above
+  what the user could see. The renderer saw a change it could not reach incrementally and
+  did a full redraw, which clears the screen *and* the scrollback: every notification
+  destroyed the history behind it, and the message itself was never visible. The painter
+  now takes a screen slice by contract, and the scrollback path slices the frame out first,
+  the same way the modal overlays already did.
 - **A long prompt hid part of itself with no sign, and the status row collided with
   the overflow count** (gh #388 gap 1). The composer drew every line of the prompt, so a
   long one pushed the input frame off the top of the screen; and had anything reported the

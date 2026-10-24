@@ -1165,3 +1165,8 @@ mod caret_row_and_sgr_close;
 // row instead of overwriting each other.
 #[path = "388-status-badge-coexistence.rs"]
 mod status_badge_coexistence;
+
+// Gh #372 bug 1: a toast must never wipe the scrollback. The painter's parameter
+// is a screen slice by contract, and the scrollback path slices the frame out.
+#[path = "372-toast-does-not-wipe-scrollback.rs"]
+mod toast_does_not_wipe_scrollback;
