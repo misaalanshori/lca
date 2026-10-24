@@ -909,6 +909,26 @@ impl Tmux {
         Some(self.capture())
     }
 
+    /// Resize the pane and **wait until the app has laid out at the new size**
+    /// (gh #489).
+    ///
+    /// The old shape was `tmux resize-window` plus a fixed 500 ms sleep. The pty
+    /// takes the new size immediately (a shell inside sees it on the next read),
+    /// but the *application* re-lays-out on SIGWINCH, and that can be delayed by
+    /// whatever else the machine is doing. Idle it measured 8-80 ms; under a full
+    /// parallel suite it can outlast 500 ms, and the row then runs its scenario
+    /// against a 140-wide layout squeezed into a 60-column pane.
+    ///
+    /// That was `e2e_tree_layout`'s three-strike flake, and the captured frame
+    /// proved it: `capture-pane -J` showed a **140-wide** navigator box (chrome
+    /// 140, body rows 124) in a 60x30 pane, with the footer correctly at 59. The
+    /// box windowed over three rows at that width, so the row's third needle was
+    /// genuinely outside the window - not a mid-render read, and not fixed by any
+    /// amount of waiting on the needle.
+    ///
+    /// So the wait is on *the layout*, not on the content: poll until the pane's
+    /// widest painted line fits the requested width. A sleep would be the same
+    /// guess with a bigger number; this observes the thing the row depends on.
     pub fn resize(&self, cols: u32, rows: u32) -> String {
         let out = Self::tmux(&[
             "resize-window",
@@ -924,8 +944,7 @@ impl Tmux {
             "tmux resize-window: {}",
             String::from_utf8_lossy(&out.stderr)
         );
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        self.capture()
+        self.wait_for_layout_width(cols)
     }
 }
 
