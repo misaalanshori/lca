@@ -129,7 +129,7 @@ fn the_degradation_tiers_are_tried_in_order() {
         .expect("tier 2: the spinner alone, so the count still lands");
     let bare = body
         .find("let prefix = 3.min")
-        .expect("tier 3: the bare spinner when the badge cannot be placed");
+        .expect("tier 4: the flush spinner when even the head cannot be placed");
     assert!(
         full < spinner && full_width < spinner,
         "the full status must be measured and tried before dropping to the \

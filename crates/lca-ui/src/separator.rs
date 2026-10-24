@@ -389,8 +389,13 @@ impl Separator {
     /// 1. full status + badge, with at least one dash between them;
     /// 2. spinner-only + badge - the badge survives because the count is
     ///    the only place that information appears;
-    /// 3. spinner-only, when even that does not fit, and then the plain
-    ///    `── ⠋ ──` form for a row too narrow to hold a spinner.
+    /// 3. spinner-only with its spaced head (`── ⠋ ──`), when the badge has
+    ///    nowhere to go but the row is still comfortable;
+    /// 4. spinner-only, flush, for a row too narrow even for the head.
+    ///
+    /// A live side-by-side with pi at 20 columns is what separated 3 from 4:
+    /// pi draws `── ⠼ ────────────` there, not `────⠼─────────`, and the
+    /// difference is pi's `width >= statusWidth + 5` floor.
     ///
     /// Every measurement is `visible_width`, never a byte length: a status
     /// carrying a wide glyph (`日本語`) must not make the fitter lie about
@@ -452,8 +457,24 @@ impl Separator {
             );
         }
 
-        // Tier 3: the badge cannot be placed at all. Keep the spinner, and
-        // give up the `── ` head when even that is too wide.
+        // Tier 3: the badge cannot be placed at all, but the spinner still
+        // has its own headroom - pi's `width >= statusWidth + 5` floor, which
+        // measured 20 columns as still comfortable on a live pane.
+        if width >= spinner_width + 5 {
+            return format!(
+                "{}{}{}",
+                border("── "),
+                only_spinner,
+                border(&format!(
+                    " {}",
+                    "─".repeat(width.saturating_sub(4 + spinner_width))
+                ))
+            );
+        }
+
+        // Tier 4: nothing fits but the glyph. Give up the head entirely and
+        // pad dashes on both sides - the row's one-row contract is the last
+        // thing any width may break.
         let prefix = 3.min(width.saturating_sub(spinner_width));
         format!(
             "{}{}{}",
@@ -770,12 +791,25 @@ mod tests {
             "rung 2 drops the word at 30: {narrow:?}"
         );
 
-        // Rung 3, too narrow for a centered badge at all: spinner only, and
-        // the count is honestly gone rather than misplaced.
+        // Rung 3, too narrow for a centered badge at all: spinner only with
+        // its spaced head - pi's `width >= statusWidth + 5` floor, which
+        // measured 20 columns as still comfortable on a live side-by-side.
+        let spinner_only = plain_at(20);
+        assert!(
+            !spinner_only.contains("more"),
+            "rung 3 drops the count at 20: {spinner_only:?}"
+        );
+        assert!(
+            spinner_only.contains("── "),
+            "rung 3 keeps the spaced head at 20: {spinner_only:?}"
+        );
+
+        // Rung 4, nothing fits but the glyph - the count is honestly gone
+        // rather than misplaced, and the row is still one row.
         let tiny = plain_at(10);
         assert!(
             !tiny.contains("more"),
-            "rung 3 drops the count at 10: {tiny:?}"
+            "rung 4 drops the count at 10: {tiny:?}"
         );
         assert_eq!(visible_width(&tiny), 10, "still one row: {tiny:?}");
     }
