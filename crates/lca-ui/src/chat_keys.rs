@@ -141,8 +141,11 @@ impl Chat {
     /// `tui.altScreen.top` was declared but never acted on, which is how `Home`
     /// came to be claimed by two actions whose matchers disagreed.
     ///
-    /// Returns [`ViewportScroll::Top`] for `tui.altScreen.top` and
-    /// [`ViewportScroll::Bottom`] for `tui.altScreen.bottom`.
+    /// Returns `ViewportScroll::Top` for `tui.altScreen.top`,
+    /// `ViewportScroll::Bottom` for `tui.altScreen.bottom`, and the paging
+    /// variants for `tui.altScreen.pageUp`/`pageDown`. Named without intra-doc
+    /// links because the module is private, so a link to a variant is a
+    /// `private_intra_doc_links` error under `-D warnings`.
     pub fn viewport_scroll(&self, data: &str) -> Option<ViewportScroll> {
         if !self.viewport_owns(data) {
             return None;
