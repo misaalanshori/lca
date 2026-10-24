@@ -236,7 +236,10 @@ for f in docs/*.md; do
   fi
   # (b) A line repeated verbatim across blank lines is a paste artefact: it
   # reads as a stutter and hides which copy is the real one.
-  dup=$(awk '$0!="" { if (prev==$0) print NR": "$0; prev=$0 }' "$f")
+  # Structural lines are excluded: two adjacent code fences are two blocks, two
+  # adjacent `---` are a rule and a deeper rule, and a pipe row legitimately
+  # repeats in a table of similar shapes. The artefact this catches is prose.
+  dup=$(awk '$0!="" && $0!~/^```/ && $0!~/^---$/ && $0!~/^\|/ { if (prev==$0) print NR": "$0; prev=$0 }' "$f")
   if [ -n "$dup" ]; then
     echo "docs-consistency: $f repeats a line verbatim: $dup"
     fail=1
