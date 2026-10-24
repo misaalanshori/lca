@@ -55,6 +55,7 @@ mod run_keybindings;
 mod run_selection;
 mod run_status;
 pub mod separator;
+pub mod startup_header;
 pub mod state;
 mod state_persona;
 mod status;
