@@ -378,9 +378,6 @@ fn visible_width_slow(s: &str) -> usize {
     if s.is_empty() {
         return 0;
     }
-    if let Some(w) = WIDTH_CACHE.with(|c| c.borrow().get(s).copied()) {
-        return w;
-    }
     let mut clean = if s.contains('\t') {
         s.replace('\t', "   ")
     } else {
