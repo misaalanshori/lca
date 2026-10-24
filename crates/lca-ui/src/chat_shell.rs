@@ -68,8 +68,28 @@ impl Chat {
         // is glance-visible instead of being a second `!` to notice.
         self.transcript
             .start_manual_tool_excluding("bash", command.to_string(), excluded);
-        let (tx, rx) = std::sync::mpsc::sync_channel(256);
-        let cancel = run_shell(command, excluded, tx);
+        // Gh #370 flaw 1: a chunk arriving here must wake the loop. With a waker (the
+        // real interface) the wake rides a forwarder thread beside the channel, since
+        // the runner's signature hands out a plain `SyncSender` and the wake has to
+        // happen *after* each enqueue. Without one (a test, an embedder) the channel
+        // is handed over directly, so nothing is asynchronous that was not before.
+        let (worker_tx, worker_rx) = std::sync::mpsc::sync_channel(256);
+        let rx = match self.world.waker.clone() {
+            Some(waker) => {
+                let (loop_tx, loop_rx) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    while let Ok(event) = worker_rx.recv() {
+                        if loop_tx.send(event).is_err() {
+                            return;
+                        }
+                        waker.wake();
+                    }
+                });
+                loop_rx
+            }
+            None => worker_rx,
+        };
+        let cancel = run_shell(command, excluded, worker_tx);
         self.shell = Some(ShellRun {
             output: rx,
             cancel,

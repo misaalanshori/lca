@@ -12,6 +12,11 @@ use crate::state::{
 pub struct UiState {
     /// Static inputs.
     pub options: UiOptions,
+    /// The loop's wake channel (gh #370 flaw 1): a producer that enqueues something
+    /// visible signals this **after** the enqueue, so the loop does not have to wait
+    /// out its tick. `None` until the loop installs it, which is what a test or an
+    /// embedder with no loop looks like - the tick then covers everything.
+    pub waker: Option<crate::run_wake::Waker>,
     /// The open permission modal, if any.
     pub permission: Option<PermissionModal>,
     /// The open masked secret prompt, if any (`/login`).
@@ -75,6 +80,7 @@ impl UiState {
         options.workspace = workspace;
         UiState {
             options,
+            waker: None,
             permission: None,
             secret: None,
             picker: None,
