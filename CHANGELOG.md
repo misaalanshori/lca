@@ -6,6 +6,16 @@ Dates are UTC.
 
 ## [Unreleased]
 
+### Fixed
+- **In fullscreen, everything below the session tab bar was one row out** (gh
+  #331). The tab bar owns the top row, and four separate places computed the
+  transcript window without taking it off — so a click on a tool card or reasoning
+  run landed on the row above it, the scrollbar's `▲` never fired, the maximum
+  scroll was one row short of the content, and a hover over a tool header described
+  the card below it. They are now one calculation: the window is the terminal height
+  minus the dock minus the tab rows, and a click or hover row is offset once, in one
+  place. Scrollback mode has no bar above the transcript, so nothing there moved.
+
 ### Added
 - **The startup header shows the LCA logo** (gh #399). Three lines: the mark
   beside `v<version> (abi <abi>)`, a line of key hints, and a line telling you how
