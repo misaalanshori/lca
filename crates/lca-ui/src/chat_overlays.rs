@@ -11,6 +11,26 @@ use crate::chat_pickers::TRUST_OPTIONS;
 // per picker, instead of leaving that surprising. Every picker overlay is
 // composed through [`Chat::picker_overlay`], so a new picker gets the row too.
 const HINT_MOVE: &str = "↑↓ move · enter apply · esc close";
+
+/// The `/model` and `/thinking` pickers' hint (gh #396): both support saving a
+/// default, so both must say so - and the one that already did must keep saying
+/// it. Built from the **live** keybindings (gh #410), so a rebind of
+/// `app.models.save` / `app.thinking.save` reaches the row a user reads; a host
+/// that unbinds it drops the clause rather than naming a dead key.
+pub(crate) fn save_hint(
+    keybindings: &lca_tui::engine::keybindings::KeybindingsManager,
+    action: &str,
+    filter: bool,
+) -> String {
+    let key = keybindings.display_keys(action);
+    let save = if key.is_empty() {
+        String::new()
+    } else {
+        format!(" · {key} set as default")
+    };
+    let tail = if filter { " · type to filter" } else { "" };
+    format!("↑↓ move · enter select{save} · esc cancel{tail}")
+}
 const HINT_FILTER: &str = "↑↓ move · enter apply · esc close · type to filter";
 /// The cells the tree's cursor prefix takes from a row (`" > "`).
 const TREE_ROW_INSET: usize = 3;
@@ -434,7 +454,7 @@ impl Chat {
                 height,
                 "thinking",
                 &body,
-                HINT_MOVE,
+                &save_hint(&self.keybindings, "app.thinking.save", false),
                 &self.theme,
                 Some(2 + picker.selected),
             );
@@ -545,7 +565,8 @@ impl Chat {
                 body.push("  (no matches)".to_string());
             }
             for (row, index) in picker.matches.iter().enumerate() {
-                let (raw_id, label) = &picker.models[*index];
+                let entry = &picker.models[*index];
+                let (raw_id, label) = (&entry.id, &entry.label);
                 if label.trim().is_empty() {
                     continue;
                 }
@@ -572,7 +593,7 @@ impl Chat {
                 height,
                 "model",
                 &body,
-                HINT_FILTER,
+                &save_hint(&self.keybindings, "app.models.save", true),
                 &self.theme,
                 (!picker.matches.is_empty()).then_some(2 + picker.selected),
             );

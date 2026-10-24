@@ -43,8 +43,8 @@ pub(crate) fn options() -> UiOptions {
         invoke_command: Arc::new(|_, _| CommandEffect::None),
         slash_commands: vec!["/help".into(), "/model".into(), "/login".into()],
         models: vec![
-            ("alpha".into(), "alpha".into()),
-            ("beta".into(), "beta".into()),
+            crate::ModelRow::from(("alpha".into(), "alpha".into())),
+            crate::ModelRow::from(("beta".into(), "beta".into())),
         ],
         workspace: PathBuf::from("."),
         keybinding_overrides: Default::default(),
@@ -153,10 +153,10 @@ fn argument_completion_offers_models() {
 #[test]
 fn model_completion_inserts_the_raw_id_and_shows_the_label() {
     let mut options = options();
-    options.models = vec![(
+    options.models = vec![crate::ModelRow::from((
         "deepseek-v4.1-flash".to_string(),
         "deepseek-v4.1-flash (openai-compatible)".to_string(),
-    )];
+    ))];
     let mut chat = Chat::new(options, Arc::new(KeybindingsManager::new()));
     for c in "/model deep".chars() {
         chat.handle_key(&c.to_string());
@@ -310,8 +310,8 @@ fn paste_into_the_secret_field_decodes_the_csi_u_dialect() {
 fn paste_into_the_model_picker_search_filters_the_list() {
     let mut chat = chat();
     chat.model_picker = Some(ModelPicker::new(vec![
-        ("alpha-1".into(), "alpha-1".into()),
-        ("beta-2".into(), "beta-2".into()),
+        crate::ModelRow::from(("alpha-1".into(), "alpha-1".into())),
+        crate::ModelRow::from(("beta-2".into(), "beta-2".into())),
     ]));
     chat.handle_key(&bracketed("beta"));
     let picker = chat.model_picker.as_ref().expect("picker");
@@ -570,10 +570,9 @@ fn ctrl_x_names_the_sign_in_url_or_the_last_assistant_message() {
     );
 
     // While a picker owns the keyboard, Ctrl+X is the picker's key.
-    chat.model_picker = Some(crate::chat_pickers::ModelPicker::new(vec![(
-        "m".to_string(),
-        "m".to_string(),
-    )]));
+    chat.model_picker = Some(crate::chat_pickers::ModelPicker::new(vec![
+        crate::ModelRow::from(("m".to_string(), "m".to_string())),
+    ]));
     assert!(
         !chat.message_copy_key("\x18"),
         "a picker owns the keyboard, so the key is not a copy"
@@ -696,16 +695,16 @@ fn the_live_model_hook_feeds_the_picker() {
     let mut options = options();
     options.hooks.models = Some(Arc::new(|| {
         vec![
-            ("live-a".to_string(), "live-a".to_string()),
-            ("live-b".to_string(), "live-b (some-provider)".to_string()),
+            crate::ModelRow::from(("live-a".to_string(), "live-a".to_string())),
+            crate::ModelRow::from(("live-b".to_string(), "live-b (some-provider)".to_string())),
         ]
     }));
     let mut chat = Chat::new(options, Arc::new(KeybindingsManager::new()));
     assert_eq!(
         chat.model_rows(),
         vec![
-            ("live-a".to_string(), "live-a".to_string()),
-            ("live-b".to_string(), "live-b (some-provider)".to_string()),
+            crate::ModelRow::from(("live-a".to_string(), "live-a".to_string())),
+            crate::ModelRow::from(("live-b".to_string(), "live-b (some-provider)".to_string())),
         ]
     );
     for c in "/model".chars() {
@@ -1137,3 +1136,9 @@ mod key_hint_tests;
 // needs (`chat()`) is here and `chat_tests.rs` is near the line ceiling.
 #[path = "chat_compaction_tests.rs"]
 mod compaction_tests;
+
+// Gh #396: `/thinking`'s save-as-default and the two pickers' footer hints. In its
+// own file because the fixture it needs (`chat()`) is here and this file is near
+// the line ceiling.
+#[path = "chat_thinking_save_tests.rs"]
+mod thinking_save_tests;

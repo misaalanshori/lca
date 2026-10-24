@@ -70,12 +70,12 @@ fn inner_provider_for(options: &UiOptions) -> CombinedAutocompleteProvider {
                     Some(Arc::new(move |prefix: &str| {
                         models
                             .iter()
-                            .filter(|(id, _)| id.starts_with(prefix))
-                            .map(|(id, label)| AutocompleteItem {
+                            .filter(|entry| entry.id.starts_with(prefix))
+                            .map(|entry| AutocompleteItem {
                                 // The insert is the raw id; only the menu
                                 // row shows the label (G2).
-                                value: id.clone(),
-                                label: label.clone(),
+                                value: entry.id.clone(),
+                                label: entry.label.clone(),
                                 description: None,
                                 origin: None,
                                 dim: false,

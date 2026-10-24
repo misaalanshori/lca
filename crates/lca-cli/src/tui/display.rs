@@ -5,10 +5,14 @@
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
-use lca_protocol::{CommandEffect, Record};
+use lca_protocol::Record;
 use lca_session::{Session, SessionStore, ViewMode};
 
-use super::ModelChoice;
+#[cfg(test)]
+pub(super) use super::model_rows::model_picker_text;
+pub(super) use super::model_rows::{model_effect_on, model_label, model_rows};
+#[cfg(test)]
+use lca_protocol::CommandEffect;
 
 // gh #402: declared here rather than in `mod.rs` so that file stays untouched
 // (`hooks.rs` and `attach.rs` are Worker 2's, and `mod.rs` sits at the ceiling).
@@ -30,58 +34,18 @@ pub(super) fn age_label(now_ms: u64, then_ms: u64) -> String {
     }
 }
 
-/// The model picker's text: every model the active provider offers,
-/// the active one marked (FR-PROV-2 at the interface).
-pub(super) fn model_picker_text(
-    models: &[lca_protocol::ModelInfo],
-    current: &str,
-    provider: &str,
-) -> String {
-    if models.is_empty() {
-        return "no models are offered - no provider is ready; run /login".to_string();
-    }
-    let active = if current.is_empty() { "none" } else { current };
-    let mut lines = vec![format!("models offered (active: {active}):")];
-    for model in models {
-        let marker = if model.id == current { " (active)" } else { "" };
-        // A model from another provider names it (gh #177); the active
-        // provider's own rows read as they always did.
-        let origin = match model.extras.get("provider") {
-            Some(origin) if origin != provider => format!(" ({origin})"),
-            _ => String::new(),
-        };
-        // The bundled provider's name repeats its id; don't print it twice.
-        let label = if model.name == model.id {
-            String::new()
-        } else {
-            format!(" - {}", model.name)
-        };
-        lines.push(format!("  {}{marker}{origin}{label}", model.id));
-    }
-    lines.push("set one with /model <id>".to_string());
-    lines.join("\n")
-}
-
-/// One `/model` row for a provider's list: the raw id, and pi's
-/// `model (provider)` label for it (issue #3). Both hosts that build a
-/// model list - the live `hooks.models` hook and the startup
-/// `UiOptions.models` snapshot - go through here, so the decoration rule
-/// exists once and only the label half ever carries it (G2: labels are
-/// display-only; selection, completion inserts, resolution, session
-/// metadata, and provider calls keep the raw id).
-pub(super) fn model_rows(
-    models: &[lca_protocol::ModelInfo],
-    provider: &str,
-) -> Vec<lca_ui::ModelRow> {
-    models
-        .iter()
-        .filter_map(|model| model_label(model, provider))
-        .collect()
-}
-
-/// The `(id, label)` halves of [`model_rows`] for one model (gh #204):
-/// the checklist reuses the label rule without the list shape. `None`
-/// for a blank id.
+/// A counted cache miss's notice text, if there is news (gh #42, gh #402):
+/// `None` when notices are off or no *new cause* has landed.
+///
+/// gh #402 makes the notice name **why**. Before it, the text said only "N tokens
+/// re-billed", so a user watching the footer's ratio fall had no way to learn that
+/// a skill had matched or that their project instructions had changed. The cause is
+/// read from the signals the measurement already recorded - see
+/// [`cache_cause::attribute`], the single place that decides, so the notice and
+/// `/session` cannot tell two stories about one miss.
+///
+/// **Once per cause, not once per turn.** `seen` holds the causes already
+/// reported: a repeat is silent, and a cause not yet reported re-arms.
 /// The notice `/persona` reports after applying a bundle (gh #412 design point 3).
 ///
 /// It names the bundle as **applied** - model, level, loadout - rather than a diff
@@ -94,111 +58,6 @@ pub(super) fn persona_notice(bundle: &lca_ui::PersonaBundle) -> String {
         bundle.name,
         lca_ui::chat_persona::summary(bundle)
     )
-}
-
-pub(super) fn model_label(
-    model: &lca_protocol::ModelInfo,
-    provider: &str,
-) -> Option<(String, String)> {
-    let id = model.id.trim();
-    if id.is_empty() {
-        return None;
-    }
-    Some(if id.contains('/') {
-        // Already provider-qualified: printing it twice helps nobody.
-        (id.to_string(), id.to_string())
-    } else {
-        // gh #177: a model from another provider names that
-        // provider. gh #31: the row names the service that will
-        // bill the call. The provider says so per model - in
-        // `extras`, the carrier the WIT record already had - and
-        // the caller's provider name is only the fallback for a
-        // provider that carries no per-model identity (a bundled
-        // or fake one).
-        let foreign = model
-            .extras
-            .get("provider")
-            .filter(|origin| *origin != provider);
-        let label = foreign
-            .map(String::as_str)
-            .or_else(|| model.extras.get("label").map(String::as_str));
-        match label {
-            Some(label) => (id.to_string(), format!("{id} ({label})")),
-            None => (id.to_string(), format!("{id} ({provider})")),
-        }
-    })
-}
-
-/// One `/model` invocation: no argument lists (the picker), a known
-/// argument switches the session's model everywhere it is read, an
-/// unknown one refuses with the real alternatives. The cells are
-/// optional only so the listing and refusal paths stay testable
-/// without a live session.
-pub(super) fn model_effect_on(
-    models: &[lca_protocol::ModelInfo],
-    provider_name: &str,
-    active_provider: &str,
-    argument: &str,
-    model_cell: Option<&Arc<Mutex<ModelChoice>>>,
-    label_cell: Option<&Arc<Mutex<String>>>,
-    backend: Option<&Arc<lca_core::ext_provider::ProviderBackend>>,
-) -> CommandEffect {
-    let argument = argument.trim();
-    if argument.is_empty() {
-        let current = model_cell
-            .map(|cell| {
-                cell.lock()
-                    .unwrap_or_else(|err| err.into_inner())
-                    .id
-                    .clone()
-            })
-            .unwrap_or_default();
-        return CommandEffect::ShowWidget(model_picker_text(models, &current, active_provider));
-    }
-    // EFG-041: `/model <arg>` resolves like `--model` does - exact id,
-    // `profile/id`, then a fuzzy substring (gh #8's `resolve_pattern`,
-    // one resolver for both surfaces). The id that lands in the cell is
-    // the resolved one; a pattern nothing matches stays the id the user
-    // typed, and the refusal below is what says it is not offered here.
-    let target = crate::models::resolve_pattern(argument, models)
-        .map(|resolved| resolved.id)
-        .unwrap_or_else(|_| argument.to_string());
-    match models.iter().find(|model| model.id == target) {
-        Some(model) => {
-            if let Some(cell) = model_cell {
-                let mut current = cell.lock().unwrap_or_else(|err| err.into_inner());
-                current.id = model.id.clone();
-                current.window = model.context_window;
-            }
-            if let Some(label) = label_cell {
-                // gh #31: after a switch the footer names the service
-                // that will answer for *this* model - its own label out
-                // of `extras`, with the caller's provider name only for
-                // a model that carries no per-model identity.
-                let service = model
-                    .extras
-                    .get("label")
-                    .map(String::as_str)
-                    .unwrap_or(provider_name);
-                *label.lock().unwrap_or_else(|err| err.into_inner()) =
-                    format!("{service}/{}", model.id);
-            }
-            if let Some(backend) = backend {
-                backend.set_model(model.id.clone());
-            }
-            CommandEffect::ShowWidget(format!(
-                "model for this session: {provider_name}/{}",
-                model.id
-            ))
-        }
-        None => {
-            let offered: Vec<&str> = models.iter().map(|model| model.id.as_str()).collect();
-            CommandEffect::ShowWidget(format!(
-                "no model named `{argument}` for {provider_name}; offered: {}",
-                offered.join(", ")
-            ))
-        }
-    }
 }
 
 /// The stats story (FR-UI-19): the same numbers the footer accumulates,
@@ -225,18 +84,6 @@ impl super::Ui {
     }
 }
 
-/// A counted cache miss's notice text, if there is news (gh #42, gh #402):
-/// `None` when notices are off or no *new cause* has landed.
-///
-/// gh #402 makes the notice name **why**. Before it, the text said only "N tokens
-/// re-billed", so a user watching the footer's ratio fall had no way to learn that
-/// a skill had matched or that their project instructions had changed. The cause is
-/// read from the signals the measurement already recorded - see
-/// [`cache_cause::attribute`], the single place that decides, so the notice and
-/// `/session` cannot tell two stories about one miss.
-///
-/// **Once per cause, not once per turn.** `seen` holds the causes already
-/// reported: a repeat is silent, and a cause not yet reported re-arms.
 pub(super) fn miss_notice_for(
     store: &SessionStore,
     session: &Session,
@@ -777,26 +624,27 @@ mod tests {
             },
         ];
         let rows = model_rows(&offered, "openai-compatible");
+        assert_eq!(rows[0].id, "mimo-v2.6-flash");
         assert_eq!(
-            rows[0],
-            (
-                "mimo-v2.6-flash".to_string(),
-                "mimo-v2.6-flash (opencode-go)".to_string()
-            ),
+            rows[0].label, "mimo-v2.6-flash (opencode-go)",
             "the service that will bill the call names the row"
         );
+        // Gh #396: the provider is a field so the search can use it - and it is the
+        // *provider* (`openai-compatible`), not the display label `opencode-go`,
+        // which is a brand name on the row and not who bills the call.
         assert_eq!(
-            rows[1],
-            (
-                "plain-model".to_string(),
-                "plain-model (openai-compatible)".to_string()
-            ),
+            rows[0].provider, "openai-compatible",
+            "the searchable provider is who bills, not the display label"
+        );
+        assert_eq!(rows[1].id, "plain-model");
+        assert_eq!(
+            rows[1].label, "plain-model (openai-compatible)",
             "a model with no per-model identity falls back to the provider"
         );
         // Selection is untouched by any of it: the id stays raw.
         for row in &rows {
             let picker = lca_ui::ModelPicker::new(vec![row.clone()]);
-            assert_eq!(picker.selected_model(), Some(row.0.as_str()));
+            assert_eq!(picker.selected_model(), Some(row.id.as_str()));
         }
     }
 
@@ -811,25 +659,19 @@ mod tests {
         let rows = model_rows(&offered, "openai-compatible");
 
         // Direction one: id -> label.
+        assert_eq!(rows[0].id, "deepseek-v4.1-flash");
         assert_eq!(
-            rows[0],
-            (
-                "deepseek-v4.1-flash".to_string(),
-                "deepseek-v4.1-flash (openai-compatible)".to_string()
-            ),
+            rows[0].label, "deepseek-v4.1-flash (openai-compatible)",
             "a bare id gets the provider label"
         );
+        assert_eq!(rows[1].id, "org/qualified");
         assert_eq!(
-            rows[1],
-            ("org/qualified".to_string(), "org/qualified".to_string()),
+            rows[1].label, "org/qualified",
             "a provider-qualified id is not decorated twice"
         );
+        assert_eq!(rows[2].id, "weird (v2)");
         assert_eq!(
-            rows[2],
-            (
-                "weird (v2)".to_string(),
-                "weird (v2) (openai-compatible)".to_string()
-            ),
+            rows[2].label, "weird (v2) (openai-compatible)",
             "an id containing its own parenthesis decorates without losing text"
         );
 
@@ -839,11 +681,14 @@ mod tests {
             let picker = lca_ui::ModelPicker::new(vec![row.clone()]);
             assert_eq!(
                 picker.selected_model(),
-                Some(row.0.as_str()),
+                Some(row.id.as_str()),
                 "selection returns the raw id of {}",
-                row.1
+                row.label
             );
-            assert_eq!(picker.models[0].1, row.1, "the label shows as built");
+            assert_eq!(
+                picker.models[0].label, row.label,
+                "the label shows as built"
+            );
         }
 
         // The decorated label stays searchable, and so does the raw id.
@@ -894,11 +739,11 @@ mod tests {
         ];
         let rows = model_rows(&offered, "openai-compatible");
         assert_eq!(
-            rows[0].1, "gpt-5.4-mini (codex)",
+            rows[0].label, "gpt-5.4-mini (codex)",
             "the foreign row names its provider"
         );
         assert_eq!(
-            rows[1].1, "home-model (openai-compatible)",
+            rows[1].label, "home-model (openai-compatible)",
             "the home row keeps the old fallback label"
         );
         let text = model_picker_text(&offered, "home-model", "openai-compatible");

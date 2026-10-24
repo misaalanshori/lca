@@ -46,8 +46,8 @@ fn chat() -> Chat {
             invoke_command: Arc::new(|_, _| lca_protocol::CommandEffect::None),
             slash_commands: vec!["/help".into(), "/model".into()],
             models: vec![
-                ("alpha".to_string(), "alpha".to_string()),
-                ("beta".to_string(), "beta".to_string()),
+                lca_ui::ModelRow::from(("alpha".to_string(), "alpha".to_string())),
+                lca_ui::ModelRow::from(("beta".to_string(), "beta".to_string())),
             ],
             workspace: PathBuf::from("."),
             keybinding_overrides: Default::default(),

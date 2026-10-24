@@ -1092,3 +1092,12 @@ mod compaction_card_collapses;
 // are listed in the batch report.
 #[path = "395-fork-tree.rs"]
 mod fork_tree;
+
+// GitHub #396: the `/model` search ranks the real model above the proxies that
+// resell it, and `/thinking` gains the save-as-default that `/model` already had.
+// These rows guard the shapes a behaviour row cannot see: that the search no longer
+// matches the display label, that the ranking is scored and stably sorted, that the
+// thinking default uses the one persistence path, and that both pickers advertise
+// the save from their live bindings.
+#[path = "396-model-search-and-thinking-default.rs"]
+mod model_search_and_thinking_default;

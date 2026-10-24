@@ -261,6 +261,22 @@ impl Ui {
             //   *that* model, every tool registered. It writes nothing.
             // - `persona_apply` runs only after a clean check, and writes through
             //   the same paths `/model`, `/thinking` and the tool gate use.
+            // Gh #396: mirrors `save_default_model` exactly - one key, one
+            // notice shape, the same `persist_setting`. `thinking` is the startup
+            // default (`Config::thinking`), so `None` (the picker's "unset")
+            // removes the key and the provider decides.
+            save_default_thinking: Some(Arc::new(
+                |level: Option<&str>| match crate::persist_setting("thinking", level) {
+                    Ok(()) => match level {
+                        Some(level) => {
+                            format!("default thinking saved: {level} - new sessions start here")
+                        }
+                        None => "default thinking cleared: new sessions use the provider default"
+                            .to_string(),
+                    },
+                    Err(err) => format!("could not save the default thinking level: {err}"),
+                },
+            )),
             save_default_model: Some(Arc::new(|id: &str| {
                 // One key: `model` is the startup default
                 // (`resolve_model_id`), the provider extension is the
@@ -335,10 +351,10 @@ impl Ui {
                     ui.all_models()
                         .iter()
                         .filter_map(|model| {
-                            let (id, label) = super::display::model_label(model, &live)?;
+                            let row = super::display::model_label(model, &live)?;
                             Some(lca_ui::state::ScopedModelRow {
-                                id,
-                                label,
+                                id: row.id,
+                                label: row.label,
                                 context: model.context_window,
                                 enabled: crate::models::in_scope(model, &scope),
                             })

@@ -6,6 +6,23 @@ Dates are UTC.
 
 ## [Unreleased]
 
+### Fixed
+- **`/model` search ranks the real model above the proxies that resell it**
+  (gh #396). Searching the display label meant `openrouter/openai/gpt-5` outranked
+  the direct `openai/gpt-5`, because the proxy's label contains the model's whole
+  name; it also missed transpositions like `4ogpt`. The search now scores the model's
+  **identity** (provider, `provider/id`, bare id) provider-first — pi's
+  `getModelSelectorSearchText` shape — so an exact id beats a prefix beats a fuzzy
+  hit, and `4ogpt` finds `gpt-4o`. Multi-token queries (`4o gpt`) match across the
+  fields, and the unfiltered list has a defined order: the current model, then the
+  saved default, then alphabetical.
+
+- **`/thinking` gains save-as-default, and both pickers say so** (gh #396). A
+  thinking choice was session-only with no route to a default while `/model` had
+  `Ctrl+S`; the thinking picker now saves through the same key, the same
+  `persist_setting` call, and the same hint row. The hint is built from the live
+  keybindings on both pickers, so a rebind reaches the row a reader sees.
+
 ### Changed
 - **A compaction summary is now one collapsed card, not a wall of text** (gh #393).
   Each compaction renders as a single line naming its strategy, the record range it

@@ -212,9 +212,11 @@ pub struct HubRow {
 /// pi's `model-selector.ts` shape (minus the catalog refresh, which the
 /// host does at startup).
 pub struct ModelPicker {
-    /// Every offered row: `(raw id, display label)`. Selection returns the
-    /// id; rendering shows the label (G2: labels are display-only).
-    pub models: Vec<crate::state::ModelRow>,
+    /// Every offered row, with the provider its search needs (gh #396).
+    /// Selection returns the id; rendering shows the label (G2: labels are
+    /// display-only - which is why the label could not be searched as the
+    /// identity).
+    pub models: Vec<crate::chat_model_search::ModelEntry>,
     /// The typed search query.
     pub query: String,
     /// The indices into `models` that match.
@@ -232,7 +234,7 @@ pub struct ModelPicker {
 }
 
 impl ModelPicker {
-    /// Open the picker over a list of `(id, label)` rows.
+    /// Open the picker over `(id, label, provider)` rows (gh #396).
     pub fn new(models: Vec<crate::state::ModelRow>) -> ModelPicker {
         let matches = (0..models.len()).collect();
         ModelPicker {
@@ -258,20 +260,39 @@ impl ModelPicker {
         true
     }
 
-    /// Re-filter after a query change, keeping the selection in range. The
-    /// label starts with the id, so matching on it covers both.
+    /// Re-filter after a query change, keeping the selection in range.
+    ///
+    /// Gh #396: the match is over the model's **identity** (provider, `provider/id`,
+    /// bare id) and the result is **scored**, not merely filtered. The old
+    /// `label.contains(query)` could not tell `openai/gpt-5` from
+    /// `openrouter/openai/gpt-5` - the proxy's label contains the direct entry's
+    /// whole name - and it could not see a transposition.
     pub fn refilter(&mut self) {
-        let needle = self.query.to_lowercase();
-        self.matches = self
-            .models
-            .iter()
-            .enumerate()
-            .filter(|(_, (_, label))| label.to_lowercase().contains(&needle))
-            .map(|(index, _)| index)
-            .collect();
+        self.matches = crate::chat_model_search::rank(&self.models, &self.query);
         if self.selected >= self.matches.len() {
             self.selected = self.matches.len().saturating_sub(1);
         }
+    }
+
+    /// Apply the defined unfiltered order (current, then default, then
+    /// alphabetical) and clear the query (gh #396 rule 4).
+    ///
+    /// Called when the picker opens and when a query is cleared, so the order a
+    /// reader sees is defined rather than "whatever order the catalog arrived in".
+    pub fn reset_order(&mut self, current: Option<&str>, default: Option<&str>) {
+        let ordered = crate::chat_model_search::default_order(&self.models, current, default);
+        let mut reordered: Vec<crate::chat_model_search::ModelEntry> =
+            Vec::with_capacity(ordered.len());
+        for index in &ordered {
+            if let Some(entry) = self.models.get(*index) {
+                reordered.push(entry.clone());
+            }
+        }
+        self.models = reordered;
+        self.query.clear();
+        self.refilter();
+        // The current model leads the unfiltered list, so its row is the start.
+        self.selected = 0;
     }
 
     /// The highlighted row's raw id, when any: what selection passes on.
@@ -279,7 +300,7 @@ impl ModelPicker {
         self.matches
             .get(self.selected)
             .and_then(|index| self.models.get(*index))
-            .map(|(id, _)| id.as_str())
+            .map(|entry| entry.id.as_str())
     }
 }
 

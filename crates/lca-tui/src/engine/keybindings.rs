@@ -229,6 +229,18 @@ pub fn tui_keybindings() -> &'static [(&'static str, KeybindingDefinition)] {
                 "Save the selected model as the default for new sessions"
             ),
         ),
+        // Gh #396: the `/thinking` picker's save-as-default, pi's
+        // `app.thinking.save` (`thinking-selector.ts`). The same `ctrl+s` the
+        // model picker uses, because they are the same gesture in the same kind
+        // of picker - a second key for one idea is the drift this repo keeps
+        // closing.
+        (
+            "app.thinking.save",
+            def!(
+                &["ctrl+s"],
+                "Save the selected thinking level as the default for new sessions"
+            ),
+        ),
         (
             "app.model.cycleBackward",
             // pi's map: `shift+ctrl+p`, with `alt+p` where a terminal
@@ -759,12 +771,23 @@ mod tests {
         );
     }
 
-    // Verifies: gh #8 phase 2 (pi's `app.models.save`) - Ctrl+S is the
-    // picker's save-default key, and no other default action claims it.
+    // Verifies: gh #8 phase 2 (pi's `app.models.save`) and gh #396 (pi's
+    // `app.thinking.save`) - Ctrl+S is the **save-as-default** key, and every
+    // action that claims it is a picker's save.
+    //
+    // Gh #396 sanctioned change: this row used to assert exactly one claimant.
+    // There are now two, and that is correct rather than a collision: the two
+    // pickers cannot be open at once (`/model` and `/thinking` each open their own
+    // and `Chat::picker_open` dispatches to whichever is up), so the key is never
+    // ambiguous at runtime. What the row must still forbid is a claimant that is
+    // *not* a save gesture - that would be a genuine conflict. The exclusion
+    // itself is pinned in `lca-ui` (`the_two_save_actions_belong_to_mutually_
+    // exclusive_pickers`), where the pickers live.
     #[test]
-    fn ctrl_s_is_pis_save_default_and_is_claimed_once() {
+    fn ctrl_s_is_pis_save_default_and_no_other_kind_of_action_claims_it() {
         let kb = KeybindingsManager::new();
         assert!(kb.matches("\x13", "app.models.save"));
+        assert!(kb.matches("\x13", "app.thinking.save"));
         let claimants: Vec<&str> = tui_keybindings()
             .iter()
             .filter(|(_, def)| def.default_keys.contains(&"ctrl+s"))
@@ -772,9 +795,15 @@ mod tests {
             .collect();
         assert_eq!(
             claimants,
-            vec!["app.models.save"],
-            "one action claims Ctrl+S"
+            vec!["app.models.save", "app.thinking.save"],
+            "exactly the two picker saves claim Ctrl+S"
         );
+        for name in &claimants {
+            assert!(
+                name.ends_with(".save"),
+                "{name} claims Ctrl+S but is not a save-default gesture"
+            );
+        }
     }
 
     // Verifies: gh #9 (pi 1.0.0's `app.message.copy`) - Ctrl+X answers

@@ -16,8 +16,10 @@ fn a_tall_model_picker_pages_with_frame_and_selection_visible() {
     use crate::chat_pickers::ModelPicker;
     let mut chat = chat();
     chat.screen_mode = true;
-    let models: Vec<(String, String)> = (0..50)
-        .map(|index| (format!("model-{index:02}"), format!("model-{index:02}")))
+    let models: Vec<crate::ModelRow> = (0..50)
+        .map(|index| {
+            crate::ModelRow::from((format!("model-{index:02}"), format!("model-{index:02}")))
+        })
         .collect();
     chat.model_picker = Some(ModelPicker::new(models));
     let (w, h) = (80u16, 24u16);
@@ -36,7 +38,12 @@ fn a_tall_model_picker_pages_with_frame_and_selection_visible() {
     assert!(text.contains("model-30"), "the paged-to row shows");
     assert!(text.contains("▲"), "more above now");
     assert!(text.contains("▼"), "more below still");
-    assert!(text.contains("enter apply"), "the hint row stays");
+    // Gh #396 sanctioned change: the hint now says `enter select` (pi's wording in
+    // `model-selector.ts`: "to select · ... to set as default · ... to cancel") and
+    // names the save key, because the model picker supports saving a default. The
+    // property this row pins - the hint row stays visible while paging - is
+    // unchanged.
+    assert!(text.contains("enter select"), "the hint row stays");
 
     let _ = chat.handle_picker_key("", Some("end"));
     assert_eq!(chat.model_picker.as_ref().unwrap().selected, 49);
@@ -51,8 +58,8 @@ fn a_tall_model_picker_pages_with_frame_and_selection_visible() {
 fn paging_keys_and_wheel_step_selection() {
     use crate::chat_pickers::ModelPicker;
     let mut chat = chat();
-    let models: Vec<(String, String)> = (0..50)
-        .map(|index| (format!("m{index:02}"), format!("m{index:02}")))
+    let models: Vec<crate::ModelRow> = (0..50)
+        .map(|index| crate::ModelRow::from((format!("m{index:02}"), format!("m{index:02}"))))
         .collect();
     chat.model_picker = Some(ModelPicker::new(models));
     let selected = |chat: &Chat| chat.model_picker.as_ref().unwrap().selected;
@@ -81,8 +88,8 @@ fn a_click_maps_through_the_scroll_offset() {
     use crate::chat_pickers::ModelPicker;
     let mut chat = chat();
     chat.screen_mode = true;
-    let models: Vec<(String, String)> = (0..50)
-        .map(|index| (format!("m{index:02}"), format!("m{index:02}")))
+    let models: Vec<crate::ModelRow> = (0..50)
+        .map(|index| crate::ModelRow::from((format!("m{index:02}"), format!("m{index:02}"))))
         .collect();
     chat.model_picker = Some(ModelPicker::new(models));
     chat.model_picker.as_mut().unwrap().selected = 30;
@@ -140,8 +147,8 @@ fn settings_paging_keys_jump_and_step_selection() {
 #[test]
 fn hover_inside_the_window_highlights_without_scrolling() {
     use crate::chat_pickers::ModelPicker;
-    let models: Vec<(String, String)> = (0..50)
-        .map(|i| (format!("m{i:02}"), format!("model {i:02}")))
+    let models: Vec<crate::ModelRow> = (0..50)
+        .map(|i| crate::ModelRow::from((format!("m{i:02}"), format!("model {i:02}"))))
         .collect();
     let mut chat = chat();
     chat.screen_mode = true;
