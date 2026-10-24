@@ -12,7 +12,12 @@
 //! search feels slow; the near-directory pass is what makes completion feel
 //! immediate.
 
+pub mod token;
 pub mod trigger;
+
+#[cfg(test)]
+#[path = "autocomplete/attachment_tests.rs"]
+mod attachment_tests;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -86,8 +91,19 @@ impl CombinedAutocompleteProvider {
 
 impl AutocompleteProvider for CombinedAutocompleteProvider {
     fn get_suggestions(&self, text: &str, force: bool) -> Option<Suggestions> {
-        // `@` attachment prefix.
-        if let Some(query) = text.strip_prefix('@') {
+        // `@` attachment prefix (gh #380 gap 1). The token is extracted
+        // against a named delimiter set - line start, ASCII whitespace and
+        // CJK punctuation - rather than `strip_prefix('@')`, which only
+        // matched at column 0 and so made the feature work in the one
+        // position a user rarely types it. `token::attachment_query` also
+        // refuses an `@` that is inside a word, which is what keeps an
+        // email address from opening a file menu.
+        //
+        // `/` stays line-start-only on purpose and the asymmetry is the
+        // design (`token`'s module doc): a mid-sentence `/` in `https://…`
+        // or `src/index.ts` must never open a command menu. Nothing here
+        // touches the slash branch below.
+        if let Some(query) = token::attachment_query(text) {
             return Some(fuzzy_files(query, &self.base_path));
         }
         // Slash context.

@@ -27,8 +27,11 @@ here? Install first ([installation](installation.md)), then come back.
 
 The editor holds one message. `Enter` sends it; `Shift+Enter` inserts
 a newline (or `Ctrl+J` where the terminal eats modified keys).
-`Tab` completes file paths. `!command` runs a shell command and
-sends its output with your message; `!!command` runs one the model
+`Tab` completes file paths. An `@` anywhere a word starts completes
+file paths too — `Check @src/m`, `(@src/m` and `请查看，@src/m` all work —
+while a `/` only opens the command menu at the start of a message, so a
+url or a path you type mid-sentence never raises one. `!command` runs a
+shell command and sends its output with your message; `!!command` runs one the model
 never sees. The card says which one you ran: `!bash …` in the accent
 color, `!!bash …` quiet, so the context boundary is visible at a glance
 and still readable with color off. Paste an image and it rides the turn
