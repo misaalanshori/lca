@@ -40,9 +40,26 @@ Every tool call lands on the transcript as its own card with its
 arguments, result, and cost. Click a card to collapse it; `Alt+T`
 toggles how much of a reasoning run shows (snippet, full, hidden).
 The footer tracks the folder, session, model, context share, and
-accumulated cost. The startup header names what loaded — context
-paths, extension/skill counts — so a missing resource is visible,
-not mysterious. You can start typing before the header finishes:
+accumulated cost. The startup header is **one line**: the version, the resource
+counts, and the key that reveals the rest (`ctrl+o`, the same key that expands a
+tool card). Press it and the header opens into the full table — every context path
+that loaded, one row per non-empty resource section — so a missing resource is
+visible without being a wall on every launch. Sections with nothing in them print
+nothing, and a long path is shortened with an ellipsis rather than pushing the row
+past the pane. The header keeps its expanded state across `/new`, so opening a fresh
+session does not make you press it again.
+
+**A shadowed extension says so.** When two extensions claim the same name the
+registry keeps the first (`installed` beats `bundled`, a project copy beats an
+installed one) and disables the other for the session. That decision is now
+reported rather than silent: a line like
+
+    extension "formatter" collision: ✓ ~/.lca/extensions/formatter / ✗ bundled (skipped)
+
+names the name, both sides and which one won. It is a **diagnostic, not decoration**,
+so it shows even with `ui.quiet_startup = true` — that setting hides the header, not
+the reason your install is not the thing answering. Nothing about the session
+changes: the winner runs, the loser is skipped, and the turn continues. You can start typing before the header finishes:
 the keyboard is read from the first frame, so what you type is
 buffered and lands in the editor in order rather than being lost or
 appearing late. `Ctrl+C` during that startup window is honoured too,

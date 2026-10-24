@@ -889,7 +889,21 @@ impl Chat {
     /// lines: the same transcript machinery as a live turn, shared by
     /// session switches and in-place branches.
     pub(crate) fn replay_records(&mut self, records: &[lca_protocol::Record]) {
+        // Gh #400 gap 2: the startup header outlives `/new` and a session switch.
+        // `clear()` drops every entry, so the header entry is re-pushed here with
+        // its expand state carried across - a header that resets on `/new` is worse
+        // than one that never expanded (the issue's own words).
+        let expanded = self.transcript.startup_resources_expanded();
         self.transcript.clear();
+        if !self.startup_header.0.is_empty() || !self.startup_header.1.is_empty() {
+            self.transcript.push_startup_resources(
+                self.startup_header.0.clone(),
+                self.startup_header.1.clone(),
+            );
+            if expanded {
+                self.transcript.toggle_startup_resources();
+            }
+        }
         self.pending.clear();
         let loader = self.world.options.hooks.load_attachment.clone();
         self.load_records(records, loader.as_ref());

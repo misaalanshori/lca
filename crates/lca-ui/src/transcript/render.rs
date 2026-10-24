@@ -197,6 +197,21 @@ pub(super) fn render_entry(
             out.push((theme.role(Role::Dim))(&startup_hint(keybindings)));
             0
         }
+        Entry::StartupResources {
+            compact,
+            expanded,
+            expanded_state,
+        } => {
+            // Gh #400 gap 2: the compact line, or the table behind `ctrl+o`. The
+            // collision notices are already inside `compact`/`expanded` (they ride
+            // both states), so this arm is a pure choice between two prepared sets
+            // - the header does not re-decide anything at paint time.
+            let rows = if *expanded_state { expanded } else { compact };
+            for row in rows {
+                out.extend(wrap_text_with_ansi(row, width as usize));
+            }
+            0
+        }
         Entry::Raw(text) => {
             // A bracketed header (`[compaction] …`, `[session in …]`) is
             // pi's custom-message shape: a `customMessageBg` band with the

@@ -140,6 +140,7 @@ impl Ui {
                 lca_ui::theme::theme_names_all(&dirs)
             },
             initial_lines: self.initial_head.clone(),
+            initial_header: self.initial_header.clone(),
             initial_records: self.initial_records.clone(),
             initial_tail_lines: self.initial_tail.clone(),
             initial_messages: self.initial_messages.clone(),
