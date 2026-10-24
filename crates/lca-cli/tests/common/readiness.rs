@@ -196,6 +196,74 @@ impl Tmux {
         }
     }
 
+    /// Wait until the pane's painted content actually fits `cols`, i.e. until the
+    /// application has re-laid-out for the new width (gh #489).
+    ///
+    /// # Why this is not `wait_until_painted`
+    ///
+    /// A settle answers "has the screen stopped changing", and a pane that has
+    /// not received its SIGWINCH is perfectly stable at the *old* width - it
+    /// settles immediately and the row then asserts against a layout the terminal
+    /// has already wrapped. This waits for a **property of the layout** instead:
+    /// no painted line is wider than the window the pane now has.
+    ///
+    /// A wider-than-window line is the signature: the app drew for the spawn
+    /// geometry and tmux wrapped the result, which is exactly the captured
+    /// `e2e_tree_layout` failure frame (a 140-wide box inside a 60-column pane).
+    ///
+    /// # What this does not prove
+    ///
+    /// It says the app's **width** is current, not that every region has
+    /// repainted - a frame can be re-flowed and still be drawing older content.
+    /// Rows still wait for their own needles. The reverse case is not checked
+    /// either: a *narrower* layout than the window is indistinguishable from a
+    /// deliberately narrow element, so this only fails a layout that is too
+    /// **wide**, which is the direction an unapplied resize produces.
+    pub fn wait_for_layout_width(&self, cols: u32) -> String {
+        self.wait_for_layout_width_within(cols, Duration::from_secs(20))
+    }
+
+    /// [`Self::wait_for_layout_width`] with an explicit budget, so a contract row
+    /// can prove the *failure* direction without waiting out the product budget.
+    pub fn wait_for_layout_width_within(&self, cols: u32, timeout: Duration) -> String {
+        let limit = cols as usize;
+        let budget = timeout * Self::load_factor();
+        let deadline = Instant::now() + budget;
+        let mut last = self.capture();
+        loop {
+            let widest = self.logical_width();
+            if widest <= limit {
+                return last;
+            }
+            if Instant::now() >= deadline {
+                panic!(
+                    "the app never re-laid-out for {cols} columns: after {budget:?} \
+                     (budget {timeout:?} x{} load) the widest painted line is still \
+                     {widest} cells, so the window has wrapped a layout drawn for a \
+                     wider pane (gh #489). Last frame:\n{last}",
+                    Self::load_factor()
+                );
+            }
+            std::thread::sleep(POLL);
+            last = self.capture();
+        }
+    }
+
+    /// The widest **logical** line on the live screen, tmux's soft wraps joined.
+    ///
+    /// `capture-pane -p` soft-wraps an over-wide row, so every physical line then
+    /// measures at most the pane width and a per-line check sees nothing wrong.
+    /// `-J` undoes that join, which is the only way a layout drawn for a wider
+    /// pane is visible as the defect it is (gh #489).
+    pub fn logical_width(&self) -> usize {
+        let out = Self::tmux(&["capture-pane", "-t", &self.name, "-p", "-J"]);
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(lca_tui::engine::text::visible_width)
+            .max()
+            .unwrap_or(0)
+    }
+
     /// Make "the pane will accept a keystroke" a fact before the scenario is
     /// typed at it (gh #444, gh #446).
     ///

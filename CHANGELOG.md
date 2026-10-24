@@ -64,6 +64,15 @@ Dates are UTC.
   of tmux's encodings, unlike pi, which needs `csi-u`.
 
 ### Fixed
+- **The real-terminal harness waits for a resize to take effect, not 500 ms**
+  (#489). `Tmux::resize` slept a fixed half-second and hoped; under a parallel
+  suite the app can still be laying out at the old width when a row starts, and
+  `e2e_tree_layout`'s navigator then drew a 140-wide box into a 60-column pane —
+  invisible in `capture-pane` (tmux wraps it, so every physical line still fits)
+  and visible only with the wraps joined. Rows now wait on
+  `wait_for_layout_width`, which polls the joined capture. No assertion changed;
+  what changed is *when* the row reads.
+
 - **The `/extensions` filter no longer types `[` on arrow keys, Home/End, PageUp/Down
   or a paste** (gh #329). The fallthrough arm scanned the raw input payload for its
   first printable character; an escape sequence starts with `ESC` (a control
