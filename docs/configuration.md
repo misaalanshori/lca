@@ -57,6 +57,14 @@ tui.editor.cursorLeft = ["left", "ctrl+b"]
 tui.altScreen.pageUp = []
 ```
 
+A key may be named by the symbol it produces or by the physical keys
+that produce it, and both spellings work: `ctrl+?` and `ctrl+shift+/`
+are the same keystroke. The symbol spelling is the one to write - it
+survives a keyboard layout where `/` is somewhere else - and the
+physical spelling is kept so existing files do not change meaning.
+`shift` on a *symbol* is what makes the two equivalent; a shifted
+letter keeps its own identity (`shift+a` is not `A`).
+
 A configured value replaces the default for that action (a list
 replaces the whole default list). On the precedence ladder the file
 is the user rung: below flags and environment, which have no key
