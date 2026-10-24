@@ -9,7 +9,9 @@
 use lca_tui::engine::core::{SEGMENT_RESET, resolve_overlay_layout};
 
 use crate::theme::{Role, Theme};
-use lca_tui::engine::text::{linkify_urls, slice_by_column, visible_width, wrap_text_with_ansi};
+use lca_tui::engine::text::{
+    extract_segments, linkify_urls, slice_by_column, visible_width, wrap_text_with_ansi,
+};
 
 /// A centered box drawn over `base`, which is the visible viewport.
 ///
@@ -392,15 +394,59 @@ fn overlay_box_placed_windowed(
 /// transparency gaps); exit reset closes it (no bleed out); the right
 /// slice re-arms the base row's own state through `pending_ansi`
 /// (FR-UI-23's mechanism). `x` is the segment's start column.
+///
+/// **`x` is honoured on short rows** (gh #373 bug 1). `before` used to be
+/// only `slice_by_column(base, 0, x)` with no pad, so a base row shorter
+/// than `x` - which is most rows, since a row's *text* is usually shorter
+/// than the column an overlay is placed at - put the segment right after the
+/// text instead of at the column it was placed at. The drawer tab `◀` and the
+/// `↓ Jump to latest message` indicator were both drawn wherever the line
+/// happened to end.
+///
+/// The pad is the same three lines its two neighbours already used
+/// ([`side_panel`] and the tooltip placement in `chat_render`), which is why
+/// this is convergence rather than a third shape. Widening the row to reach
+/// `x` is deliberate: an overlay must be where it was placed, and a row whose
+/// text stopped early is a row with room after it.
+///
+/// The wide-character seams are handled by the slices themselves -
+/// [`slice_by_column`] with `strict = false` keeps a grapheme that straddles a
+/// boundary, which is why the *left* seam pads to the measured width of what
+/// survived rather than to `x` blindly, and why the *right* slice starts after
+/// what the segment actually drew.
 pub fn splice_segment(base: &str, x: usize, width: usize, segment: &str) -> String {
     use lca_tui::engine::text::truncate_to_width;
-    let before = slice_by_column(base, 0, x, false);
+    // Gh #373 bugs 1 and 2: both slices go through `extract_segments`, which
+    // already has the two properties this seam needs and which two neighbours
+    // (`side_panel`, the tooltip) were compensating for by hand.
+    //
+    // * `before` is **strict** by construction there (`current_col + w <=
+    //   before_end`), so a 2-cell glyph straddling `x` is dropped rather than
+    //   half-kept. With `slice_by_column(strict = false)` it survived, `before`
+    //   measured one cell wider than `x`, and the segment shifted a column right
+    //   (and the row overflowed).
+    // * `after` re-arms through `AnsiCodeTracker`, which emits the **net** style
+    //   entering the slice instead of every code seen before it - so a style the
+    //   base row had already closed does not come back (bug 2).
+    //
+    // Both are `strict = false` for the *glyph* decision the brief calls for on
+    // the right seam: taking the net style is independent of whether a trailing
+    // glyph is kept.
+    // `after_len` is "everything from here" - `extract_segments` treats `0` as
+    // "nothing after", so the length must be a real (large) bound.
+    let (before, _, after, _) =
+        extract_segments(base, x, x.saturating_add(width), usize::MAX / 2, false);
+    // Gh #373 bug 1: pad to `x`, measured in cells. `before` is now at most `x`
+    // wide, so this fills the short-row case exactly.
+    let before = format!(
+        "{before}{}",
+        " ".repeat(x.saturating_sub(visible_width(&before)))
+    );
     let segment = truncate_to_width(segment, width, "", false);
     let segment = format!(
         "{segment}{}",
         " ".repeat(width.saturating_sub(visible_width(&segment)))
     );
-    let after = slice_by_column(base, x.saturating_add(width), 10_000, false);
     format!("{before}{SEGMENT_RESET}{segment}{SEGMENT_RESET}{after}")
 }
 
@@ -511,275 +557,8 @@ pub fn paint_tooltip(base: &mut [String], x: u16, y: u16, lines: &[String], them
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use lca_tui::engine::text::strip_terminal_sequences;
-
-    #[test]
-    fn overlay_box_centers_over_the_viewport() {
-        let mut base = vec![".".repeat(80); 24];
-        overlay_box(
-            &mut base,
-            80,
-            24,
-            "login",
-            &["hello".to_string()],
-            &Theme::plain(),
-        );
-        let joined: String = base
-            .iter()
-            .map(|l| strip_terminal_sequences(l))
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(joined.contains("hello"));
-        assert!(joined.contains("login"));
-    }
-
-    // Verifies: gh #238 - the seam isolates SGR state both ways:
-    // base styles never enter the segment, segment styles never leave
-    // it, and the right slice re-arms the base state.
-    #[test]
-    fn splice_segment_isolates_sgr_state_both_directions() {
-        use lca_tui::engine::core::SEGMENT_RESET;
-        // Base row opens italic and never closes it; the segment opens
-        // bold and never closes it.
-        let base = "aa\x1b[3mbbccdd".to_string();
-        let row = splice_segment(&base, 2, 2, "\x1b[1mXX");
-        let reset = SEGMENT_RESET;
-        assert_eq!(
-            row,
-            format!("aa{reset}\x1b[1mXX{reset}\x1b[3mccdd"),
-            "byte-exact splice: {row:?}"
-        );
-        // The segment's bold cannot reach the right slice...
-        let after_bold = row.find("\x1b[1m").expect("segment style");
-        let exit = row.find(reset).expect("entry reset");
-        let second =
-            row[exit + reset.len()..].find(reset).expect("exit reset") + exit + reset.len();
-        assert!(
-            after_bold > exit && after_bold < second,
-            "bold inside the segment"
-        );
-        // ...and the base row's italic re-arms after the exit reset
-        // (pending_ansi carries it into the right slice).
-        assert!(
-            row[second + reset.len()..].contains("\x1b[3m"),
-            "base state restored"
-        );
-    }
-
-    // Verifies: gh #238 - short segments pad to full width (no
-    // transparency gaps) and long ones clip without an ellipsis.
-    #[test]
-    fn splice_segment_pads_and_clips_to_exact_width() {
-        use lca_tui::engine::text::visible_width;
-        let row = splice_segment("0123456789", 3, 4, "AB");
-        assert_eq!(visible_width(&row), 10);
-        let stripped: String = row.chars().filter(|c| *c != '\x1b').collect();
-        assert!(stripped.contains("AB  "), "padded: {stripped:?}");
-        let row = splice_segment("0123456789", 2, 3, "ABCDEFG");
-        assert_eq!(visible_width(&row), 10, "clipped, width kept");
-    }
-
-    // Verifies: gh #238 - the side panel splices at the seam: a
-    // transcript background band cannot tint panel cells, the panel
-    // always closes, and rows stay exactly `width` columns wide.
-    #[test]
-    fn side_panel_isolates_sgr_state_and_keeps_width() {
-        use lca_tui::engine::core::SEGMENT_RESET;
-        use lca_tui::engine::text::visible_width;
-        // Base row opens a background band and never closes it.
-        let mut base = vec![format!("xx\x1b[48;2;1;2;3m{}", "y".repeat(78)); 3];
-        side_panel(&mut base, 80, &["panel".to_string()], &Theme::plain());
-        for line in &base {
-            assert_eq!(visible_width(line), 80, "exact width: {line:?}");
-            assert_eq!(
-                line.matches(SEGMENT_RESET).count(),
-                2,
-                "open and close: {line:?}"
-            );
-        }
-        let reset = SEGMENT_RESET;
-        let first = &base[0];
-        // The band code appears only before the entry reset...
-        let entry = first.find(reset).expect("entry");
-        assert!(
-            first[..entry].contains("48;2;1;2;3"),
-            "base state left of the seam"
-        );
-        // ...never inside the panel cells.
-        let exit = first[entry + reset.len()..].find(reset).expect("exit") + entry + reset.len();
-        assert!(
-            !first[entry + reset.len()..exit].contains("48;2;1;2;3"),
-            "no band in the panel: {first:?}"
-        );
-        assert!(first.contains("panel"), "content survives");
-    }
-
-    // Verifies: gh #238 - the tooltip splices at the seam: the row
-    // beneath cannot tint it and its background cannot leak right.
-    #[test]
-    fn tooltip_isolates_sgr_state_both_directions() {
-        use lca_tui::engine::core::SEGMENT_RESET;
-        let theme = Theme::plain();
-        let mut base = vec!["aa\x1b[3mbbccdd".to_string()];
-        paint_tooltip(&mut base, 2, 0, &["\x1b[1mXX".to_string()], &theme);
-        let reset = SEGMENT_RESET;
-        let row = &base[0];
-        // Entry reset, bold segment, exit reset, then the base row's
-        // own italic re-armed over the remaining cells.
-        assert!(
-            row.contains(&format!("aa{reset}")),
-            "entry reset after the left slice: {row:?}"
-        );
-        assert!(row.contains("\x1b[1mXX"), "segment content survives");
-        let exit = row.find(&format!("XX{reset}")).expect("exit reset");
-        assert!(
-            row[exit..].contains("\x1b[3m"),
-            "base state restored right of the seam: {row:?}"
-        );
-    }
-
-    #[test]
-    fn side_panel_takes_the_right_column() {
-        let mut base = vec!["x".repeat(80); 3];
-        side_panel(&mut base, 80, &["panel".to_string()], &Theme::plain());
-        let line = strip_terminal_sequences(&base[0]);
-        // Rows close with a reset now (gh #238): the content still
-        // lands at the right column, terminated, not dangling.
-        assert!(line.contains("panel"), "{line:?}");
-        assert!(line.trim_end().ends_with("panel"), "{line:?}");
-    }
-
-    // Verifies: R11 - the overlay box is a full frame, not a half one.
-    #[test]
-    fn the_overlay_box_draws_a_full_frame() {
-        let mut base = vec![".".repeat(80); 24];
-        overlay_box(
-            &mut base,
-            80,
-            24,
-            "login",
-            &["hello".to_string()],
-            &Theme::plain(),
-        );
-        let joined: Vec<String> = base.iter().map(|l| strip_terminal_sequences(l)).collect();
-        assert!(
-            joined.iter().any(|l| l.contains('╭') && l.contains('╮')),
-            "a top frame with both corners"
-        );
-        assert!(
-            joined.iter().any(|l| l.contains('╰') && l.contains('╯')),
-            "a bottom frame with both corners"
-        );
-        let content = joined
-            .iter()
-            .find(|l| l.contains("hello"))
-            .expect("a content line");
-        let after = content.split("hello").nth(1).unwrap_or("");
-        assert!(
-            after.contains('│'),
-            "a right border after the content: {content:?}"
-        );
-    }
-
-    // Verifies: FR-UI-23 (R4) - every dialog row carries explicit styles:
-    // a reset, the frame in the border role, a reset - so a transcript
-    // color behind the dialog cannot bleed in, and the border cannot bleed
-    // into the transcript beside it.
-    #[test]
-    fn dialog_rows_override_the_styles_around_them() {
-        let theme = Theme::colored();
-        let border = theme.role(Role::Border);
-        // A base line painted with a strong color, as the transcript's
-        // markdown and tool cards are.
-        let painted = format!("\x1b[41m{}\x1b[0m", ".".repeat(80));
-        let mut base = vec![painted.clone(); 24];
-        overlay_box(&mut base, 80, 24, "login", &["hello".to_string()], &theme);
-        let row = base
-            .iter()
-            .find(|line| line.contains("hello"))
-            .expect("the dialog row rendered");
-
-        let reset_at = row.find(SEGMENT_RESET).expect("a reset before the frame");
-        let after_reset = &row[reset_at + SEGMENT_RESET.len()..];
-        assert!(
-            strip_terminal_sequences(after_reset).starts_with("│ hello"),
-            "the frame starts right after the reset: {row:?}"
-        );
-        let border_sgr = border("x");
-        let prefix = border_sgr.split('x').next().unwrap_or("");
-        assert!(
-            !prefix.is_empty() && row.contains(prefix),
-            "the frame carries the border role's SGR: {row:?}"
-        );
-        assert!(
-            row.matches(SEGMENT_RESET).count() >= 2,
-            "a reset on both sides of the dialog text: {row:?}"
-        );
-    }
-
-    // Verifies: FR-UI-23 (R4) - the base fragments keep their own styling:
-    // the transcript to the left of a dialog keeps the color it had.
-    #[test]
-    fn the_fragments_around_a_dialog_keep_their_own_bytes() {
-        let theme = Theme::colored();
-        let left = format!("\x1b[42m{}\x1b[0m", "L".repeat(6));
-        let line = format!("{left}{}", ".".repeat(74));
-        let mut base = vec![line; 24];
-        overlay_box(&mut base, 80, 24, "login", &["hello".to_string()], &theme);
-        let row = base
-            .iter()
-            .find(|line| line.contains("hello"))
-            .expect("the dialog row rendered");
-        assert!(
-            row.contains(&left),
-            "the left fragment is untouched: {row:?}"
-        );
-    }
-
-    // Verifies: R1 - a picker's selected row is pi's `selectedBg`
-    // highlight: the cells in accent on the selected background, the
-    // frame still in the border role, and the rows around it untouched.
-    #[test]
-    fn the_selected_picker_row_carries_the_selected_background() {
-        let theme = Theme::colored();
-        let mut base = vec![".".repeat(80); 24];
-        overlay_box_selected(
-            &mut base,
-            80,
-            24,
-            "model",
-            &["first".to_string(), "second".to_string()],
-            &theme,
-            Some(1),
-        );
-        let selected = base
-            .iter()
-            .find(|l| l.contains("second"))
-            .expect("the selected row");
-        let other = base
-            .iter()
-            .find(|l| l.contains("first"))
-            .expect("the other row");
-        assert!(
-            selected.contains("\x1b[48;2;58;58;74m"),
-            "selectedBg #3a3a4a: {selected:?}"
-        );
-        assert!(
-            selected.contains("\x1b[38;2;138;190;183m"),
-            "the selected cells are accent #8abeb7: {selected:?}"
-        );
-        assert!(
-            selected.contains(&theme.role(Role::Border)("│ ")),
-            "the frame keeps the border role: {selected:?}"
-        );
-        assert!(
-            !other.contains("48;2;58;58;74"),
-            "only the selected row is highlighted: {other:?}"
-        );
-    }
-}
+#[path = "render_tests.rs"]
+mod tests;
 
 #[cfg(test)]
 mod picker_window_tests {
