@@ -334,6 +334,17 @@ impl Ui {
                         auto_resize_images: config.images_auto_resize(),
                         code_block_indent: config.markdown_code_block_indent().to_string(),
                         mermaid: config.markdown_mermaid().to_string(),
+                        // Gh #399: the setting's three spellings map onto the three
+                        // rungs here, so `lca-ui` never learns them.
+                        startup_header: match config.ui_quiet_startup() {
+                            "true" => lca_ui::state::StartupHeaderRung::Hidden,
+                            "header" => lca_ui::state::StartupHeaderRung::VersionOnly,
+                            _ => lca_ui::state::StartupHeaderRung::Full,
+                        },
+                        startup_version: (
+                            env!("PRODUCT_VERSION").to_string(),
+                            lca_session::ABI_VERSION.to_string(),
+                        ),
                     }
                 }))
             },

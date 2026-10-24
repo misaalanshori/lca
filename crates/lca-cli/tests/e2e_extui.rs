@@ -77,7 +77,10 @@ fn a_synthesized_click_names_the_panel_button() {
     let (col, row) = pane
         .lines()
         .enumerate()
-        .find_map(|(row, line)| line.find("OK").map(|col| (col as u16, row as u16)))
+        // Gh #399: `column_of`, not `find` - the header's logo glyphs are three
+        // bytes and one column wide, so a byte index would overstate the column
+        // and the synthesized click would land outside the panel.
+        .find_map(|(row, line)| column_of(line, "OK").map(|col| (col, row as u16)))
         .expect("a visible button cell");
     // SGR-1006 press + release, 1-based cells.
     session.send_literal(&format!("\x1b[<0;{};{}M", col + 1, row + 1));

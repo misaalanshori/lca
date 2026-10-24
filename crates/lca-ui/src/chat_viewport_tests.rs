@@ -794,9 +794,12 @@ fn clicking_a_tool_header_expands_that_card() {
     let (w, h) = (80u16, 24u16);
     let frame = chat.viewport(w, h, 0);
     let strip = |row: &String| lca_tui::engine::text::strip_terminal_sequences(row);
+    // Gh #399: the *last* row naming the command. The startup block above the
+    // card has a hint row that reads `! bash`, so the first match is the header,
+    // not the card.
     let row = frame
         .iter()
-        .position(|line| strip(line).contains("bash"))
+        .rposition(|line| strip(line).contains("bash"))
         .expect("the card header renders") as u16;
     assert!(matches!(
         chat.click_at(4, row, 0, w, h),
@@ -859,9 +862,11 @@ fn clicking_a_tool_body_collapses_that_card() {
     let (w, h) = (80u16, 24u16);
     let frame = chat.viewport(w, h, 0);
     let strip = |row: &String| lca_tui::engine::text::strip_terminal_sequences(row);
+    // Gh #399: the *last* row naming the command - the startup block's hint row
+    // also contains `! bash`.
     let header = frame
         .iter()
-        .position(|line| strip(line).contains("bash"))
+        .rposition(|line| strip(line).contains("bash"))
         .expect("the card header renders") as u16;
     assert!(matches!(
         chat.click_at(4, header, 0, w, h),

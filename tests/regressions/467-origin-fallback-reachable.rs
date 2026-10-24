@@ -166,7 +166,11 @@ fn a_row_reaches_the_fallback_branch() {
 // keeps the two from meeting again.
 #[test]
 fn the_cli_sign_in_row_pins_its_discovery_step() {
-    let common = read("crates/lca-cli/tests/common/mod.rs");
+    // Gh #399 moved the loopback-host helpers into their own harness module for
+    // the 1,200-line ceiling, so this guard points at the new home. What it pins -
+    // that the row names the metadata document and not the challenge pointer - is
+    // unchanged, and the row would still fail if either spelling came back.
+    let common = read("crates/lca-cli/tests/common/hosts.rs");
     let start = common
         .find("pub fn write_oauth_mcp_config(")
         .expect("the config writer exists");

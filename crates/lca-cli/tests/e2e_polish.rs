@@ -192,15 +192,6 @@ fn drawer_tab_and_panel_tint_reach_the_pane() {
 // A card-body row in a real pane: the first whitespace-separated
 // token is the bare output number (`seq` lines). `trim() == "40"`
 // never holds on tmux: every row pads to the full width with the
-// scrollbar glyph riding the end, so only the head is bare.
-#[cfg(unix)]
-fn body_number(line: &str) -> Option<u32> {
-    if line.contains("extensions") {
-        return None;
-    }
-    line.split_whitespace().next()?.parse::<u32>().ok()
-}
-
 // Verifies: gh #247 - a real terminal receipt: clicking a tool card's
 // body collapses it, and the collapse keeps the card in view instead
 // of throwing the viewport at the history's top.
@@ -285,7 +276,9 @@ fn tool_body_click_collapses_without_scroll_jump() {
             // patiently before even thinking of another click.
             (Some(row), true) => {
                 let line = pane.lines().nth(row).unwrap_or_default();
-                let col = line.find("seq 1 40").unwrap_or(2) as u16 + 2;
+                // Gh #399: a terminal column, not a byte index, for the same
+                // reason the other click sites use `column_of`.
+                let col = column_of(line, "seq 1 40").unwrap_or(2) + 2;
                 session.send_literal(&format!("\x1b[<0;{};{}M", col + 1, row as u16 + 1));
                 session.send_literal(&format!("\x1b[<0;{};{}m", col + 1, row as u16 + 1));
                 let inner = std::time::Instant::now() + std::time::Duration::from_secs(15);

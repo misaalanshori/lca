@@ -212,6 +212,49 @@ pub(super) fn render_entry(
             }
             0
         }
+        Entry::StartupHeader { beside_resources } => {
+            // Gh #399: the owner's logo block, resolving keys and width here so a
+            // rebind and a resize both reach it. The rows come back unwrapped; the
+            // text rows wrap through `wrap_text_with_ansi` the way every other
+            // block does, while the mark's rows are single glyph cells that always
+            // fit their column by construction.
+            let version = crate::startup_header::VersionInfo::new(
+                tuning.startup_version.0.clone(),
+                tuning.startup_version.1.clone(),
+            );
+            // The rung is decided **here**, so a `/settings` cycle or a quiet
+            // startup moves it without a restart. `Hidden` draws no rows at all
+            // (`quietStartup = true` is the setting's whole point), `VersionOnly`
+            // keeps the pre-#399 middle rung, and `Full` is the owner's block.
+            let rows = match tuning.startup_header {
+                crate::state::StartupHeaderRung::Hidden => Vec::new(),
+                crate::state::StartupHeaderRung::VersionOnly => {
+                    vec![(theme.dim)(&version.label())]
+                }
+                crate::state::StartupHeaderRung::Full => crate::startup_header::compose(
+                    theme,
+                    keybindings,
+                    &version,
+                    width as usize,
+                    lca_tui::engine::terminal::is_apple_terminal(),
+                ),
+            };
+            // When the resource line beneath already names the build, drop this
+            // block's own version row and its `press …` hint: the resource line *is*
+            // the version-bearing, expandable row, so printing either twice reads as
+            // a duplicated startup. The mark, the key hints and the nudge stay.
+            let rows: Vec<String> = if *beside_resources {
+                rows.into_iter()
+                    .map(|row| drop_version_text(&row))
+                    .collect()
+            } else {
+                rows
+            };
+            for row in rows {
+                out.extend(wrap_text_with_ansi(&row, width as usize));
+            }
+            0
+        }
         Entry::Raw(text) => {
             // A bracketed header (`[compaction] …`, `[session in …]`) is
             // pi's custom-message shape: a `customMessageBg` band with the
@@ -246,6 +289,29 @@ pub(super) fn render_entry(
 fn band_row(row: &str, width: usize, bg: &StyleFn) -> String {
     let pad = width.saturating_sub(visible_width(row));
     bg(&format!("{row}{}", " ".repeat(pad)))
+}
+
+/// Remove this block's version text from one row, keeping the row.
+///
+/// Gh #399 + gh #400: when the expandable resource line beneath already names the
+/// build, printing `v0.6.0 (abi 0.6)` above it reads as a duplicated startup. The
+/// row must **stay** - it carries the mark's first line, and the nudge shares row 3
+/// - so this strips the label and leaves the styling and the glyphs alone.
+fn drop_version_text(row: &str) -> String {
+    // The label is `v<version> (abi <abi>)`; it is the only ` (abi ` on the row.
+    let Some(open) = row.find(" (abi ") else {
+        return row.to_string();
+    };
+    // Walk back to the `v` that opens the label, which sits after the mark's
+    // column and a space.
+    let Some(version_at) = row[..open].rfind('v') else {
+        return row.to_string();
+    };
+    let Some(close) = row[open..].find(')') else {
+        return row.to_string();
+    };
+    let end = open + close + 1;
+    format!("{}{}", &row[..version_at], &row[end..])
 }
 
 /// pi's custom message (`custom-message.ts`): a `customMessageBg` box with

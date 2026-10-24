@@ -25,8 +25,8 @@
 //! # The colours are the logo's, not the theme's
 //!
 //! `l` → `#62aedc`, `c` → `#e28c00`, `a` → `#eccd00`. The owner was explicit that
-//! these are icon colours, not the app theme, so [`LOGO_COLOURS`] is a private
-//! constant table that no [`Role`] refers to and that [`Theme::role`] never sees.
+//! these are icon colours, not the app theme, so `LOGO_COLOURS` is a private
+//! constant table that no `Role` refers to and that `Theme::role` never sees.
 //! Nothing here reads the palette, which is what makes a `/theme` switch unable to
 //! move them — the separation is structural, not a promise.
 //!
