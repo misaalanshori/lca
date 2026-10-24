@@ -6,6 +6,19 @@ Dates are UTC.
 
 ## [Unreleased]
 
+### Added
+- **The startup header shows the LCA logo** (gh #399). Three lines: the mark
+  beside `v<version> (abi <abi>)`, a line of key hints, and a line telling you how
+  to see more. The mark is drawn from the owner's grid as half blocks, so it holds
+  two pixel rows per terminal row, and its three colours are the logo's own — they
+  are **not** theme roles and do not move on a `/theme` switch. Every key on the
+  hint line resolves from the live keybindings (a rebind changes the header; an
+  unbound action is omitted rather than shown blank). A narrow terminal degrades to
+  the wordmark and then to the version line alone instead of wrapping the art, and
+  Apple's Terminal always gets the wordmark because it mishandles half blocks.
+  `ui.quiet_startup` still wins: `"header"` keeps the version line, `true` shows no
+  header.
+
 ### Fixed
 - **`/model` search ranks the real model above the proxies that resell it**
   (gh #396). Searching the display label meant `openrouter/openai/gpt-5` outranked

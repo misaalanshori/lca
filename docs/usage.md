@@ -40,19 +40,33 @@ Every tool call lands on the transcript as its own card with its
 arguments, result, and cost. Click a card to collapse it; `Alt+T`
 toggles how much of a reasoning run shows (snippet, full, hidden).
 The footer tracks the folder, session, model, context share, and
-accumulated cost. The startup header is **one line**: the version, the resource
-counts, and the key that reveals the rest (`ctrl+o`, the same key that expands a
-tool card). Press it and the header opens into the full table — every context path
-that loaded, one row per non-empty resource section — so a missing resource is
-visible without being a wall on every launch. Sections with nothing in them print
-nothing, and a long path is shortened with an ellipsis rather than pushing the row
-past the pane. The header keeps its expanded state across `/new`, so opening a fresh
-session does not make you press it again.
+accumulated cost.
+
+The startup header is a block (gh #399, gh #400). Its first lines are the LCA mark
+beside a line of key hints and a line telling you how to see more; beneath them sits
+**one line** naming the version, the resource counts, and the key that reveals the
+rest (`ctrl+o`, the same key that expands a tool card). Press it and the resource
+line opens into the full table — every context path that loaded, one row per
+non-empty resource section — so a missing resource is visible without being a wall
+on every launch. Sections with nothing in them print nothing, and a long path is
+shortened with an ellipsis rather than pushing the row past the pane. The header
+keeps its expanded state across `/new`, so opening a fresh session does not make you
+press it again.
+
+The mark's three colours are the logo's own — they do not follow `/theme`, because
+they are icon colours rather than app colours. Every key on the hint line comes from
+your live keybindings, so a rebind changes what the header says; an action you have
+unbound is left off rather than shown as a blank key. On a narrow terminal the
+header degrades rather than wrapping: the mark becomes the word `LCA` and the text
+follows beneath it, and on a terminal too narrow for that the version line is
+printed alone. Apple's Terminal mishandles the half-block glyphs the mark is built
+from, so it always gets the wordmark. Set `ui.quiet_startup` to `"header"` for the
+version line only, or `true` for no header at all.
 
 **A shadowed extension says so.** When two extensions claim the same name the
 registry keeps the first (`installed` beats `bundled`, a project copy beats an
-installed one) and disables the other for the session. That decision is now
-reported rather than silent: a line like
+installed one) and disables the other for the session. That decision is reported
+rather than silent: a line like
 
     extension "formatter" collision: ✓ ~/.lca/extensions/formatter / ✗ bundled (skipped)
 
