@@ -1068,6 +1068,13 @@ pub fn extract_segments(
 }
 
 /// The punctuation set used by word navigation.
+pub use super::word::{
+    WordClass, atomic_span_at, atomic_start_ending_at, word_class, word_end_after,
+    word_start_before,
+};
+
+/// The punctuation set used by word navigation (gh #383): one character of this set is
+/// a punctuation run member, which makes `...` and `()->` move as single units.
 pub const PUNCTUATION: &str = "(){}[]<>.,;:'\"!?+-=*/\\|&%^$#@~`";
 
 /// Whether a character is whitespace.

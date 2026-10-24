@@ -1191,3 +1191,8 @@ mod fast_path_and_sgr_order;
 // naturally and matches, through one shared rule for both key protocols.
 #[path = "377-shifted-symbol-bindings.rs"]
 mod shifted_symbol_bindings;
+
+// Gh #383 gap 1: `Ctrl+W` deletes a segment, not a path - one classifier for
+// `Alt+Left`, `Alt+Right` and deletion, with punctuation as its own class.
+#[path = "383-word-motion-segments.rs"]
+mod word_motion_segments;
