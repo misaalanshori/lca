@@ -217,11 +217,40 @@ pub fn spawn() -> Cell {
 
 /// The notice from a cell filled by [`spawn`]: `None` while the probe is still
 /// running, and `None` forever when it found nothing to say.
-///
-/// A still-running probe is silent rather than blocking, which is the whole point
-/// of the spawn: the worst case is that a slow tmux loses its notice, never that
-/// it delays the first frame.
 pub fn notice_from(cell: &Cell) -> Option<String> {
+    cell.get().and_then(notice)
+}
+
+/// How long [`notice_waiting`] may hold the caller past a filled cell - the first-frame
+/// ceiling for the whole doctor.
+///
+/// The measured numbers decide this. One `tmux show` is 34 ms and a launch asks
+/// two, so the probe is ~66 ms of subprocess. On a lean install the startup load
+/// is only a few milliseconds, so the header is composed *while the probe is still
+/// running* and a plain `get()` loses the notice - observed in a real pane as the
+/// most ordinary case, not an edge: the notice simply never appeared, which is the
+/// failure this whole feature exists to prevent.
+///
+/// So the read waits, but never on trust: 250 ms is under four `PROBE_BUDGET`s and
+/// is paid **only inside tmux**, only until the probe answers, and nothing at all
+/// outside it (which is most users). In a real install the load already exceeds
+/// 250 ms and the wait returns immediately.
+pub const JOIN_BUDGET: Duration = Duration::from_millis(250);
+
+/// [`notice_from`], waiting up to [`JOIN_BUDGET`] for the probe to fill the cell.
+///
+/// This is the function the header must call. `notice_from` exists for callers
+/// that genuinely cannot wait (and for tests that pin the unfilled case).
+pub fn notice_waiting(cell: &Cell) -> Option<String> {
+    if cell.get().is_none() {
+        let deadline = Instant::now() + JOIN_BUDGET;
+        // Poll rather than block on a condvar: `OnceLock` has no blocking read, and
+        // the wait is tens of milliseconds - a 5 ms poll costs at most a few
+        // wakeups and keeps the cell a plain `OnceLock`.
+        while cell.get().is_none() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
     cell.get().and_then(notice)
 }
 
@@ -451,9 +480,13 @@ mod tests {
         );
     }
 
-    // Verifies: gh #400 gap 4 - **the launch path spawns, never waits.** Reading a
-    // cell before the thread has filled it is silent rather than blocking, which
-    // is what keeps the first frame free of the probe's 68 ms.
+    // Verifies: gh #400 gap 4 - **an unfilled cell reads as silence, not a block.**
+    //
+    // `notice_from` is the caller that cannot wait; the header uses
+    // `notice_waiting` (pinned below) because a lean launch reads the cell while the
+    // probe is still out, and a silent loss there was this feature failing at its
+    // only job. This row keeps the primitive honest: `None`, never a panic or a
+    // parked thread.
     #[test]
     fn an_unfilled_cell_reads_as_silence_rather_than_blocking() {
         let cell: Cell = std::sync::Arc::new(OnceLock::new());
@@ -465,6 +498,84 @@ mod tests {
         assert!(
             notice_from(&cell).is_some(),
             "a finding is reported once filled"
+        );
+    }
+
+    // Verifies: gh #400 gap 4 - **the header waits for a probe that is still
+    // running, and never longer than its budget.**
+    //
+    // This is the defect a live pane found and no unit row had: on a lean install
+    // the startup load is a few milliseconds, so `launch_header` reads the cell
+    // *before* the 66 ms probe answers and the notice silently vanishes - measured
+    // in a real pane as `read ... filled=false` 50 ms before `probe decided`. The
+    // stall hook hid it, which is exactly how a "make startup slow to observe it"
+    // tool misleads.
+    #[test]
+    fn the_header_waits_for_a_probe_that_is_still_running() {
+        let cell: Cell = std::sync::Arc::new(OnceLock::new());
+        let fill = std::sync::Arc::clone(&cell);
+        // Fill 80 ms late - slower than a lean launch's load, faster than the join
+        // budget, which is the window that loses the notice without the wait.
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(80));
+            let _ = fill.set(Doctor::ExtendedKeysOff {
+                format: Some("xterm".into()),
+            });
+        });
+        let started = Instant::now();
+        let text = notice_waiting(&cell).expect("the wait collects the late answer");
+        assert!(
+            text.contains("set -g extended-keys on"),
+            "and it is the real notice: {text}"
+        );
+        assert!(
+            started.elapsed() >= Duration::from_millis(70),
+            "it genuinely waited for the thread: {:?}",
+            started.elapsed()
+        );
+    }
+
+    // Verifies: gh #400 gap 4 - **the wait is bounded, and a cell that is never
+    // filled costs at most the budget.** A wedged probe must not turn a diagnostic
+    // into the startup hang the bound exists to prevent.
+    #[test]
+    fn the_wait_is_bounded_when_the_probe_never_answers() {
+        // Simulate a probe that will never fill the cell.
+        let cell: Cell = std::sync::Arc::new(OnceLock::new());
+        let started = Instant::now();
+        assert_eq!(notice_waiting(&cell), None, "nothing to report");
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed >= JOIN_BUDGET,
+            "it waits the full budget before giving up: {elapsed:?}"
+        );
+        assert!(
+            elapsed < JOIN_BUDGET * 3,
+            "but no longer than that, or the header stalls on a wedged tmux: {elapsed:?}"
+        );
+    }
+
+    // Verifies: gh #400 gap 4 - **an already-filled cell costs a read, not a
+    // wait.** The common path (a real install whose load outlasts the probe) must
+    // not pay the budget.
+    #[test]
+    fn a_filled_cell_returns_without_waiting() {
+        let cell: Cell = std::sync::Arc::new(OnceLock::new());
+        let _ = cell.set(Doctor::ExtendedKeysOff { format: None });
+        let started = Instant::now();
+        assert!(notice_waiting(&cell).is_some());
+        assert!(
+            started.elapsed() < JOIN_BUDGET / 2,
+            "no budget is spent on an answered probe: {:?}",
+            started.elapsed()
+        );
+        let silent: Cell = std::sync::Arc::new(OnceLock::new());
+        let _ = silent.set(Doctor::Silent);
+        let started = Instant::now();
+        assert_eq!(notice_waiting(&silent), None);
+        assert!(
+            started.elapsed() < JOIN_BUDGET / 2,
+            "and healthy is equally free"
         );
     }
 
