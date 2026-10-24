@@ -92,6 +92,113 @@ fn is_printable_ascii(s: &str) -> bool {
     s.bytes().all(|b| (0x20..=0x7e).contains(&b))
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many times the ASCII fast path answered (gh #378 gap 1).
+    ///
+    /// `cfg(test)`-only, so a release build has no counter, no atomic, and no shared
+    /// cache line. The acceptance test for the optimisation is that a coloured row
+    /// *takes* this path; a faster function nobody calls is not a fix.
+    static FAST_PATH_HITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The fast-path hit count (gh #378 gap 1). Test builds only.
+#[cfg(test)]
+fn fast_path_hits() -> usize {
+    FAST_PATH_HITS.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+fn note_fast_path_hit() {
+    FAST_PATH_HITS.with(|hits| hits.set(hits.get() + 1));
+}
+
+#[cfg(not(test))]
+#[inline(always)]
+fn note_fast_path_hit() {}
+
+/// Length of the escape sequence starting at `pos`, or `0` when there is none —
+/// pi's `ansiCodeLength` (`packages/tui/src/utils.ts`), and deliberately the same
+/// closed vocabulary as [`extract_ansi_code`]: CSI finals `m G K H J`, and OSC/APC
+/// terminated by BEL or ST.
+///
+/// This exists so the width fast path can *skip* a code without substringing it.
+/// Anything it does not recognise answers `0`, which makes the fast path decline
+/// rather than guess: a wrong skip length would silently mismeasure every row after
+/// it, and a mismeasurement is much worse than a missed optimisation.
+fn ansi_code_length(s: &str, pos: usize) -> usize {
+    let bytes = s.as_bytes();
+    if pos >= bytes.len() || bytes[pos] != 0x1b {
+        return 0;
+    }
+    let Some(&next) = bytes.get(pos + 1) else {
+        return 0;
+    };
+    match next {
+        b'[' => {
+            let mut j = pos + 2;
+            while j < bytes.len() {
+                if matches!(bytes[j], b'm' | b'G' | b'K' | b'H' | b'J') {
+                    return j + 1 - pos;
+                }
+                j += 1;
+            }
+            0
+        }
+        b']' | b'_' => {
+            let mut j = pos + 2;
+            while j < bytes.len() {
+                if bytes[j] == 0x07 {
+                    return j + 1 - pos;
+                }
+                if bytes[j] == 0x1b && bytes.get(j + 1) == Some(&b'\\') {
+                    return j + 2 - pos;
+                }
+                j += 1;
+            }
+            0
+        }
+        _ => 0,
+    }
+}
+
+/// Width of a string of printable ASCII, tabs and recognised escape sequences, or
+/// `None` when it holds anything else (gh #378 gap 1).
+///
+/// pi's `asciiVisibleWidth`: printable ASCII is one column, a tab is three, an escape
+/// sequence is zero. Everything else - a wide glyph, a combining mark, an emoji, a
+/// control byte, a malformed escape - declines so [`visible_width`] falls back to the
+/// cached path that does grapheme segmentation.
+///
+/// This is the difference between a re-render being linear and being allocation-bound:
+/// **every rendered row carries SGR**, so before this the fast path's
+/// `is_printable_ascii` check rejected essentially every line and each one cloned,
+/// replaced tabs, stripped sequences, segmented graphemes and took the cache lock.
+pub fn ascii_visible_width(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut width = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if (0x20..=0x7e).contains(&b) {
+            width += 1;
+            i += 1;
+        } else if b == b'\t' {
+            width += 3;
+            i += 1;
+        } else if b == 0x1b {
+            let len = ansi_code_length(s, i);
+            if len == 0 {
+                return None;
+            }
+            i += len;
+        } else {
+            return None;
+        }
+    }
+    Some(width)
+}
+
 fn char_width(c: char) -> usize {
     UnicodeWidthChar::width(c).unwrap_or(0)
 }
@@ -228,15 +335,48 @@ fn strip_sequences(s: &str) -> String {
 }
 
 /// Visible width in terminal columns.
+///
+/// **Order: cache, then the ASCII fast path, then segmentation.** The cache is tried
+/// first because a hash lookup is cheaper than walking bytes, which I measured rather
+/// than assumed (gh #378 gap 1, a 400-cell styled row, release build):
+///
+/// | case | before | after |
+/// |---|---|---|
+/// | distinct rows (theme switch, resize) | ~22,000 ns | ~450-530 ns |
+/// | one row repeated (cache hit, steady state) | ~183 ns | ~183 ns |
+///
+/// The win is on the case that hurts: a theme change, a resize or a scroll sees every
+/// row **once**, misses the cache, and used to be allocation-bound. A repeated row
+/// still hits the cache first and costs what it always did.
+///
+/// My first version put the fast path *before* the cache and wrote the 39x/2.4x
+/// trade-off up as a considered decision. It was not one - a hash lookup is cheaper
+/// than a byte walk, so cache-first is at least as good on both axes, and the ordering
+/// is the cache's. (The benchmark's "repeated row" case does not show the cache win
+/// because the distinct-row pass never inserted those strings; measured separately, a
+/// warm cache answers in ~180 ns.)
+///
+/// The cache still only ever stores what the slow path computed, so this adds nothing
+/// to its memory: styled lines now answer before they can be inserted.
 pub fn visible_width(s: &str) -> usize {
-    if s.is_empty() {
-        return 0;
-    }
-    if is_printable_ascii(s) {
-        return s.len();
-    }
     if let Some(w) = WIDTH_CACHE.with(|c| c.borrow().get(s).copied()) {
         return w;
+    }
+    if let Some(width) = ascii_visible_width(s) {
+        note_fast_path_hit();
+        return width;
+    }
+    visible_width_slow(s)
+}
+
+/// The path [`visible_width`] falls back to: cache, tab expansion, sequence
+/// stripping, then grapheme segmentation.
+///
+/// Split out (gh #378 gap 1) so the equivalence table can ask both paths the same
+/// question and compare, which is the only thing that makes the fast path safe.
+fn visible_width_slow(s: &str) -> usize {
+    if s.is_empty() {
+        return 0;
     }
     let mut clean = if s.contains('\t') {
         s.replace('\t', "   ")
@@ -805,6 +945,14 @@ pub fn slice_with_width(
     while i < line.len() {
         if let Some((code, len)) = extract_ansi_code(line, i) {
             if current_col >= start_col && current_col < end_col {
+                // Gh #378 gap 2: flush the buffered pre-seam codes **before** this
+                // one. Emitting the code first reverses the pair at the seam: a
+                // `\x1b[0m` sitting exactly at `start_col` was pushed to `result`
+                // before the `\x1b[31m` that preceded it, so the tail read
+                // `\x1b[0m\x1b[31m` and unstyled text came out red. pi does the
+                // same flush (`result += pending + code`).
+                result.push_str(&pending_ansi);
+                pending_ansi.clear();
                 result.push_str(&code);
             } else if current_col < start_col {
                 pending_ansi.push_str(&code);
@@ -993,168 +1141,5 @@ pub fn get_osc8_link_at_column(line: &str, column: usize) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    // Verifies: I.2 width engine (wide chars, combining, emoji, flags).
-    #[test]
-    fn width_of_ascii_and_wide_and_combining() {
-        assert_eq!(visible_width("hello"), 5);
-        assert_eq!(visible_width("世界"), 4); // CJK wide
-        assert_eq!(visible_width("a\u{0301}"), 1); // combining acute
-        assert_eq!(visible_width("😀"), 2); // emoji
-        assert_eq!(visible_width("🇺🇸"), 2); // regional indicator pair
-        assert_eq!(visible_width("a\tb"), 5); // tab = 3
-        assert_eq!(visible_width("\x1b[31mred\x1b[0m"), 3);
-    }
-
-    #[test]
-    fn ansi_extraction_is_the_closed_vocabulary() {
-        assert_eq!(extract_ansi_code("\x1b[31m", 0).unwrap().0, "\x1b[31m");
-        assert_eq!(extract_ansi_code("\x1b[2J", 0).unwrap().0, "\x1b[2J");
-        assert!(extract_ansi_code("\x1b[999z", 0).is_none()); // unsupported final
-        assert_eq!(extract_ansi_code("\x1b]8;;http://x\x07", 0).unwrap().1, 14);
-    }
-
-    // Verifies: gh #178 - a wrapped OSC 8 hyperlink re-opens with the
-    // full URL on every segment, so clicking any wrapped row opens the
-    // whole URL, and hit-testing any segment resolves the same link.
-    #[test]
-    fn a_wrapped_osc8_link_reopens_with_the_full_url_on_every_row() {
-        let url = format!(
-            "https://accounts.example.com/o/oauth2/auth?response_type=code&client_id={}&redirect_uri=https%3A%2F%2Flocalhost%2Fcallback&scope=email+profile",
-            "9".repeat(120)
-        );
-        assert!(url.len() > 200, "the receipt needs a long URL");
-        let linked = format!("\x1b]8;;{url}\x07{url}\x1b]8;;\x07");
-        let rows = wrap_text_with_ansi(&linked, 40);
-        assert!(rows.len() >= 3, "it wraps: {:?}", rows.len());
-        for row in &rows {
-            assert!(
-                row.contains(&format!("\x1b]8;;{url}\x07")),
-                "every row re-opens the full URL: {row:?}"
-            );
-            assert!(
-                row.contains("\x1b]8;;\x07"),
-                "every row closes the link: {row:?}"
-            );
-        }
-        for row in rows.iter().skip(1) {
-            let plain = strip_terminal_sequences(row);
-            let col = plain.find(|c: char| !c.is_whitespace()).unwrap_or(0);
-            assert_eq!(
-                get_osc8_link_at_column(row, col),
-                Some(url.clone()),
-                "hit-testing a wrapped row resolves the link"
-            );
-        }
-        let joined: String = rows
-            .iter()
-            .map(|row| strip_terminal_sequences(row))
-            .collect();
-        assert_eq!(joined, url, "selection across the wrap reads the URL");
-    }
-
-    #[test]
-    fn wrap_breaks_on_words_and_long_words_by_grapheme() {
-        let lines = wrap_text_with_ansi("the quick brown fox", 9);
-        assert!(lines.iter().all(|l| visible_width(l) <= 9));
-        assert_eq!(lines, vec!["the quick", "brown fox"]);
-        let long = wrap_text_with_ansi("abcdefghij", 4);
-        assert_eq!(long, vec!["abcd", "efgh", "ij"]);
-    }
-
-    #[test]
-    fn wrap_carries_style_across_lines() {
-        let lines = wrap_text_with_ansi("\x1b[31mthe quick brown fox\x1b[0m", 9);
-        assert!(lines[1].starts_with("\x1b[31m"));
-        assert!(lines.iter().all(|l| visible_width(l) <= 9));
-    }
-
-    #[test]
-    fn wrap_breaks_cjk_per_ideograph() {
-        let lines = wrap_text_with_ansi("世界你好吗", 4);
-        assert!(lines.iter().all(|l| visible_width(l) <= 4));
-        assert_eq!(lines, vec!["世界", "你好", "吗"]);
-    }
-
-    #[test]
-    fn truncate_keeps_a_contiguous_prefix() {
-        let out = truncate_to_width("hello world", 8, "...", false);
-        assert_eq!(visible_width(&out), 8);
-        assert_eq!(strip_terminal_sequences(&out), "hello...");
-        assert_eq!(truncate_to_width("hello", 8, "...", false), "hello");
-        assert_eq!(truncate_to_width("hello", 8, "...", true), "hello   ");
-        let linked = truncate_to_width("\x1b]8;;http://x\x07abcdef\x1b]8;;\x07", 5, "...", false);
-        assert!(visible_width(&linked) <= 5);
-        assert_eq!(strip_terminal_sequences(&linked), "ab...");
-    }
-
-    #[test]
-    fn truncate_never_straddles_a_wide_char() {
-        let out = truncate_to_width("世界世界", 5, "...", false);
-        assert!(visible_width(&out) <= 5);
-        assert!(out.starts_with("世"));
-    }
-
-    #[test]
-    fn slice_preserves_styles_entering_the_range() {
-        let line = "\x1b[31mabcdef\x1b[0m";
-        let (sliced, width) = slice_with_width(line, 2, 3, false);
-        assert_eq!(width, 3);
-        assert!(sliced.starts_with("\x1b[31m"));
-        assert_eq!(strip_terminal_sequences(&sliced), "cde");
-    }
-
-    #[test]
-    fn tracker_line_end_reset_closes_only_underline_and_link() {
-        let mut tracker = AnsiCodeTracker::new();
-        tracker.process("\x1b[4m");
-        tracker.process("\x1b[41m");
-        tracker.process("\x1b]8;;http://x\x07");
-        let reset = tracker.line_end_reset();
-        assert!(reset.contains("\x1b[24m"));
-        assert!(reset.contains("\x1b]8;;\x07"));
-        assert!(!reset.contains("49m")); // background intentionally bleeds
-        assert!(tracker.active_codes().contains("41"));
-    }
-
-    #[test]
-    fn osc8_terminator_is_preserved_on_reopen() {
-        let mut tracker = AnsiCodeTracker::new();
-        tracker.process("\x1b]8;;http://x\x07");
-        assert!(tracker.active_codes().ends_with("\x07"));
-        let mut tracker = AnsiCodeTracker::new();
-        tracker.process("\x1b]8;;http://x\x1b\\");
-        assert!(tracker.active_codes().ends_with("\x1b\\"));
-    }
-
-    #[test]
-    fn sgr_reset_does_not_clear_the_hyperlink() {
-        let mut tracker = AnsiCodeTracker::new();
-        tracker.process("\x1b]8;;http://x\x07");
-        tracker.process("\x1b[0m");
-        assert!(tracker.active_codes().contains("http://x"));
-    }
-
-    #[test]
-    fn normalize_decomposes_thai_am_and_expands_tabs() {
-        assert_eq!(normalize_terminal_output("\u{0e33}"), "\u{0e4d}\u{0e32}");
-        assert_eq!(normalize_terminal_output("a\tb"), "a   b");
-        assert_eq!(
-            normalize_terminal_output("\x1b[31m\t\x1b[0m"),
-            "\x1b[31m   \x1b[0m"
-        );
-    }
-
-    #[test]
-    fn extract_segments_inherits_style_across_the_gap() {
-        let line = "\x1b[31mabcdef\x1b[0m";
-        let (before, bw, after, aw) = extract_segments(line, 3, 4, 2, false);
-        assert_eq!(strip_terminal_sequences(&before), "abc");
-        assert_eq!(bw, 3);
-        assert_eq!(strip_terminal_sequences(&after), "ef");
-        assert_eq!(aw, 2);
-        assert!(after.starts_with("\x1b[31m"));
-    }
-}
+#[path = "text_tests.rs"]
+mod tests;

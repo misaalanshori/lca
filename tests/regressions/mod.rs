@@ -1175,3 +1175,8 @@ mod toast_does_not_wipe_scrollback;
 // text; both seams go through the style-tracking instrument.
 #[path = "373-splice-pads-to-column.rs"]
 mod splice_pads_to_column;
+
+// Gh #378 gaps 1-2: the width fast path allocates on nothing and declines rather than
+// guessing an escape length; an SGR arriving at the slice seam keeps its order.
+#[path = "378-fast-path-and-sgr-order.rs"]
+mod fast_path_and_sgr_order;

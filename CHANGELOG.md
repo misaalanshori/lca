@@ -7,6 +7,13 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **Text after a selected or overlaid run could inherit the wrong colour** (gh #378
+  gaps 1-2). Two defects in the width/slice path: a style arriving exactly at the seam
+  of a slice was emitted before the style it replaced, so a reset and a colour came out
+  reversed and unstyled text turned red; and the width fast path rejected every line
+  carrying styling, so re-rendering after a theme change or a resize ran full grapheme
+  segmentation and a cache lookup for every row on screen. Slices now keep their style
+  order, and a styled line is measured by a single pass over its bytes.
 - **Overlays drawn over short lines landed in the wrong place** (gh #373 bug 1). The
   splice that places the panel's drawer tab `◀` and the `↓ Jump to latest message`
   indicator never padded the row up to the column it was asked for, so on any line shorter
