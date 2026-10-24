@@ -109,10 +109,6 @@ convention: `LCA_LOG`, then `RUST_LOG`, then `warn` by default
 | `queue.steering_mode` | `all` or `one-at-a-time` | `all` | How queued steering messages flush (gh #76, pi's `steeringMode`): `all` joins everything waiting at the next boundary (historical); `one-at-a-time` drains one per boundary, in order. Default differs from pi's by decision (changing it would change long-standing behavior). |
 | `queue.follow_up_mode` | `one-at-a-time` or `all` | `one-at-a-time` | How queued follow-ups flush at turn end (gh #76, pi's `followUpMode`): one per turn end, or all joined as one submission. |
 | `compaction.strategy` | string | unset (automatic) | The preferred compaction extension (gh #3): names the strategy `/ext` picks; unset or unknown falls back to the first enabled one. |
-
-One TOML shape rule bites these retry keys: `provider` is both a leaf (`provider = "name"`) and a section head, and TOML forbids using one path as both, so a file that names its provider cannot also carry `provider.retry_limit`/`provider.retry_*_delay_ms`. Use the environment form (`LCA_PROVIDER_RETRY_LIMIT`, `LCA_PROVIDER_RETRY_BASE_DELAY_MS`, `LCA_PROVIDER_RETRY_MAX_DELAY_MS`), which the precedence ladder puts above both files anyway. The same applies to `thinking` beside `[thinking.budgets]`. (Found while implementing gh #273; a pre-existing TOML constraint, not a bug in the loader.)
-
-Network and retry inventory (gh #83, pi's "Network and retries"): attempts, base delay, and the max-delay cap are the tunable layer; there is no transport selection (hyper-only, no WebSocket/SSE switch) and no per-request timeout key. The proxy is environment-only by decision — `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY`, see Environment above — never a `net.proxy_url` key: a proxy URL carries credentials that must not land in config files, and per-machine routing is what process env is for.
 | `tool.timeout_seconds` | integer | explicit-only (see below) | Shell command timeout when set; the command's process tree is killed on expiry (FR-TOOL-5). Unset means no timeout where the user can cancel (interactive, pi's default) and the historical 120s backstop where nobody can (headless, documented divergence: an unbounded hang in CI is worse than a timeout error). A per-call `timeout` in the `shell` arguments overrides either default for that call. |
 | `tool.result_limit_bytes` | integer | `65536` | Tool results above this are truncated and marked (FR-TOOL-7). |
 | `tool.max_iterations` | integer | `0` (unlimited) | Maximum tool calls within one turn; `0` disables the cap (FR-CORE-9, amended 2026-10-02: long-horizon tasks need the room, and pi caps nothing). A positive value re-enables the runaway guard and the notice names that number. History: `50`, then `100` - both were work caps in disguise. |
@@ -160,6 +156,10 @@ Network and retry inventory (gh #83, pi's "Network and retries"): attempts, base
 | `permissions.proposals` | table | empty | Project file only. Proposals with no force; see ADR-0006. |
 | `personas` | table: name -> bundle | empty | Named bundles for `/persona` (gh #412): a model, a thinking level, a tool loadout, and optional instructions, applied as one command. See [Personas](#personas). |
 
+One TOML shape rule bites these retry keys: `provider` is both a leaf (`provider = "name"`) and a section head, and TOML forbids using one path as both, so a file that names its provider cannot also carry `provider.retry_limit`/`provider.retry_*_delay_ms`. Use the environment form (`LCA_PROVIDER_RETRY_LIMIT`, `LCA_PROVIDER_RETRY_BASE_DELAY_MS`, `LCA_PROVIDER_RETRY_MAX_DELAY_MS`), which the precedence ladder puts above both files anyway. The same applies to `thinking` beside `[thinking.budgets]`. (Found while implementing gh #273; a pre-existing TOML constraint, not a bug in the loader.)
+
+Network and retry inventory (gh #83, pi's "Network and retries"): attempts, base delay, and the max-delay cap are the tunable layer; there is no transport selection (hyper-only, no WebSocket/SSE switch) and no per-request timeout key. The proxy is environment-only by decision — `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY`, see Environment above — never a `net.proxy_url` key: a proxy URL carries credentials that must not land in config files, and per-machine routing is what process env is for.
+
 ## Personas
 
 `[personas.<name>]` defines a bundle that `/persona <name>` applies in one
@@ -179,8 +179,6 @@ model = "local-model"
 thinking = "off"
 tools = []
 ```
-
-The four fields:
 
 The four fields:
 

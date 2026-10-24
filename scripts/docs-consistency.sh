@@ -198,10 +198,56 @@ for link in $(grep -oE '\(docs/[a-z0-9/_.-]+\.md(#[-a-z0-9]+)?\)' README.md | tr
   fi
 done
 
+# Structural drift in the user docs (2026-10-24). Two real defects shipped
+# because a docs edit landed in the wrong place and nothing looked:
+# `/permissions` (#261) inserted its section in the MIDDLE of usage.md's command
+# table, so the remaining rows lost their header and columns and every row after
+# it became a stray line of pipes; #412 left a lead-in sentence duplicated with a
+# blank line between the copies. Both are mechanical to detect.
+#
+# (a) An orphaned table row: a `|` line inside a block that never carried a
+# header separator (`| --- |`). Markdown only honours a table whose block opens
+# with that separator, so a row without one renders as literal pipes - which is
+# exactly what a reader saw. This catches the split wherever the interrupting
+# heading now sits, not just the blank-then-row case.
+for f in docs/*.md; do
+  # A markdown table is valid only when its block's SECOND line is the header
+  # separator; any other shape renders as literal pipes. Buffer each contiguous
+  # `|` block and judge it on its first two lines, so a table whose header was
+  # cut away by an inserted section is named at its first surviving row.
+  orphans=$(awk '
+    function flush() {
+      if (n >= 2 && !sep) { printf "%d ", start; bad=1 }
+      n=0; sep=0; start=0
+    }
+    BEGIN { n=0; sep=0; start=0 }
+    /^\|/ {
+      if (n == 0) start=NR
+      n++
+      if (n == 2) { if ($0 ~ /^\|[ :|-]+\|?[ :|-]*$/) sep=1 }
+      next
+    }
+    { flush() }
+    END { flush(); exit bad ? 0 : 1 }
+  ' "$f" || true)
+  if [ -n "$orphans" ]; then
+    echo "docs-consistency: $f has a table with no header separator starting at line: $orphans"
+    fail=1
+  fi
+  # (b) A line repeated verbatim across blank lines is a paste artefact: it
+  # reads as a stutter and hides which copy is the real one.
+  dup=$(awk '$0!="" { if (prev==$0) print NR": "$0; prev=$0 }' "$f")
+  if [ -n "$dup" ]; then
+    echo "docs-consistency: $f repeats a line verbatim: $dup"
+    fail=1
+  fi
+done
+
 if [ "$fail" = 0 ]; then
   echo "docs-consistency: one gate list, two pointers, no copies"
   echo "docs-consistency: preset table and capability sections match their data"
   echo "docs-consistency: vocabulary tables match their validators"
   echo "docs-consistency: README doc links resolve"
+  echo "docs-consistency: no doc table is split, no line repeats as a paste artefact"
 fi
 exit "$fail"
