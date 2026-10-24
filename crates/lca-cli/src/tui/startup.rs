@@ -9,6 +9,7 @@ use lca_permissions::SharedPrompt;
 use std::sync::{Arc, Mutex};
 
 use super::session_stats;
+use super::tmux_doctor;
 use lca_core::ExtensionRegistry;
 use lca_session::{Session, SessionStore};
 
@@ -268,6 +269,7 @@ pub fn launch_header(
     flags: &crate::CliFlags,
     registry: &lca_core::ExtensionRegistry,
     config: &lca_config::Config,
+    tmux_doctor: &tmux_doctor::Cell,
 ) -> (Vec<String>, Vec<String>) {
     let collisions = collision_summary(registry.collisions());
     let context = crate::prompt::context_sources(data, cwd, trusted, flags.no_context_files);
@@ -293,7 +295,70 @@ pub fn launch_header(
         template_count,
         collisions,
     );
-    (compact, expanded)
+    (
+        compact,
+        doctor_rows_quiet(tmux_doctor, expanded, config.ui_quiet_startup()),
+    )
+}
+
+/// Append the tmux doctor's notice to the **expanded** header (gh #400 gap 4).
+///
+/// The expanded section rather than the transcript, on the brief's instruction and
+/// for a reason visible in the pandes: the transcript is the conversation, and a
+/// diagnostic about the terminal is not part of it - it has no place in scrollback
+/// an hour later, and it would push the first message down. The expanded header is
+/// where a reader goes to ask "what did this launch see", which is exactly the
+/// question the doctor answers.
+///
+/// Silence when there is no finding, so the healthy case adds **no row at all** -
+/// the same rule gap 2's sections follow, and the one that keeps the table from
+/// reading as half-drawn.
+///
+/// A still-running probe is silent too: `notice_from` returns `None` while the
+/// thread is out, which is the price of never blocking the first frame. On this
+/// machine the load is 6-9x the probe, so in practice the answer is there.
+pub fn doctor_rows(tmux_doctor: &tmux_doctor::Cell, rows: Vec<String>) -> Vec<String> {
+    doctor_rows_quiet(tmux_doctor, rows, "false")
+}
+
+/// [`doctor_rows`] honouring `ui.quiet_startup` (gh #400 gap 4).
+///
+/// The brief's rule: `quietStartup` suppresses the doctor. That is **not** the
+/// collision rule and the difference is deliberate. A collision means the thing
+/// the reader installed did not load - they have no other way to learn it, so it
+/// rides through quiet. A tmux finding is advice about a chord they have not
+/// pressed yet; a reader who asked for quiet has said "do not tell me what I did
+/// not ask", and honouring that is what makes the setting worth having. It also
+/// keeps the doctor from becoming the one line a quiet startup still prints, which
+/// is how a diagnostic turns into noise.
+pub fn doctor_rows_quiet(
+    tmux_doctor: &tmux_doctor::Cell,
+    mut rows: Vec<String>,
+    quiet: &str,
+) -> Vec<String> {
+    if quiet == "true" {
+        return rows;
+    }
+    if let Some(notice) = tmux_doctor::notice_from(tmux_doctor) {
+        for line in wrap_notice(&notice) {
+            rows.push(fit_row(&line, u16::MAX));
+        }
+    }
+    rows
+}
+
+/// Break the notice into rows that read as a paragraph.
+///
+/// Not word-wrap: the notice is two sentences and the second is the advice, so a
+/// row break at the sentence boundary is what makes it scannable. A terminal
+/// narrower than a sentence still wraps it in the renderer - this only decides
+/// where the *deliberate* break is.
+pub fn wrap_notice(notice: &str) -> Vec<String> {
+    let mut rows: Vec<String> = Vec::new();
+    for sentence in notice.split_inclusive(". ") {
+        rows.push(sentence.trim_end().to_string());
+    }
+    rows
 }
 
 /// `1 extension` / `2 extensions`.
@@ -320,8 +385,13 @@ fn plural(word: &str, count: usize) -> String {
 /// product knob) sleeps here so a live check can type into a startup that is
 /// genuinely slow: the real window is far too short to type into by hand, and a
 /// fix for "the window is too long" has to be demonstrable *in* the window.
-pub(super) fn claim_terminal() -> lca_ui::run_early_input::EarlyInput {
+pub(super) fn claim_terminal() -> (lca_ui::run_early_input::EarlyInput, tmux_doctor::Cell) {
     let early = lca_ui::run_early_input::EarlyInput::start();
+    // Gh #400 gap 4: start the tmux keyboard probe **here**, before the load.
+    // One `tmux show` measured 34 ms and a launch asks two, while the load below
+    // runs 200-300 ms - so the probe is finished before the header is composed,
+    // and nothing on the first-frame path ever waits for it.
+    let doctor = tmux_doctor::spawn();
     #[cfg(not(test))]
     if let Some(ms) = std::env::var("LCA_STARTUP_STALL_MS")
         .ok()
@@ -329,7 +399,7 @@ pub(super) fn claim_terminal() -> lca_ui::run_early_input::EarlyInput {
     {
         std::thread::sleep(std::time::Duration::from_millis(ms.min(10_000)));
     }
-    early
+    (early, doctor)
 }
 
 /// Load the extension registry: installed first (an installed copy shadows the

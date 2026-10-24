@@ -283,3 +283,187 @@ fn a_collision_does_not_stop_the_session_and_the_winner_answers() {
         summary.entries[0]
     );
 }
+
+// ===========================================================================
+// gh #400 gap 4: the tmux keyboard doctor
+// ===========================================================================
+//
+// The doctor's *decision* is pinned by unit rows in `tui::tmux_doctor`; these rows
+// pin where its finding lands, which is the half a unit test cannot see. The
+// brief's rule is specific - the notice belongs in the header's expandable
+// section, never printed into the transcript - and "where it lands" is exactly
+// the kind of thing that regresses silently because both placements render.
+
+/// The doctor rows for a finding, through the same function the launch uses.
+fn doctor_rows_for(doctor: lca_cli::tui::tmux_doctor::Doctor) -> Vec<String> {
+    let cell = std::sync::Arc::new(std::sync::OnceLock::new());
+    let _ = cell.set(doctor);
+    lca_cli::tui::startup::doctor_rows(&cell, Vec::new())
+}
+
+// Verifies: gh #400 gap 4 - **the notice joins the expanded table.** The launch
+// composes `(compact, expanded)` and the doctor rows go into the second, so a
+// reader who wants the diagnosis presses the one expand key and finds it there.
+#[test]
+fn the_doctor_notice_lands_in_the_expanded_section() {
+    let off = lca_cli::tui::tmux_doctor::Doctor::ExtendedKeysOff {
+        format: Some("xterm".into()),
+    };
+    let rows = doctor_rows_for(off);
+    assert!(
+        !rows.is_empty(),
+        "an unhealthy tmux says something: {rows:?}"
+    );
+    let text = rows.join(" ");
+    assert!(
+        text.contains("set -g extended-keys on"),
+        "and it is the command, not a description of one: {text}"
+    );
+    assert!(
+        text.contains("restart"),
+        "with the restart it needs: {text}"
+    );
+}
+
+// Verifies: gh #400 gap 4 - **a healthy tmux adds no row at all.** This is the
+// requirement the whole doctor stands on: rows are only worth reading if their
+// presence means something. Asserted as zero rows, not as "no warning text", so a
+// blank spacer left behind fails too.
+#[test]
+fn a_healthy_tmux_adds_no_row_to_the_header() {
+    let silent = doctor_rows_for(lca_cli::tui::tmux_doctor::Doctor::Silent);
+    assert!(
+        silent.is_empty(),
+        "silence is zero rows, not a quiet row: {silent:?}"
+    );
+}
+
+// Verifies: gh #400 gap 4 - **the notice is not in the transcript.** The compact
+// header is what a launch shows; a diagnostic about the terminal must not be in
+// it, or it appears every launch in the one place the reader did not ask. Asserted
+// by composing the real pair and checking the second, not the first.
+#[test]
+fn the_doctor_notice_stays_out_of_the_compact_line() {
+    let off = lca_cli::tui::tmux_doctor::Doctor::ExtendedKeysOff { format: None };
+    let cell = std::sync::Arc::new(std::sync::OnceLock::new());
+    let _ = cell.set(off);
+    let (compact, expanded) = (
+        lca_cli::tui::startup::compact_header(
+            "0.6.0",
+            "0.6",
+            &[],
+            1,
+            0,
+            0,
+            lca_ui::CollisionSummary::default(),
+        ),
+        lca_cli::tui::startup::doctor_rows(&cell, Vec::new()),
+    );
+    let compact_text = compact.join("\n");
+    assert!(
+        !compact_text.contains("extended-keys"),
+        "the default one-liner stays a one-liner: {compact_text}"
+    );
+    assert!(
+        expanded.join(" ").contains("extended-keys"),
+        "the diagnosis lives behind the key: {expanded:?}"
+    );
+}
+
+// Verifies: gh #400 gap 4 - **the notice is fitted like every other row.** §4's
+// Column Gauge rule is that no row may stagger the frame; a notice is longer than
+// any other header row (it carries a command and a reason), so it is the row most
+// likely to break that rule.
+#[test]
+fn a_long_doctor_notice_is_fitted_to_the_frame() {
+    let off = lca_cli::tui::tmux_doctor::Doctor::ExtendedKeysOff {
+        format: Some("xterm".into()),
+    };
+    let rows = doctor_rows_for(off);
+    let widest = rows.iter().map(String::len).max().unwrap_or(0);
+    assert!(
+        widest > 60,
+        "the fixture notice is genuinely long, so the row is worth making: {widest}"
+    );
+    // Fitted through the same helper the rest of the header uses.
+    for row in &rows {
+        let fitted = lca_cli::tui::startup::fit_row(row, 40);
+        assert!(
+            lca_tui::engine::text::visible_width(&fitted) <= 40,
+            "a fitted doctor row respects the budget: {fitted:?}"
+        );
+    }
+}
+
+// Verifies: gh #400 gap 4 - **`quietStartup` suppresses the doctor, and this is
+// NOT the collision rule.** The two differ on purpose: a collision means the thing
+// the reader installed did not load (they have no other way to learn it, so it
+// rides through quiet), while a tmux finding is advice about a chord they have not
+// pressed. A quiet startup must stay quiet, or the setting is decorative.
+#[test]
+fn quiet_startup_suppresses_the_doctor_notice() {
+    let off = lca_cli::tui::tmux_doctor::Doctor::ExtendedKeysOff { format: None };
+    let cell = std::sync::Arc::new(std::sync::OnceLock::new());
+    let _ = cell.set(off);
+    let base = vec!["lca 0.6.0 (abi 0.6)".to_string()];
+
+    let quiet = lca_cli::tui::startup::doctor_rows_quiet(&cell, base.clone(), "true");
+    assert_eq!(quiet, base, "quiet adds nothing at all: {quiet:?}");
+
+    // `"header"` is a *reduced* startup, not a quiet one - it keeps diagnostics
+    // in the same spirit as the collision notices.
+    let header_only = lca_cli::tui::startup::doctor_rows_quiet(&cell, base.clone(), "header");
+    assert!(
+        header_only.len() > base.len(),
+        "`header` still reports: {header_only:?}"
+    );
+
+    let loud = lca_cli::tui::startup::doctor_rows_quiet(&cell, base.clone(), "false");
+    assert!(loud.len() > base.len(), "a normal launch reports: {loud:?}");
+}
+
+// Verifies: gh #400 gap 4 - **`quietStartup` suppresses the doctor through the
+// real launch.** The row above pins the helper; this one pins that the launch
+// actually passes the setting through, which is the link that can be dropped while
+// every unit row still passes (checked: deleting `config.ui_quiet_startup()` from
+// `launch_header` is invisible to the helper-level row and caught here).
+#[test]
+fn a_quiet_startup_launch_prints_no_doctor_notice() {
+    let dir = std::env::temp_dir().join(format!("lca-quiet-doctor-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+    let user = dir.join("user.toml");
+    std::fs::write(&user, "ui.quiet_startup = true\n").expect("write config");
+
+    let cell = std::sync::Arc::new(std::sync::OnceLock::new());
+    let _ = cell.set(lca_cli::tui::tmux_doctor::Doctor::ExtendedKeysOff {
+        format: Some("xterm".into()),
+    });
+    let registry = lca_core::ExtensionRegistry::new();
+    let flags = lca_cli::CliFlags::default();
+
+    let quiet = lca_config::Config::load(&lca_config::LoadInput {
+        user_file: Some(user.clone()),
+        ..Default::default()
+    })
+    .expect("load quiet config");
+    assert_eq!(quiet.ui_quiet_startup(), "true", "the fixture is quiet");
+    let (compact, expanded) =
+        lca_cli::tui::startup::launch_header(&dir, &dir, false, &flags, &registry, &quiet, &cell);
+    let all = format!("{}\n{}", compact.join("\n"), expanded.join("\n"));
+    assert!(
+        !all.contains("extended-keys"),
+        "a quiet launch says nothing about tmux: {all}"
+    );
+
+    // The same launch with the default config does report, so the row is
+    // measuring the gate rather than an empty fixture.
+    let loud = lca_config::Config::default();
+    assert_eq!(loud.ui_quiet_startup(), "false", "the default is loud");
+    let (_compact, loud_expanded) =
+        lca_cli::tui::startup::launch_header(&dir, &dir, false, &flags, &registry, &loud, &cell);
+    assert!(
+        loud_expanded.join("\n").contains("extended-keys"),
+        "and the default launch does: {loud_expanded:?}"
+    );
+}
