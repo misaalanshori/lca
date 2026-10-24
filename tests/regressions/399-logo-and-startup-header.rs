@@ -175,8 +175,9 @@ fn no_key_on_the_header_is_hardcoded() {
 fn a_quiet_startup_still_shows_no_logo() {
     let chat = read("crates/lca-ui/src/chat.rs");
     assert!(
-        chat.contains("push_startup_header()"),
-        "the header entry is pushed unconditionally, so the *renderer* decides the rung"
+        chat.contains("push_startup_header(has_resources)"),
+        "the header entry is pushed unconditionally, so the *renderer* decides the \
+         rung; its one argument is whether a resource line will name the version too"
     );
     let render = read("crates/lca-ui/src/transcript/render.rs");
     assert!(
