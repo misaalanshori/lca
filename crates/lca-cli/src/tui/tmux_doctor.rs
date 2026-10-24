@@ -228,10 +228,14 @@ pub fn notice_from(cell: &Cell) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::collections::HashMap;
 
     /// An env reader over a fixed map - `lca-cli`'s tests never set process env
     /// (they run in parallel), so the ladder takes the reader as an argument.
+    ///
+    /// Unix only because every caller is: the rows that use it need `stub_tmux`.
+    #[cfg(unix)]
     fn env_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
         let map: HashMap<String, String> = pairs
             .iter()
@@ -244,6 +248,14 @@ mod tests {
     ///
     /// Written to a scratch dir rather than mocking `Command`, so the bound, the
     /// exit-status check and the trimming are all exercised as they really run.
+    ///
+    /// Unix only: the fixture is a `#!/bin/sh` script, and Windows `CreateProcess`
+    /// cannot execute one - it fails with "not a valid application", which made the
+    /// first version of these rows red on `windows-latest` while green here. The
+    /// *decisions* are platform-free and covered everywhere by `the_decision_table_*`;
+    /// what is Unix-only is the process mechanics (spawn, exit status, kill), and
+    /// half-covering those on Windows with a `.cmd` shim would test the shim.
+    #[cfg(unix)]
     fn stub_tmux(script: &str, name: &str) -> std::path::PathBuf {
         use std::io::Write as _;
         let dir = std::env::temp_dir().join(format!("lca-doctor-{name}-{}", std::process::id()));
@@ -266,6 +278,7 @@ mod tests {
     // is an assertion on the call count, not a timing one: a probe that fires and
     // discards its answer is still a subprocess per launch for most users.
     #[test]
+    #[cfg(unix)] // `stub_tmux` is a shell script; see its doc.
     fn outside_tmux_no_probe_runs_at_all() {
         // A stub that records every invocation by appending to a file. If the
         // doctor spawns it, the file exists.
@@ -296,6 +309,7 @@ mod tests {
     // the reason.** A reader who does not know what `extended-keys` means will not
     // run a bare `set -g` line, so the copy has to survive being read cold.
     #[test]
+    #[cfg(unix)] // `stub_tmux` is a shell script; see its doc.
     fn extended_keys_off_names_the_command_the_file_and_the_reason() {
         let stub = stub_tmux("#!/bin/sh\necho off\nexit 0\n", "off");
         let doctor = examine_with(
@@ -329,6 +343,7 @@ mod tests {
     // doctor has to earn its row; reporting health is what teaches people to
     // ignore it.
     #[test]
+    #[cfg(unix)] // `stub_tmux` is a shell script; see its doc.
     fn a_healthy_tmux_says_nothing() {
         for keys in ["on", "always"] {
             let stub = stub_tmux(
@@ -374,6 +389,7 @@ mod tests {
     // missing binary, a refusal, and a hang all have to leave the launch
     // unaffected; "could not check tmux" is not news worth a row.
     #[test]
+    #[cfg(unix)] // `stub_tmux` is a shell script; see its doc.
     fn a_failed_or_hanging_probe_is_silent_and_cannot_stall_the_launch() {
         let inside = env_of(&[("TMUX", "/tmp/tmux-1000/default,1,0")]);
 
