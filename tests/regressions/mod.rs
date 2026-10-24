@@ -1112,6 +1112,15 @@ mod model_search_and_thinking_default;
 #[path = "399-logo-and-startup-header.rs"]
 mod logo_and_startup_header;
 
+// GitHub #266: a disabled extension runs nothing, and stays disabled however late
+// it is registered. The primary half (MCP spawns nothing) landed as `16fc841e`
+// with behavioural rows in `crates/lca-cli/tests/mcp_enablement.rs`; this file
+// guards the seam that keeps the *next* registration path honest
+// (`registry::register_gated`), plus the ordering property that makes disablement
+// real rather than reported.
+#[path = "266-disabled-extension-runs-nothing.rs"]
+mod disabled_extension_runs_nothing;
+
 // GitHub #331: the fullscreen tab bar takes a row from the transcript window, and
 // four sites each computed that window themselves - three of them without the tab
 // term - so clicks landed a row off, the top stepper never fired, the scroll extent

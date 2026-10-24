@@ -57,6 +57,17 @@ Dates are UTC.
   it. `extended-keys-format` is mentioned as stability advice only: lca parses both
   of tmux's encodings, unlike pi, which needs `csi-u`.
 
+### Fixed
+- **A disabled extension now runs nothing, and stays disabled after `/reload`**
+  (gh #266). Disabling `mcp` had no effect *and* `McpManager::load` spawned every
+  configured stdio child and opened every remote connection anyway — a user said no
+  and the program did it regardless. The decision is now read before anything
+  connects, so a disabled server cannot reach the spawner. The same shape existed in
+  a second place: `register_compaction` registers into a live registry on `/reload`,
+  after `assemble`'s sweep, so a disabled `compaction-default` silently came back.
+  Late registrations now go through `registry::register_gated`, which applies the
+  decision at the registration rather than depending on a later sweep.
+
 ### Changed
 - **A compaction summary is now one collapsed card, not a wall of text** (gh #393).
   Each compaction renders as a single line naming its strategy, the record range it
