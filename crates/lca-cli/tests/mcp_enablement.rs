@@ -219,6 +219,7 @@ fn a_disabled_mcp_does_not_connect_to_a_remote_server() {
 // already in place. The distinction is the whole point: `set_enabled(false)` then
 // register proves nothing, while register-then-gate proves the seam.
 #[test]
+#[cfg(feature = "bundled-compaction-default")] // `compaction_handle_for_tests` needs the bundled extension.
 fn a_handle_registered_after_the_sweep_is_still_gated() {
     let sandbox = sandbox("mcp-late-registration");
     let mut registry = lca_core::ExtensionRegistry::new();
@@ -247,6 +248,7 @@ fn a_handle_registered_after_the_sweep_is_still_gated() {
 // A predicate that allows the name must leave it enabled, or the fix would pass
 // the row above by disabling everything.
 #[test]
+#[cfg(feature = "bundled-compaction-default")] // `compaction_handle_for_tests` needs the bundled extension.
 fn the_gate_leaves_a_permitted_registration_enabled() {
     let sandbox = sandbox("mcp-late-registration-allowed");
     let mut registry = lca_core::ExtensionRegistry::new();
@@ -266,6 +268,7 @@ fn the_gate_leaves_a_permitted_registration_enabled() {
 // call site: the behavioural rows above would still pass if `register_compaction`
 // kept calling `registry.register` directly while only the test used the gate.
 #[test]
+#[cfg(feature = "bundled-compaction-default")] // `compaction_handle_for_tests` needs the bundled extension.
 fn register_compaction_registers_through_the_gate() {
     let source =
         std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/registry.rs"))

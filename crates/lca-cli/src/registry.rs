@@ -232,6 +232,7 @@ pub fn register_gated(
 /// row has no business building; the seam it is gated by (`register_gated`) only
 /// reads a name and the predicate. This is the handle the `/reload` path really
 /// registers, so the row exercises the same type rather than a look-alike stub.
+#[cfg(feature = "bundled-compaction-default")]
 #[doc(hidden)]
 pub fn compaction_handle_for_tests(data: &Path) -> Arc<dyn lca_ext_abi::ExtensionDispatch> {
     let cap = extension_capabilities_for_tests(data);
@@ -239,6 +240,7 @@ pub fn compaction_handle_for_tests(data: &Path) -> Arc<dyn lca_ext_abi::Extensio
 }
 
 /// The minimal capability engine: enough for a handle to exist.
+#[cfg(feature = "bundled-compaction-default")]
 #[doc(hidden)]
 fn extension_capabilities_for_tests(data: &Path) -> Arc<lca_tools::Capabilities> {
     let roots = lca_permissions::ScopeRoots {
