@@ -7,6 +7,13 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **Overlays drawn over short lines landed in the wrong place** (gh #373 bug 1). The
+  splice that places the panel's drawer tab `◀` and the `↓ Jump to latest message`
+  indicator never padded the row up to the column it was asked for, so on any line shorter
+  than that column - which is most lines - the overlay was drawn immediately after the
+  text instead of where it belonged. Splicing now measures and pads in cells, so a
+  two-column character sitting on a seam no longer shifts the overlay or makes the row
+  wider than the terminal.
 - **A toast wiped the terminal's scrollback** (gh #372 bug 1). In the default scrollback
   renderer the toast painter was handed the whole session document instead of the visible
   frame, so it wrote the message into the document's second line - hundreds of rows above
