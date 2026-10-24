@@ -366,7 +366,14 @@ fn render_blocks(
 
         if is_table_start(lines, i) {
             let (table, consumed) = collect_table(lines, i);
-            render_table(&table, &lines[i..i + consumed], inner_width, theme, out);
+            render_table(
+                &table,
+                &lines[i..i + consumed],
+                inner_width,
+                theme,
+                options,
+                out,
+            );
             i += consumed;
             continue;
         }
@@ -986,5 +993,7 @@ impl Markdown {
     }
 }
 
+#[cfg(test)]
+mod table_tests;
 #[cfg(test)]
 mod tests;
