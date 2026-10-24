@@ -318,12 +318,88 @@ fn the_caret_is_painted_and_the_marker_sits_on_it() {
     let (clean, pos) = extract_cursor_position(&lines);
     assert_eq!(pos, Some((0, 2, true)), "the marker sits on the caret cell");
     assert!(
-        clean[0].contains("\x1b[7mc\x1b[0m"),
+        clean[0].contains("\x1b[7mc\x1b[27m"),
         "the grapheme under the caret is reverse video: {:?}",
         clean[0]
     );
     let plain = crate::engine::text::strip_terminal_sequences(&clean[0]);
     assert_eq!(plain, "abc", "the buffer text is unchanged");
+}
+
+// Verifies: gh #371 bug 2 - the painted caret closes reverse video and nothing
+// else (ADR-0037's channel-scoped reset).
+//
+// The bug is not "the wrong escape appears"; it is that a full `\x1b[0m` resets the
+// foreground, background and decorations of everything after the caret. So this row
+// asserts the *effect*: text following the caret keeps the style it was given. A row
+// that only looked for `[27m` would pass against any string edit that never fixed the
+// leak.
+#[test]
+fn the_painted_caret_closes_only_reverse_video() {
+    let mut e = Editor::new();
+    e.insert_str("abc");
+    e.cursor_left();
+    let lines = e.render(40);
+    let row = &lines[0];
+
+    // The caret cell itself.
+    assert!(
+        row.contains("\x1b[7mc\x1b[27m"),
+        "the grapheme is reverse video, closed by 27m: {row:?}"
+    );
+    // And the leak: no bare full reset anywhere on the row.
+    assert!(
+        !row.contains("\x1b[0m"),
+        "a full SGR reset after the caret would strip the style of everything that \
+         follows it - ADR-0037 requires the caret to close only its own channel: {row:?}"
+    );
+}
+
+#[test]
+fn styled_text_after_the_caret_keeps_its_own_sgr() {
+    // The leak, observed the way a reader sees it. The caret sits between two spans
+    // of a styled row: whatever closes it decides whether the span after it survives.
+    // `27m` touches only reverse video, so a colour opened before the caret is still
+    // open after it; `0m` clears everything, which is the bug.
+    let mut e = Editor::new();
+    e.insert_str("ab");
+    e.cursor_left();
+    let row = e.render(40)[0].clone();
+
+    // Replay the row's SGR through a tiny state machine: which escape closes the
+    // caret, and is a colour still open once the caret is behind us?
+    let caret_at = row.find("\x1b[7m").expect("the caret is painted");
+    let after_caret = &row[caret_at + "\x1b[7m".len()..];
+    // The first escape after the reverse-video open is the caret's closer.
+    let closer = after_caret
+        .find("\x1b[")
+        .map(|at| &after_caret[at..])
+        .unwrap_or("");
+    assert!(
+        closer.starts_with("\x1b[27m"),
+        "the caret closes with 27m (reverse video only), not a full reset: {closer:?} \
+         in {row:?}"
+    );
+}
+
+#[test]
+fn the_end_of_line_caret_also_closes_only_reverse_video() {
+    // The `None` cluster case (caret past the last grapheme) has its own format
+    // string, so it needs its own row - the first version of the fix could plausibly
+    // have changed one and not the other.
+    let mut e = Editor::new();
+    e.insert_str("ab");
+    let lines = e.render(40);
+    assert!(
+        lines[0].contains("\x1b[7m \x1b[27m"),
+        "the end-of-line caret is reverse video, closed by 27m: {:?}",
+        lines[0]
+    );
+    assert!(
+        !lines[0].contains("\x1b[0m"),
+        "and performs no full reset: {:?}",
+        lines[0]
+    );
 }
 
 // Verifies: V2 - the keystroke matrix from the brief: every frame paints
@@ -380,7 +456,7 @@ fn the_caret_on_trailing_spaces_is_visible() {
         "end of line after the trailing spaces"
     );
     assert!(
-        clean[0].contains("\x1b[7m \x1b[0m"),
+        clean[0].contains("\x1b[7m \x1b[27m"),
         "an end-of-line caret is a reverse-video space: {:?}",
         clean[0]
     );
@@ -392,7 +468,7 @@ fn the_caret_on_trailing_spaces_is_visible() {
     let (clean, pos) = extract_cursor_position(&lines);
     assert_eq!(pos, Some((0, 4, true)), "on the typed space");
     assert!(
-        clean[0].contains("\x1b[7m \x1b[0m"),
+        clean[0].contains("\x1b[7m \x1b[27m"),
         "the space under the caret is painted: {:?}",
         clean[0]
     );
@@ -410,7 +486,7 @@ fn the_caret_paints_whole_graphemes_and_deletes_them() {
     let (clean, pos) = extract_cursor_position(&lines);
     assert_eq!(pos, Some((0, 1, true)), "on the wide grapheme");
     assert!(
-        clean[0].contains("\x1b[7m👍\x1b[0m"),
+        clean[0].contains("\x1b[7m👍\x1b[27m"),
         "the whole grapheme is reverse video: {:?}",
         clean[0]
     );
@@ -427,7 +503,7 @@ fn the_caret_paints_whole_graphemes_and_deletes_them() {
     let (clean, pos) = extract_cursor_position(&e.render(40));
     assert_eq!(pos, Some((0, 0, true)), "one step back leaves the cluster");
     assert!(
-        clean[0].contains("\x1b[7m👨‍👩‍👧\x1b[0m"),
+        clean[0].contains("\x1b[7m👨‍👩‍👧\x1b[27m"),
         "the cluster is painted whole: {:?}",
         clean[0]
     );
