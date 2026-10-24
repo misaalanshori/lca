@@ -23,6 +23,17 @@ Dates are UTC.
   `persist_setting` call, and the same hint row. The hint is built from the live
   keybindings on both pickers, so a rebind reaches the row a reader sees.
 
+### Added
+- **lca checks your tmux keyboard setup and says what to run when it is wrong**
+  (gh #400 gap 4). tmux reports `Ctrl+Shift+<key>` and `Shift+Enter` only with
+  `extended-keys` on, and it is off by default — so the chord never arrives and the
+  editor looks broken rather than the terminal. The check runs inside tmux only
+  (outside it costs no subprocess), never delays the first frame, and reports into
+  the header's `ctrl+o` detail section rather than the conversation. It is silent
+  when tmux is healthy and when the check cannot run, and `quietStartup` suppresses
+  it. `extended-keys-format` is mentioned as stability advice only: lca parses both
+  of tmux's encodings, unlike pi, which needs `csi-u`.
+
 ### Changed
 - **A compaction summary is now one collapsed card, not a wall of text** (gh #393).
   Each compaction renders as a single line naming its strategy, the record range it
