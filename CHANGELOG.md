@@ -7,6 +7,17 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **A caret scrolled out of view could desynchronise the main screen, and the painted
+  caret reset the colour of the text after it** (gh #371). Two rendering-contract bugs:
+  the scrollback renderer recorded the cursor row it *asked* for while the terminal
+  clamped the result to the visible viewport, so a later frame's diff started from a
+  screen row that never existed and the differential rendering corrupts; and the painted
+  caret closed reverse video with a full `\x1b[0m`, stripping the foreground, background
+  and decorations of everything after it. A caret outside the viewport is now treated as
+  unaddressable (the hardware cursor hides rather than parking on an unrelated line), and
+  the caret closes with `\x1b[27m` so the text around it keeps its own style.
+
+### Added
 - **`/reload` now covers editor key bindings, so a new cursor or newline binding works
   without a restart** (gh #332). The prompt editor kept the key map it was built with,
   so a reloaded `tui.editor.*` or `tui.input.*` binding was accepted by app-level

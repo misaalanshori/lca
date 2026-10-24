@@ -1140,3 +1140,14 @@ mod tab_row_offset;
 // need its own invalidation. Behaviour rows: `crates/lca-ui/src/chat_reload_keys_tests.rs`.
 #[path = "332-reload-rebinds-editor.rs"]
 mod reload_rebinds_editor;
+
+// GitHub #371 bugs 1 and 2: the fullscreen-free renderer recorded the caret's
+// *requested* row while the terminal clamped the result at the viewport top, so the
+// next frame's diff started from a screen row that never existed and the differential
+// rendering desynchronised permanently; and the painted caret closed reverse video with
+// a full `\x1b[0m`, stripping the style of everything after it. Behaviour rows live in
+// `main_screen.rs` and `widgets/editor.rs`; this file guards the two shapes that would
+// let either come back. Bugs 3 (overlay marker ownership) and 4 (`show_hardware_cursor`)
+// stay open on the issue.
+#[path = "371-caret-row-and-sgr-close.rs"]
+mod caret_row_and_sgr_close;
