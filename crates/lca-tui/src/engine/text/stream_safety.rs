@@ -36,6 +36,19 @@ const MAX_TRAILING_SEQUENCE: usize = 4096;
 #[must_use]
 pub fn sanitize_incomplete_escapes(text: &str) -> &str {
     let bytes = text.as_bytes();
+    // `ST` (`ESC \`) on its own is the *terminator* of an OSC/APC sequence,
+    // not an incomplete sequence: it is a complete two-byte unit whose
+    // opener is already earlier in the string. Before this check, every
+    // rendered link (whose OSC 8 close ends in `ST`) had it chopped, leaving
+    // a dangling `ESC ] 8 ; ;` that swallowed everything after it as OSC
+    // payload - in a table, the rest of the row (gh #384 bug 1's upstream
+    // defect). Checked before the window walk so a complete string never
+    // reaches the "last ESC" logic at all.
+    if let Some(without) = text.strip_suffix("\x1b\\")
+        && without.contains('\x1b')
+    {
+        return text;
+    }
     let window_start = bytes.len().saturating_sub(MAX_TRAILING_SEQUENCE);
     let mut pos = bytes.len();
     while pos > window_start {
