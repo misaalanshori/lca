@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 
 use super::chat::Chat;
+use super::chat_commands::{paste_text, printable};
 use super::chat_pickers::HubRow;
 use crate::state::Action;
 
@@ -249,14 +250,24 @@ impl Chat {
                 None
             }
             _ => {
-                // Printable keys filter; anything else stays put.
-                if let Some(text) = data.chars().find(|c| !c.is_control()) {
-                    hub.query.push(text);
+                // Gh #329: **text the input layer has already decided is text**, via
+                // the same two helpers every other field in this crate uses
+                // (`printable` parses a key; `paste_text` extracts a bracketed
+                // paste's payload).
+                //
+                // The defect was scanning `data` - the raw input payload - for its
+                // first non-control character. An ANSI sequence starts with ESC
+                // (control, skipped) and its second byte is `[` (printable), so
+                // `Left` (`\x1b[D`) typed `[` and a few presses left `[[[`. Filtering
+                // `[` out would have hidden the symptom and left every other escape
+                // fragment able to type itself in (`~`, `D`, a paste's first byte);
+                // parsing the key is the fix, because an unparsed byte sequence is
+                // then simply not text.
+                if let Some(text) = printable(data).or_else(|| paste_text(data)) {
+                    hub.query.push_str(&text);
                     hub.refilter();
-                    self.extension_hub = Some(hub);
-                } else {
-                    self.extension_hub = Some(hub);
                 }
+                self.extension_hub = Some(hub);
                 None
             }
         }

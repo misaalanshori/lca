@@ -64,6 +64,15 @@ Dates are UTC.
   of tmux's encodings, unlike pi, which needs `csi-u`.
 
 ### Fixed
+- **The `/extensions` filter no longer types `[` on arrow keys, Home/End, PageUp/Down
+  or a paste** (gh #329). The fallthrough arm scanned the raw input payload for its
+  first printable character; an escape sequence starts with `ESC` (a control
+  character, skipped) and continues with `[` (printable), so `Left` pushed `[` and a
+  few presses left `[[[`, matching nothing. The field now takes parsed text through
+  the same `printable`/`paste_text` helpers every other text field already used —
+  which is why they were immune — so an unhandled key is simply not text. A typed
+  `[` still works, and a bracketed paste fills the filter with its payload.
+
 - **A disabled extension now runs nothing, and stays disabled after `/reload`**
   (gh #266). Disabling `mcp` had no effect *and* `McpManager::load` spawned every
   configured stdio child and opened every remote connection anyway — a user said no
