@@ -19,3 +19,4 @@ pub mod stdin_buffer;
 pub(crate) mod sys;
 pub mod terminal;
 pub mod text;
+pub mod word;
