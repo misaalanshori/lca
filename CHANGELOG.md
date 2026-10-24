@@ -33,6 +33,23 @@ Dates are UTC.
   resume. The stored session log is unchanged — this is presentation only.
 
 ### Added
+- **A one-line startup header that expands, and collision notices that speak**
+  (gh #400 gaps 2 and 3). The header printed a version line, a `context:` line
+  listing every AGENTS.md path, and a counts line on every launch — a wall at the
+  top of a session nobody asked to read. It is now one line naming the counts and
+  the key that reveals the rest (`ctrl+o`, the interface's existing expand key, not
+  a new chord); pressing it opens the full table — every context path, one row per
+  non-empty resource section — with empty sections printing nothing and long paths
+  shortened by an ellipsis rather than staggering the frame. The expanded state
+  survives `/new`.
+  Separately: when two extensions claim one name, `ExtensionRegistry` already
+  recorded a `CollisionReport` and **nothing read it**, so a user who installed an
+  extension and found the bundled one answering had no way to learn why. A launch
+  now prints `extension "formatter" collision: ✓ … / ✗ … (skipped)` — the name,
+  both sides and which won — and it shows **even with `ui.quiet_startup = true`**,
+  because a shadowed extension is a diagnosis, not decoration. What loads is
+  unchanged: the winner runs, the loser is skipped for the session (FR-EXT-11).
+  Gap 4 of #400 (the tmux extended-keys doctor) remains open.
 - **`#` completes issue numbers from `gh` inline in the prompt** (gh #408). This is
   the first consumer of a new trigger seam: an autocomplete provider declares the
   characters it owns and handles those tokens itself, delegating every other token

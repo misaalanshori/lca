@@ -140,6 +140,18 @@ pub enum Entry {
     /// as an entry rather than a string is the whole fix - the keys are resolved
     /// at render time, like every other hint.
     StartupHint,
+    /// The startup header (gh #400 gaps 2 and 3): the compact line, or the
+    /// expanded table when the reader presses `ctrl+o`. A live entry so the expand
+    /// key reaches it, the collision notices ride it, and it outlives `/new` - see
+    /// `startup_header.rs` for why each of those needs an entry rather than `Raw`.
+    StartupResources {
+        /// The compact one-line header (empty when `quietStartup` hides it).
+        compact: Vec<String>,
+        /// The long-form table behind the expand.
+        expanded: Vec<String>,
+        /// Whether the reader has expanded it this session.
+        expanded_state: bool,
+    },
     /// An image the terminal renders through the graphics ladder, or as a
     /// placeholder when it has no graphics support (FR-UI-13, R5).
     Image {
@@ -1159,6 +1171,7 @@ pub fn image_label(media_type: &str, bytes: &[u8]) -> String {
 mod compaction_card;
 pub use compaction_card::Card;
 mod nested;
+mod startup_header;
 pub use nested::{COLLAPSED_CHILDREN, ChildCall, ChildStatus};
 mod preview;
 mod render;
