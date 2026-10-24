@@ -393,3 +393,37 @@ fn all_three_walks_agree_on_every_boundary() {
         );
     }
 }
+
+// Verifies: gh #383 gap 1 - CJK, against pi's own assertions, so the divergence is
+// **recorded** rather than assumed away.
+//
+// pi's `word-navigation.test.ts` ("CJK mixed") asserts on `"你好世界 test"`:
+//   findWordBackward(text, 7) === 5   (skip ` test` -> the space boundary)
+//   findWordBackward(text, 5) === 2   (skip `好世` -> 2)
+//   findWordBackward(text, 2) === 0
+//
+// Those numbers are what an `Intl.Segmenter` with dictionary-free CJK does, and they are
+// **not** what a class-run walk does: LCA treats the whole ideograph run as one word.
+// Both are defensible (a reader would say `你好世界` is four words; a terminal user
+// usually wants the run), and pi's own inline comment disagrees with its own assertion,
+// so the honest thing is a row that states LCA's answer and names the difference.
+#[test]
+fn cjk_motion_takes_the_whole_ideograph_run() {
+    let text = "你好世界 test";
+    let mut e = Editor::new();
+    e.set_text(text);
+    e.cursor_col = 7;
+    e.cursor_word_left();
+    // 7 -> 5 matches pi exactly: skip the leading space, stop at `test`'s start.
+    assert_eq!(e.cursor_col, 5, "7 -> 5, the same as pi");
+    // And 5 -> 0: the four ideographs are **one** run here, where pi's next assertion is
+    // 5 -> 2 (two ideographs). That is the recorded divergence.
+    e.cursor_word_left();
+    assert_eq!(e.cursor_col, 0, "5 -> 0: one run, where pi says 5 -> 2");
+    // And forward: the run is one segment.
+    e.cursor_col = 0;
+    e.cursor_word_right();
+    assert_eq!(e.cursor_col, 4, "the four ideographs are one run");
+    e.cursor_word_right();
+    assert_eq!(e.cursor_col, 9, "then `test`");
+}
