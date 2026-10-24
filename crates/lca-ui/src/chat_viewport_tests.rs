@@ -3,6 +3,7 @@
 //! Split from `chat_tests.rs`, which crossed the workspace's 1,200-line
 //! ceiling (gate 11) with these rows in it.
 
+use super::Chat;
 use super::chat;
 use crate::chat_mouse::ScrollbarHit;
 
@@ -956,5 +957,218 @@ fn editor_rides_a_rounded_frame_without_a_prompt_marker() {
         w as usize,
         "width-exact: {:?}",
         text[bottom]
+    );
+}
+
+// ============================================================================
+// gh #375 gap 2 - the scrollbar column must keep the block's background
+// ============================================================================
+
+/// The SGR that paints `Role::UserMessageBg` in this theme, which is what a
+/// shaded user-message band carries on every cell.
+fn user_band_bg(chat: &Chat) -> String {
+    let style = chat.theme.bg(crate::theme::Role::UserMessageBg);
+    // The style wraps text in `ESC[<bg>m ... ESC[49m`; the painter is the part
+    // between, and it is what a preserved cell must re-emit.
+    let painted = style("x");
+    // The style is `ESC[48;2;r;g;bm<body>ESC[49m`; the opening SGR ends at the
+    // first `m` that follows the `ESC[`, not at any `m` in the string.
+    let end = painted.find('m').expect("a background style emits an SGR");
+    let open = painted[..=end].to_string();
+    assert!(
+        open.contains("48;") || open.contains("[4"),
+        "the role really is a background: {open:?}"
+    );
+    open
+}
+
+/// A chat whose transcript is long enough that the scrollbar is visible, with a
+/// **coloured** theme - the plain fixture carries no background at all, so it
+/// cannot show the hole this fix is about.
+fn chat_with_scrollbar() -> Chat {
+    let mut options = super::options();
+    options.plain = false;
+    let mut chat = Chat::new(
+        options,
+        std::sync::Arc::new(super::super::KeybindingsManager::new()),
+    );
+    chat.screen_mode = true;
+    for i in 0..40 {
+        chat.transcript.push_user(format!("question {i}"));
+        chat.transcript.append_text(&format!("answer {i}"));
+        chat.transcript.finish_assistant();
+    }
+    chat
+}
+
+/// The background active in the **scrollbar cell** of one frame row.
+///
+/// The cell's colour is whatever escape is in force when the bar glyph is
+/// painted, so the honest question is "what does the extractor say the active
+/// background is, immediately before the last glyph" - which is precisely the
+/// call the renderer has to make. Returns `None` when the terminal default
+/// would show through.
+fn scrollbar_cell_background(row: &str) -> Option<String> {
+    let glyph_at = row
+        .char_indices()
+        .rfind(|(_, ch)| matches!(ch, '│' | '┃' | '█' | '▲' | '▼'))
+        .map(|(i, _)| i)?;
+    let before = &row[..glyph_at];
+    let bg = lca_tui::engine::text::get_active_background_ansi(before);
+    if bg.is_empty() { None } else { Some(bg) }
+}
+
+// Verifies: gh #375 gap 2 - the scrollbar cell over a shaded user message keeps
+// the band's background. The cell was built by truncate + pad + glyph, which
+// discards the line's background and leaves a one-cell hole in the terminal's
+// default background down the right edge of every coloured block.
+#[test]
+fn a_scrollbar_cell_over_a_shaded_user_message_keeps_the_band_background() {
+    let chat = chat_with_scrollbar();
+    let (w, h) = (80u16, 24u16);
+    let rows = chat.viewport(w, h, 0);
+    let band = user_band_bg(&chat);
+
+    let mut checked = 0;
+    for (index, row) in rows.iter().enumerate() {
+        // A shaded row is one whose text carries the band anywhere.
+        if !row.contains(&band) {
+            continue;
+        }
+        let Some(cell_bg) = scrollbar_cell_background(row) else {
+            panic!(
+                "row {index}: the scrollbar cell fell back to the terminal default - \
+                 this is the 1-cell hole (band {band:?}): {row:?}"
+            );
+        };
+        assert_eq!(
+            cell_bg, band,
+            "row {index}: the scrollbar cell must keep the band's own background: {row:?}"
+        );
+        checked += 1;
+    }
+    assert!(
+        checked > 0,
+        "the fixture must put the scrollbar over a shaded row"
+    );
+}
+
+// Verifies: gh #375 gap 2 - a plain row's scrollbar cell does not invent a
+// background. The fix preserves what is there; it must not paint the band
+// everywhere.
+#[test]
+fn a_scrollbar_cell_over_an_unshaded_row_does_not_invent_a_background() {
+    let chat = chat_with_scrollbar();
+    let (w, h) = (80u16, 24u16);
+    let rows = chat.viewport(w, h, 0);
+    let band = user_band_bg(&chat);
+
+    let mut checked = 0;
+    for (index, row) in rows.iter().enumerate() {
+        if row.contains(&band) || !row.contains('│') {
+            continue;
+        }
+        assert_eq!(
+            scrollbar_cell_background(row),
+            None,
+            "row {index}: an unshaded row must not gain a background from the \
+             scrollbar fix: {row:?}"
+        );
+        checked += 1;
+    }
+    assert!(checked > 0, "the fixture must contain an unshaded bar row");
+}
+
+// Verifies: NFR-28 (never colour alone) on the same cells - the thumb is
+// still distinguishable from the track by its glyph, background or not.
+#[test]
+fn the_scrollbar_thumb_stays_legible_against_the_band() {
+    let chat = chat_with_scrollbar();
+    let (w, h) = (80u16, 24u16);
+    let geometry = chat
+        .scrollbar_for_frame(w, h, 0)
+        .expect("the fixture shows a bar");
+    let rows = chat.viewport(w, h, 0);
+    let strip = |row: &str| lca_tui::engine::text::strip_terminal_sequences(row);
+
+    let mut thumb_glyphs = Vec::new();
+    let mut track_glyphs = Vec::new();
+    for row in rows.iter().take(geometry.rows as usize) {
+        let text = strip(row);
+        match text.chars().last() {
+            Some(ch @ ('┃' | '█')) => thumb_glyphs.push(ch),
+            Some(ch @ '│') => track_glyphs.push(ch),
+            _ => {}
+        }
+    }
+    assert!(
+        !thumb_glyphs.is_empty(),
+        "the thumb is on screen for the glyph row to mean anything"
+    );
+    assert!(
+        track_glyphs.iter().all(|ch| !thumb_glyphs.contains(ch)),
+        "the thumb glyph must differ from the track glyph: \
+         thumb {thumb_glyphs:?} track {track_glyphs:?}"
+    );
+}
+
+// Verifies: gh #375 gap 2 - the scrollbar cell on a **banded** row keeps the band
+// even when the row is not a user message. A code block in this theme paints no
+// background, so a code-block fixture alone cannot prove anything: the mutation
+// check (revert the fix, rerun) still passed it, because "no background" survives
+// the old code too. What actually exercises a second band is the *assistant*
+// code-block band the theme does paint, so this row asserts the invariant on
+// whatever banded rows the frame contains and fails if the fixture has none.
+#[test]
+fn every_banded_scrollbar_row_keeps_its_band() {
+    let mut options = super::options();
+    options.plain = false;
+    let mut chat = Chat::new(
+        options,
+        std::sync::Arc::new(super::super::KeybindingsManager::new()),
+    );
+    chat.screen_mode = true;
+    for i in 0..40 {
+        chat.transcript.push_user(format!("question {i}"));
+        chat.transcript.append_text(&format!("answer {i}"));
+        chat.transcript.finish_assistant();
+    }
+    chat.transcript.push_user("show me code".to_string());
+    chat.transcript
+        .append_text("```rust\nfn main() { println!(\"hi\"); }\n```");
+    chat.transcript.finish_assistant();
+
+    let (w, h) = (80u16, 24u16);
+    let rows = chat.viewport(w, h, 0);
+
+    let mut checked = 0;
+    for (index, row) in rows.iter().enumerate() {
+        // The background active just before the bar glyph, and the background the
+        // row's text was painting in its body - they must agree.
+        let glyph_at = row
+            .char_indices()
+            .rfind(|(_, ch)| matches!(ch, '│' | '┃' | '█' | '▲' | '▼'))
+            .map(|(i, _)| i);
+        let Some(glyph_at) = glyph_at else { continue };
+        let cell_bg = lca_tui::engine::text::get_active_background_ansi(&row[..glyph_at]);
+
+        // The body's band: the widest span before the bar. Skip rows that paint
+        // none, since they have nothing to preserve.
+        let body_bg = lca_tui::engine::text::get_active_background_ansi(
+            &row[..glyph_at.min(row.len() / 2 + 10)],
+        );
+        if body_bg.is_empty() {
+            continue;
+        }
+        assert_eq!(
+            cell_bg, body_bg,
+            "row {index}: the scrollbar cell must keep the band the row's body \
+             paints ({body_bg:?}), not the terminal default: {row:?}"
+        );
+        checked += 1;
+    }
+    assert!(
+        checked > 0,
+        "the fixture must contain a banded row the scrollbar overlays"
     );
 }

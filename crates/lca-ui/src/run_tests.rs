@@ -40,7 +40,7 @@ fn switch_screen_toggles_the_renderer() {
     assert!(!screen.is_fullscreen());
 }
 
-fn options() -> UiOptions {
+pub(crate) fn options() -> UiOptions {
     UiOptions {
         prompt_slot: Default::default(),
         dialog_slot: Default::default(),
@@ -220,10 +220,16 @@ fn a_mouse_selection_still_copies_on_release_through_the_ladder() {
     assert!(!out.contains("Y29weSBtZQ=="), "nothing else was copied");
 }
 
-// Verifies: gh #35 - End (pi's `tui.altScreen.bottom`) returns the
-// fullscreen viewport to the live bottom, and only fullscreen: in
-// main-screen mode - and while a modal owns the keyboard - the key
-// is not a viewport key at all, so the editor keeps it.
+// Verifies: gh #35 + gh #375 gap 4 - **Ctrl+End** (pi's `tui.altScreen.bottom`)
+// returns the fullscreen viewport to the live bottom, and only fullscreen: in
+// main-screen mode - and while a modal owns the keyboard - the key is not a
+// viewport key at all, so the editor keeps it.
+//
+// SANCTIONED CHANGE (gh #375 gap 4): this row used to pin plain `End` here. The
+// brief moves plain `End` to the editor unconditionally, exactly as pi does, so
+// the key and the test that asserted its bytes both move to `Ctrl+End`. The
+// behaviour being pinned - the viewport returns to the live bottom, and only in
+// fullscreen with no overlay owning the keyboard - is unchanged.
 #[test]
 fn end_returns_the_fullscreen_viewport_to_the_live_bottom() {
     let mut term = FakeTerminal::new(80, 24);
@@ -235,7 +241,7 @@ fn end_returns_the_fullscreen_viewport_to_the_live_bottom() {
     let (input_tx, _input_rx) = std::sync::mpsc::channel();
     let (resize_tx, _resize_rx) = std::sync::mpsc::channel();
     let outcome = handle_input(
-        "\x1b[F",
+        "\x1b[1;5F",
         &mut chat,
         &mut screen,
         &mut term,
@@ -252,13 +258,13 @@ fn end_returns_the_fullscreen_viewport_to_the_live_bottom() {
     // claim the key.
     chat.screen_mode = false;
     assert!(
-        !chat.alt_screen_bottom("\x1b[F"),
+        !chat.alt_screen_bottom("\x1b[1;5F"),
         "main screen: End stays with the editor"
     );
     chat.screen_mode = true;
     chat.world.show_permission("rm -rf /tmp/x".into());
     assert!(
-        !chat.alt_screen_bottom("\x1b[F"),
+        !chat.alt_screen_bottom("\x1b[1;5F"),
         "a modal owns the keyboard, not the viewport"
     );
 }

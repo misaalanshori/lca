@@ -122,11 +122,11 @@ pub fn tui_keybindings() -> &'static [(&'static str, KeybindingDefinition)] {
         ),
         (
             "tui.editor.cursorLineStart",
-            def!(&["home", "ctrl+home", "ctrl+a"], "Move to line start"),
+            def!(&["home", "ctrl+a"], "Move to line start"),
         ),
         (
             "tui.editor.cursorLineEnd",
-            def!(&["end", "ctrl+end", "ctrl+e"], "Move to line end"),
+            def!(&["end", "ctrl+e"], "Move to line end"),
         ),
         (
             "tui.editor.jumpForward",
@@ -361,11 +361,11 @@ pub fn tui_keybindings() -> &'static [(&'static str, KeybindingDefinition)] {
         ),
         (
             "tui.altScreen.top",
-            def!(&["home"], "Scroll viewport to top"),
+            def!(&["ctrl+home"], "Scroll viewport to top"),
         ),
         (
             "tui.altScreen.bottom",
-            def!(&["end"], "Scroll viewport to bottom"),
+            def!(&["ctrl+end"], "Scroll viewport to bottom"),
         ),
     ]
 }

@@ -1176,6 +1176,12 @@ mod toast_does_not_wipe_scrollback;
 #[path = "373-splice-pads-to-column.rs"]
 mod splice_pads_to_column;
 
+// Gh #375 gaps 2 + 4: the scrollbar column keeps the block's background (the
+// 1-cell hole down a shaded block's right edge), and plain Home/End belong to the
+// editor while the viewport's top/bottom move to Ctrl+Home/Ctrl+End.
+#[path = "375-scrollbar-background-and-home-split.rs"]
+mod scrollbar_background_and_home_split;
+
 // Gh #378 gaps 1-2: the width fast path allocates on nothing and declines rather than
 // guessing an escape length; an SGR arriving at the slice seam keeps its order.
 #[path = "378-fast-path-and-sgr-order.rs"]
