@@ -819,6 +819,40 @@ mod tests {
         );
     }
 
+    // Verifies: gh #371 bug 1 - the *mechanism* the issue names, stated as a row.
+    //
+    // The issue is precise: with the caret above the viewport, `compute_line_diff` gets
+    // `hw_cursor - p_view_top < 0` - a screen row above the top of the terminal. This row
+    // reconstructs that state through the public API and asserts the invariant that
+    // prevents it, rather than asserting the arithmetic itself (which is correct either
+    // way): after such a frame, no later frame may compute a negative screen row, which
+    // is the same statement as "the recorded row is inside the viewport".
+    #[test]
+    fn a_frame_never_leaves_a_negative_screen_row_behind() {
+        let (mut r, mut term) = renderer();
+        term.resize(20, 4);
+        // 50 lines, caret at the very top: above the 4-row viewport.
+        r.render(&mut term, tall_prompt(0, 50), 20, 4);
+        let _ = term.take_output();
+        for frame in 0..5 {
+            let top = r.previous_viewport_top;
+            let screen_row = r.hardware_cursor_row as i64 - top as i64;
+            assert!(
+                screen_row >= 0,
+                "frame {frame}: the recorded row {} is above viewport_top {top}, so the \
+                 next `compute_line_diff` would start from screen row {screen_row} - \
+                 gh #371's desynchronisation",
+                r.hardware_cursor_row
+            );
+            // Keep the caret above the viewport and repaint, which is the cumulative
+            // case: the corruption appears on a *later* frame, not the first.
+            let mut lines = tall_prompt(0, 50);
+            lines[49] = format!("line 49 frame {frame}");
+            r.render(&mut term, lines, 20, 4);
+            let _ = term.take_output();
+        }
+    }
+
     // Verifies: S1 - genuine scrollback append as content exceeds terminal height.
     #[test]
     fn scrollback_growth_emits_newlines_without_clearing_screen() {
