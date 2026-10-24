@@ -339,7 +339,7 @@ pub fn doctor_rows_quiet(
     if quiet == "true" {
         return rows;
     }
-    if let Some(notice) = tmux_doctor::notice_from(tmux_doctor) {
+    if let Some(notice) = tmux_doctor::notice_waiting(tmux_doctor) {
         for line in wrap_notice(&notice) {
             rows.push(fit_row(&line, u16::MAX));
         }
