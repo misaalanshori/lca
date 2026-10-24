@@ -1181,3 +1181,13 @@ mod splice_pads_to_column;
 // editor while the viewport's top/bottom move to Ctrl+Home/Ctrl+End.
 #[path = "375-scrollbar-background-and-home-split.rs"]
 mod scrollbar_background_and_home_split;
+
+// Gh #378 gaps 1-2: the width fast path allocates on nothing and declines rather than
+// guessing an escape length; an SGR arriving at the slice seam keeps its order.
+#[path = "378-fast-path-and-sgr-order.rs"]
+mod fast_path_and_sgr_order;
+
+// Gh #377: a binding on a shifted symbol (`?`, `ctrl+?`, `alt+~`) can be written down
+// naturally and matches, through one shared rule for both key protocols.
+#[path = "377-shifted-symbol-bindings.rs"]
+mod shifted_symbol_bindings;

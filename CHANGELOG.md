@@ -7,6 +7,21 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **A keybinding on a shifted symbol could never fire** (gh #377). In a terminal that
+  reports the physical key (`Ctrl+Shift+/` arriving as `/` plus a separate `?`), a binding
+  written the natural way - `ctrl+?`, `alt+~` - compared the produced symbol against the
+  physical one and missed, so the only spelling that worked was `ctrl+shift+/`, which a
+  user had to discover by accident. Both spellings now work: a shifted symbol is matched
+  by the symbol it produces, with any other modifier preserved, and the physical spelling
+  keeps working unchanged.
+- **Text after a selected or overlaid run could inherit the wrong colour** (gh #378
+  gaps 1-2). Two defects in the width/slice path: a style arriving exactly at the seam
+  of a slice was emitted before the style it replaced, so a reset and a colour came out
+  reversed and unstyled text turned red; and the width fast path rejected every line
+  carrying styling, so re-rendering after a theme change or a resize ran full grapheme
+  segmentation and a cache lookup for every row on screen. Slices now keep their style
+  order, and a styled line is measured by a single pass over its bytes.
+
 - **The scrollbar no longer punches a hole in shaded blocks** (gh #375 gap 2).
   The scrollbar cell was built by truncating the line, padding with spaces and
   appending the thumb glyph, which discarded the line's background: on a shaded
