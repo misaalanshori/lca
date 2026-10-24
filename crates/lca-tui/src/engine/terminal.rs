@@ -909,6 +909,43 @@ fn detect_hyperlinks_with(
     false
 }
 
+/// Whether this session is Apple's Terminal.app, which misrenders half-block
+/// glyph art (gh #399).
+///
+/// pi's `isAppleTerminalSession` (`packages/tui/src/terminal.ts:44`) — the whole
+/// rule is `platform == darwin && TERM_PROGRAM == Apple_Terminal`. Both halves
+/// matter: some other program can set `TERM_PROGRAM`, and a Linux terminal can
+/// claim the name, so neither half alone is the terminal pi measured. The pair
+/// is what makes this a rule rather than a guess.
+///
+/// The symptom on that terminal is a gap between rows and half blocks that do
+/// not meet their neighbours, which turns a two-row logo into something that
+/// reads as broken art. Callers fall back to a wordmark ([`crate::engine`]'s
+/// callers do); this function only answers the question.
+///
+/// `LCA_HALF_BLOCKS=1|0` forces the answer, matching `LCA_HYPERLINKS`'s shape:
+/// it is how a receipt demonstrates the fallback on a machine that is not a Mac.
+pub fn is_apple_terminal() -> bool {
+    static CACHE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *CACHE.get_or_init(|| {
+        detect_apple_terminal(cfg!(target_os = "macos"), |key| std::env::var(key).ok())
+    })
+}
+
+/// The rule over an injected platform flag and environment reader, so tests
+/// never touch process env (`lca-tui` denies `unsafe`) and both halves of the
+/// pair can be exercised on one machine: a Linux box claiming
+/// `TERM_PROGRAM=Apple_Terminal` is not the terminal pi measured, and a Mac
+/// without that variable is not either.
+fn detect_apple_terminal(is_macos: bool, env: impl Fn(&str) -> Option<String>) -> bool {
+    match env("LCA_HALF_BLOCKS").as_deref() {
+        Some("0") => return true,
+        Some("1") => return false,
+        _ => {}
+    }
+    is_macos && env("TERM_PROGRAM").as_deref() == Some("Apple_Terminal")
+}
+
 /// pi's `probeTmuxHyperlinks`: ask the tmux client whether its
 /// `client_termfeatures` lists `hyperlinks`. A client that does not answer
 /// inside 250 ms (pi's timeout) is treated as not forwarding, so a hung
