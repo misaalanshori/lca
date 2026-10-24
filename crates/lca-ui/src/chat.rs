@@ -275,6 +275,10 @@ pub struct Chat {
     /// `lca-tui` caches the answer per process and a rendered frame must be
     /// reproducible.
     pub(crate) hyperlinks: bool,
+    /// The startup header's two prepared states (gh #400 gaps 2 and 3), kept on the
+    /// chat so the session-switch path can re-push the entry with its expand state
+    /// intact - the header must outlive `/new`.
+    pub(crate) startup_header: (Vec<String>, Vec<String>),
 }
 impl Chat {
     /// Build the chat: widgets, theme, and the autocomplete chain.
@@ -288,6 +292,9 @@ impl Chat {
         // options before `world` moves into the chat (FR-UI-7).
         let initial_records = std::mem::take(&mut world.options.initial_records);
         let initial_tail = std::mem::take(&mut world.options.initial_tail_lines);
+        // Gh #400 gaps 2 and 3: taken before `world` moves into the chat, and kept
+        // on the chat so a session switch can re-push the header entry.
+        let startup_header = std::mem::take(&mut world.options.initial_header);
         let attachment_loader = world.options.hooks.load_attachment.clone();
         let thinking_visibility = world.options.thinking_visibility;
         let codeblock_border = world.options.codeblock_border;
@@ -332,6 +339,12 @@ impl Chat {
         // be a pre-rendered `Raw` string and therefore baked the keys at startup.
         transcript.set_keybindings(keybindings.clone());
         transcript.push_startup_hint();
+        // Gh #400 gaps 2 and 3: the header is an *entry*, so the expand key can
+        // reach it and a session switch can carry its state. Pushed before the
+        // initial lines so a resume's warnings stay under it, as they were.
+        if !startup_header.0.is_empty() || !startup_header.1.is_empty() {
+            transcript.push_startup_resources(startup_header.0.clone(), startup_header.1.clone());
+        }
         for line in &world.options.initial_lines {
             transcript.push_raw(line.clone());
         }
@@ -430,6 +443,7 @@ impl Chat {
             model_rows_cache: None,
             model_refresh: None,
             hyperlinks: lca_tui::engine::terminal::supports_hyperlinks(),
+            startup_header,
         };
         chat.transcript.set_thinking_visibility(thinking_visibility);
         // gh #12: the host's collected pre-parse transforms ride the
@@ -720,7 +734,16 @@ impl Chat {
             return self.handle_search_key(data, key.as_deref());
         }
         if self.keybindings.matches(data, "app.tools.expand") {
+            // Gh #400 gap 2: the same key expands the startup header. One key for
+            // "show me the detail" - the header is the detail a reader reaches for
+            // before any card exists, and the brief is explicit that it must not
+            // get a second binding.
+            //
+            // Both toggles run: a session with tool cards *and* a header should
+            // expand both on one press, which is what a single "expand" key means.
+            let header = self.transcript.toggle_startup_resources();
             self.transcript.toggle_tools_expanded();
+            let _ = header;
             return Action::Continue;
         }
         if self.keybindings.matches(data, "app.thinking.toggle") {

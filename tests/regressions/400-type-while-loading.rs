@@ -183,3 +183,140 @@ fn paste_is_buffered_as_one_segment() {
         "and the implementation pushes the whole value"
     );
 }
+
+// ===========================================================================
+// Gh #400 gaps 2 and 3 (this batch): the compact header and collision notices.
+//
+// Gap 2's defect was that every launch printed a version line, a `context:` line
+// listing every AGENTS.md path, and a counts line - a wall at the top of a session
+// nobody asked to read, every single launch. The fix is a compact line with the
+// expand key, and the failure modes the pattern is named for (empty sections
+// leaving orphaned dividers, unfitted rows staggering the border, the expansion
+// resetting on `/new`) are pinned by behaviour rows in
+// `crates/lca-cli/tests/startup_header.rs` and
+// `crates/lca-ui/src/chat_header_tests.rs`.
+//
+// Gap 3's defect was different in kind, and that is what these rows guard:
+// `ExtensionRegistry::register` **already recorded a `CollisionReport`** and
+// **nothing read it**. The fact was known, correct and discarded, so a user who
+// installed an extension and found the bundled one answering had no way to learn
+// why. The registry's decision must stay the registry's - a notice that changed
+// what loads would be a much worse bug than a silent one.
+// ===========================================================================
+
+// Verifies: gh #400 gap 3 - **the notice reports the registry's decision, it does
+// not make it.** `collision_summary` maps a report without deriving anything: the
+// loser is the report's own `extension`, the winner its `winner` field. A notice
+// that re-derived either side could disagree with what actually loaded.
+#[test]
+fn the_collision_notice_reports_rather_than_decides() {
+    let startup = read("crates/lca-cli/src/tui/startup.rs");
+    let summary = startup
+        .split("pub fn collision_summary(")
+        .nth(1)
+        .and_then(|rest| rest.split("pub fn collision_rows(").next())
+        .expect("collision_summary exists");
+    assert!(
+        summary.contains("report.winner.clone()") && summary.contains("report.extension.clone()"),
+        "both sides come from the report's own fields:\n{summary}"
+    );
+    for invented in ["registered_names()", "DeliveryMode", "entries.iter()"] {
+        assert!(
+            !summary.contains(invented),
+            "the notice does not re-scan the registry (`{invented}`)"
+        );
+    }
+}
+
+// Verifies: gh #400 gap 3 - **the collision rides the launch path.** The header is
+// built from `registry.collisions()`; before this batch nothing called it, so the
+// report was collected and dropped.
+#[test]
+fn the_launch_reads_the_registrys_collisions() {
+    // The conversion lives in `startup::launch_header` after the gate-11 split, so
+    // the guard follows the code rather than a filename - and the call site proves
+    // it is actually reached at launch, which a helper alone would not.
+    let startup = read("crates/lca-cli/src/tui/startup.rs");
+    assert!(
+        startup.contains("collision_summary(registry.collisions())"),
+        "the header builder converts the registry's recorded collisions"
+    );
+    let module = read("crates/lca-cli/src/tui/mod.rs");
+    assert!(
+        module.contains("startup::launch_header("),
+        "and the launch calls it"
+    );
+}
+
+// Verifies: gh #400 gap 3 - **the notice survives `quietStartup`.** A shadowed
+// extension is a diagnostic. The quiet layers hide the header; they must not hide
+// this, or a user who set `quietStartup = true` never learns why their install is
+// not the thing answering.
+//
+// Asserted on the shape: `startup_header_with` appends the collision rows *after*
+// the quiet match, so the two can never be reordered without this failing.
+#[test]
+fn the_collision_rows_sit_outside_the_quiet_layers() {
+    let startup = read("crates/lca-cli/src/tui/startup.rs");
+    let with = startup
+        .split("pub fn startup_header_with(")
+        .nth(1)
+        .and_then(|rest| rest.split("/// `1 extension`").next())
+        .expect("startup_header_with exists");
+    let quiet_at = with.find("match quiet").expect("the quiet match exists");
+    let extend_at = with
+        .find("lines.extend(collision_rows(")
+        .expect("the collision rows are appended");
+    assert!(
+        extend_at > quiet_at,
+        "the append happens after the quiet decision, so quiet cannot swallow it:\n{with}"
+    );
+}
+
+// Verifies: gh #400 gap 2 - **one key, not two.** The header expands on
+// `app.tools.expand`, which the interface already binds for tool cards. A second
+// binding for "show me the detail" is exactly the kind of chord a user would never
+// find, and the brief forbids it.
+#[test]
+fn the_header_expands_on_the_existing_key() {
+    let chat = read("crates/lca-ui/src/chat.rs");
+    let arm = chat
+        .split("if self.keybindings.matches(data, \"app.tools.expand\")")
+        .nth(1)
+        .and_then(|rest| rest.split("app.thinking.toggle").next())
+        .expect("the expand arm exists");
+    assert!(
+        arm.contains("toggle_startup_resources()"),
+        "the existing expand key toggles the header:\n{arm}"
+    );
+    // And no second action was invented for it.
+    let keybindings = read("crates/lca-tui/src/engine/keybindings.rs");
+    assert!(
+        !keybindings.contains("app.header.expand") && !keybindings.contains("header.toggle"),
+        "no new binding was added for the header"
+    );
+}
+
+// Verifies: gh #400 gap 2 - **the empty-section rule is structural**, not a
+// judgement the painter makes. Every section helper returns `None`/empty, so a
+// caller pushes nothing and no spacer can be left behind. A behaviour row can see
+// one input; this sees that the shape makes the bad output unrepresentable.
+#[test]
+fn the_header_sections_are_optional_by_construction() {
+    let startup = read("crates/lca-cli/src/tui/startup.rs");
+    assert!(
+        startup.contains("fn context_row(context: &[std::path::PathBuf]) -> Option<String>"),
+        "the context row is an Option, so an empty section yields nothing to push"
+    );
+    let resources = startup
+        .split("fn resources_row(")
+        .nth(1)
+        .and_then(|rest| rest.split("pub fn collision_rows(").next())
+        .expect("resources_row exists");
+    assert!(
+        resources.contains("if extensions > 0")
+            && resources.contains("if skills > 0")
+            && resources.contains("if templates > 0"),
+        "and each resource count is named only when non-zero:\n{resources}"
+    );
+}
