@@ -970,3 +970,7 @@ fn clicking_a_wrapped_row_maps_into_the_line() {
     let _ = editor.render(6);
     assert_eq!(editor.handle_click(2, 1), Some((0, 8)));
 }
+
+#[cfg(test)]
+#[path = "editor_word_tests.rs"]
+mod editor_word_tests;
