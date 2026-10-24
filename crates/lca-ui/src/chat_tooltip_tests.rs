@@ -3,6 +3,22 @@
 
 use super::chat;
 
+/// The tool card's header row in the current frame (gh #399).
+///
+/// Found rather than assumed: the startup block sits above the card and its hint
+/// row contains `! bash`, so "the first row containing bash" is the header, not
+/// the card. Matching the card's own title shape (`bash`) at a row that also
+/// carries the card frame is still ambiguous, so this takes the **last** row whose
+/// text contains the command - the card is below every startup row.
+fn header_row(chat: &crate::chat::Chat, w: u16, h: u16) -> u16 {
+    let frame = chat.viewport(w, h, 0);
+    frame
+        .iter()
+        .rposition(|line| lca_tui::engine::text::strip_terminal_sequences(line).contains("bash"))
+        .map(|row| row as u16)
+        .expect("the card header renders")
+}
+
 // Verifies: gh #210 - every corner flips inside the frame, and an
 // oversized tip clamps to the origin.
 #[test]
@@ -65,17 +81,20 @@ fn hover_shows_and_move_or_key_hides() {
     chat.transcript
         .finish_tool(ToolStatus::Ok, Some("a\nb\nc\nd\ne\nf".to_string()));
     let (w, h) = (80u16, 24u16);
-    // The card header paints at content row 3 (hint, separator, band).
-    let text = chat.tooltip_at(4, 3, w, h, 0).expect("a tip");
+    // Gh #399: the card header's row is **found**, not assumed. The startup block
+    // sits above it and its hint row names `! bash`, so a hardcoded row would
+    // both miss the card and, worse, could land on the header.
+    let header = header_row(&chat, w, h);
+    let text = chat.tooltip_at(4, header, w, h, 0).expect("a tip");
     assert!(text.contains("Expand"), "names the action: {text:?}");
     let then = Instant::now() - Duration::from_millis(300);
-    chat.hover_at = Some((4, 3, then));
+    chat.hover_at = Some((4, header, then));
     assert!(chat.poll_tooltip(w, h, 0, Instant::now()), "due shows");
     assert!(chat.tooltip.is_some(), "stored");
     assert!(!chat.poll_tooltip(w, h, 0, Instant::now()), "shown once");
     chat.note_hover(0, 0, w, h, 0);
     assert!(chat.tooltip.is_none(), "moving off dismisses");
-    chat.hover_at = Some((4, 3, then));
+    chat.hover_at = Some((4, header, then));
     assert!(chat.poll_tooltip(w, h, 0, Instant::now()), "due again");
     chat.handle_key("q");
     assert!(chat.tooltip.is_none(), "a key dismisses");
@@ -101,7 +120,8 @@ fn due_tooltips_paint_into_the_frame() {
     chat.transcript
         .finish_tool(ToolStatus::Ok, Some("a\nb\nc\nd\ne\nf".to_string()));
     let (w, h) = (80u16, 24u16);
-    chat.hover_at = Some((4, 3, Instant::now() - Duration::from_millis(300)));
+    let header = header_row(&chat, w, h);
+    chat.hover_at = Some((4, header, Instant::now() - Duration::from_millis(300)));
     assert!(chat.poll_tooltip(w, h, 0, Instant::now()));
     let frame = chat.viewport(w, h, 0).join("\n");
     let plain: String = lca_tui::engine::text::strip_terminal_sequences(&frame);
@@ -122,11 +142,12 @@ fn open_tooltip_tracks_within_the_tipped_area() {
         .finish_tool(ToolStatus::Ok, Some("a\nb\nc\nd\ne\nf".to_string()));
     let (w, h) = (80u16, 24u16);
     let then = Instant::now() - Duration::from_millis(300);
-    chat.hover_at = Some((4, 3, then));
+    let header = header_row(&chat, w, h);
+    chat.hover_at = Some((4, header, then));
     assert!(chat.poll_tooltip(w, h, 0, Instant::now()), "due shows");
     let first = chat.tooltip.as_ref().map(|tip| (tip.col, tip.row));
     // Same header row, different column: the same tip text.
-    chat.note_hover(10, 3, w, h, 0);
+    chat.note_hover(10, header, w, h, 0);
     let moved = chat.tooltip.as_ref().map(|tip| (tip.col, tip.row));
     assert!(moved.is_some(), "the tip stays open within the area");
     assert_ne!(
