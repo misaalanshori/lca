@@ -529,34 +529,7 @@ fn handle_input(
                 }
             }
         }
-        // A click on an OSC-8 link opens it (R6).
-        if let Some(url) = screen.take_clicked_link() {
-            let outcome = chat
-                .world
-                .options
-                .hooks
-                .open_url
-                .as_ref()
-                .map(|open| open(&url));
-            chat.toast(link_notice(&url, outcome));
-        }
-        // Copy on release (issue #2): prefer a verified native
-        // clipboard (R6); OSC 52 is the honest fallback, and the
-        // notice says which one ran.
-        if data.ends_with('m') && screen.copy_on_select() {
-            let text = screen.selected_text();
-            if !text.is_empty() {
-                let report = {
-                    let mut send = |chunk: &str| screen.copy_osc52(terminal, chunk);
-                    copy_through_ladder(
-                        &text,
-                        chat.world.options.hooks.copy_to_clipboard.as_ref(),
-                        Some(&mut send),
-                    )
-                };
-                chat.toast(report.notice());
-            }
-        }
+        input_helpers::finish_mouse_event(chat, screen, terminal, data);
         return InputResult::Continue;
     }
     // gh #9 / pi 1.0.0's `app.message.copy` (Ctrl+X): a selection
@@ -712,7 +685,9 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
     // (gh #31 review): the host's endpoint consent asks outside a turn
     // too - when `/model` discovers an ungranted endpoint - and the
     // modal can only appear if this receiver is still being drained.
-    let (prompt_tx, prompt_rx) = std::sync::mpsc::sync_channel(4);
+    // Gh #370 flaw 1: the wake channel every producer signals (see `run_wake`).
+    let (waker, wakes) = crate::run_wake::Wakes::new();
+    let (prompt_tx, prompt_rx) = crate::run_wake::forwarded_channel(4, waker.clone());
     *options
         .prompt_slot
         .lock()
@@ -720,7 +695,7 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
     // The dialog channel (gh #124): same session-lifetime shape as the
     // prompt above - a tool asking mid-turn and a command asking
     // between turns both reach the same drain.
-    let (dialog_tx, dialog_rx) = std::sync::mpsc::sync_channel(4);
+    let (dialog_tx, dialog_rx) = crate::run_wake::forwarded_channel(4, waker.clone());
     *options
         .dialog_slot
         .lock()
@@ -731,6 +706,8 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
     // appear at flush, with the marker, like any queued message).
     let mut initial_messages = std::mem::take(&mut options.initial_messages);
     let mut chat = Chat::new(options, keybindings);
+    // The `!`/`!!` path reaches its waker through `UiState`.
+    chat.world.waker = Some(waker.clone());
     // Gh #110: bare `-r` opens the session picker over the fresh
     // session instead of starting on it.
     if chat.world.options.open_resume_picker {
@@ -791,7 +768,7 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
     // see `colors::TERMINAL_COLOR_QUERY` and the row that pins the ordering.
     terminal.write(lca_tui::engine::colors::TERMINAL_COLOR_QUERY);
 
-    let mut turns = TurnState::new(prompt_tx, prompt_rx, dialog_rx);
+    let mut turns = TurnState::new(prompt_tx, prompt_rx, dialog_rx, waker.clone());
     // Gh #400: keystrokes that arrived during the load are the first thing the
     // editor sees, in the order they were typed.
     for data in &startup_keys {
@@ -945,12 +922,20 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
         // Input (gh #400): when startup adopted a terminal that was already
         // reading, its receiver *is* the input channel - the same reader thread
         // keeps filling it, so there is one stream and no handover gap.
-        let received = match early_input.as_ref() {
-            Some(early) => early.recv_timeout(std::time::Duration::from_millis(50)),
-            None => input_rx.recv_timeout(std::time::Duration::from_millis(50)),
+        // Gh #370 flaw 1: block on every source, not stdin alone. Input is taken
+        // first, non-blocking, so a keystroke is never queued behind a producer; only
+        // when there is none does the loop sleep - at most one tick - on the wake.
+        let pending_input = match early_input.as_ref() {
+            Some(early) => early.try_recv(),
+            None => input_rx.try_recv().ok(),
         };
-        match received {
-            Ok(data) => {
+        let woke = if pending_input.is_some() {
+            crate::run_wake::Woke::Input
+        } else {
+            wakes.wait(&mut || false)
+        };
+        match pending_input {
+            Some(data) => {
                 if let InputResult::Exit = handle_input(
                     &data,
                     &mut chat,
@@ -966,15 +951,17 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
                 }
                 dirty = true;
             }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                // Gh #210: a stationary hover past 250 ms earns its
-                // tooltip on the next frame.
-                let (width, height) = chat.world.size;
-                if chat.poll_tooltip(width, height, screen.scroll(), std::time::Instant::now()) {
-                    dirty = true;
+            None => {
+                // Nothing typed: a producer woke us, or the tick elapsed (gh #210's
+                // hover tooltip clock runs on both).
+                if woke != crate::run_wake::Woke::Input {
+                    let (width, height) = chat.world.size;
+                    if chat.poll_tooltip(width, height, screen.scroll(), std::time::Instant::now())
+                    {
+                        dirty = true;
+                    }
                 }
             }
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break 'main Ok(()),
         }
 
         // Resize.
@@ -1012,6 +999,8 @@ pub(crate) struct TurnState {
     /// Whether `OSC 9;4` progress is currently on (gh #369): tracked so the
     /// spinner is armed once per working period, not once per frame.
     pub(crate) progress_active: bool,
+    /// Wakes the loop when a turn producer enqueues (gh #370 flaw 1).
+    waker: crate::run_wake::Waker,
 }
 
 impl TurnState {
@@ -1020,6 +1009,7 @@ impl TurnState {
         prompt_tx: std::sync::mpsc::SyncSender<PromptRequest>,
         prompt_rx: Receiver<PromptRequest>,
         dialog_rx: Receiver<DialogExchange>,
+        waker: crate::run_wake::Waker,
     ) -> TurnState {
         TurnState {
             active: None,
@@ -1032,6 +1022,7 @@ impl TurnState {
             program_status: None,
             last_ok: None,
             progress_active: false,
+            waker,
         }
     }
 
@@ -1122,7 +1113,9 @@ impl TurnState {
             return false;
         };
         let queue = chat.take_submitted_queue();
-        let (event_tx, event_rx) = std::sync::mpsc::sync_channel(256);
+        // Gh #370 flaw 1: a streamed event wakes the loop; the forwarder keeps the
+        // bounded sender (and its backpressure) and wakes after each enqueue.
+        let (event_tx, event_rx) = crate::run_wake::forwarded_channel(256, self.waker.clone());
         let prompt_tx = self.prompt_tx.clone();
         let cancel = lca_tools::CancelFlag::new();
         self.cancel = Some(cancel.clone());
@@ -1184,6 +1177,9 @@ impl TurnState {
         }
     }
 }
+
+#[path = "run_input_helpers.rs"]
+mod input_helpers;
 
 #[cfg(test)]
 #[path = "run_tests.rs"]
