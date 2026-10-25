@@ -756,7 +756,9 @@ impl Editor {
             }
             // Gh #367: on a Shift-blind terminal `\r` is what both keys produce, so
             // prefer the recoverable outcome (a newline). Scoped to the detection.
-            if self.enter_inserts_newline {
+            // Windows is not in that policy - its console latches `SHIFT_PRESSED`
+            // beside the keystroke, so a real `Shift+Enter` is recognised here.
+            if self.enter_inserts_newline || crate::engine::sys::shift_was_held_on_enter() {
                 self.newline();
                 return EditorEvent::Changed;
             }

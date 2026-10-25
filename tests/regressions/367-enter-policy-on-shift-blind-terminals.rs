@@ -41,7 +41,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 
-use lca_tui::engine::keys::enter_is_ambiguous_with;
+use lca_tui::engine::keys::enter_is_ambiguous_on;
 
 /// The editor, so the policy's place in the submit arm can be read.
 fn editor_source() -> String {
@@ -50,6 +50,15 @@ fn editor_source() -> String {
         "/crates/lca-tui/src/widgets/editor.rs"
     ))
     .expect("editor.rs is readable")
+}
+
+/// The platform-neutral console probe (gh #367's Windows half).
+fn sys_source() -> String {
+    std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/crates/lca-tui/src/engine/sys.rs"
+    ))
+    .expect("sys.rs is readable")
 }
 
 /// The detection rule.
@@ -61,44 +70,62 @@ fn keys_source() -> String {
     .expect("keys.rs is readable")
 }
 
+fn env_of(pairs: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
+    move |key| {
+        pairs
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, v)| (*v).to_string())
+    }
+}
+
 // Verifies: gh #367 - the detection is a **named predicate with injectable halves**,
 // not an inline `cfg!` in the key handler. A `cfg!` inside `handle_key` could not be
 // tested on one machine, and the brief asked for a row rather than a branch.
 #[test]
 fn the_detection_is_a_named_predicate_with_injectable_platforms() {
-    // Both platform flags and the environment are parameters, so every combination
-    // is exercisable here on Linux.
-    let apple = |env: &dyn Fn(&str) -> Option<String>| {
-        enter_is_ambiguous_with(false, true, true, |k| env(k))
-    };
-    let term = |name: &'static str| move |k: &str| (k == "TERM_PROGRAM").then(|| name.to_string());
-
     assert!(
-        apple(&term("Apple_Terminal")),
+        enter_is_ambiguous_on(true, true, env_of(&[("TERM_PROGRAM", "Apple_Terminal")])),
         "macOS + Apple_Terminal is the affected terminal"
     );
     assert!(
-        !apple(&term("iTerm.app")),
+        !enter_is_ambiguous_on(true, true, env_of(&[("TERM_PROGRAM", "iTerm.app")])),
         "another terminal on a Mac reports Shift"
     );
     assert!(
-        !apple(&|_k: &str| None),
+        !enter_is_ambiguous_on(true, true, env_of(&[])),
         "an unset TERM_PROGRAM is unknown, not Apple's Terminal"
     );
-    // A Linux box claiming the name is not the terminal pi measured.
     assert!(
-        !enter_is_ambiguous_with(false, false, true, term("Apple_Terminal")),
+        !enter_is_ambiguous_on(false, true, env_of(&[("TERM_PROGRAM", "Apple_Terminal")])),
         "the platform half of the pair matters"
     );
-    // Windows console: pi applies the treatment unconditionally.
     assert!(
-        enter_is_ambiguous_with(true, false, true, |_k| None),
-        "Windows consoles strip the modifier too"
-    );
-    // Remote: never asked.
-    assert!(
-        !enter_is_ambiguous_with(false, true, false, term("Apple_Terminal")),
+        !enter_is_ambiguous_on(true, false, env_of(&[("TERM_PROGRAM", "Apple_Terminal")])),
         "over SSH the local keyboard is not the user's"
+    );
+}
+
+// Verifies: gh #367 - **Windows is deliberately not ambiguous.** Its console latches
+// `SHIFT_PRESSED` from the key event, so `Enter` keeps submitting and `Shift+Enter`
+// is recognised. Assuming Windows were blind broke the pre-existing
+// `a_plain_enter_still_submits` row - the no-regression half of this issue.
+#[test]
+fn windows_is_not_treated_as_shift_blind() {
+    let source = keys_source();
+    assert!(
+        !source.contains("cfg!(windows) || (cfg!(target_os = \"macos\")"),
+        "Windows must not be in the always-ambiguous list"
+    );
+    // ...because the console answers the question itself.
+    let sys = sys_source();
+    assert!(
+        sys.contains("shift_was_held_on_enter"),
+        "the console probe exists"
+    );
+    assert!(
+        sys.contains("dwControlKeyState") || sys.contains("SHIFT_PRESSED"),
+        "and it reads the key event's own modifier bits"
     );
 }
 
@@ -107,20 +134,18 @@ fn the_detection_is_a_named_predicate_with_injectable_platforms() {
 // may want the newline policy.
 #[test]
 fn the_override_forces_either_answer_in_both_directions() {
-    let forced_off = enter_is_ambiguous_with(false, true, true, |k| match k {
-        "TERM_PROGRAM" => Some("Apple_Terminal".into()),
-        "LCA_SHIFT_ENTER" => Some("0".into()),
-        _ => None,
-    });
-    let forced_on = enter_is_ambiguous_with(false, true, true, |k| match k {
-        "LCA_SHIFT_ENTER" => Some("1".into()),
-        _ => None,
-    });
     assert!(
-        !forced_off,
+        !enter_is_ambiguous_on(
+            true,
+            true,
+            env_of(&[("TERM_PROGRAM", "Apple_Terminal"), ("LCA_SHIFT_ENTER", "0")])
+        ),
         "=0 restores Enter's submit on an affected terminal"
     );
-    assert!(forced_on, "=1 opts an unaffected terminal into newline");
+    assert!(
+        enter_is_ambiguous_on(true, true, env_of(&[("LCA_SHIFT_ENTER", "1")])),
+        "=1 opts an unaffected terminal into newline"
+    );
 }
 
 // Verifies: gh #367 - **the policy is consulted in exactly one place**, inside the
