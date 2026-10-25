@@ -7,6 +7,14 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **A terminal's own reply could be typed into your prompt** (gh #366 gap 3). Startup
+  queries split across two packets by a slow SSH link or a multiplexer left a half-arrived
+  answer in the input buffer, which timed out and was delivered as text — so literal
+  `[?62;1;2c` appeared in the composer before you typed anything. A fragment that could be
+  the start of a reply LCA asked for is now dropped instead, along with that reply's tail;
+  anything not shaped like one of those replies is still delivered as your input, and a
+  bare `Escape` still arrives within its usual 10 ms.
+
 - **`Shift+Enter` no longer submits a half-written prompt on Apple's Terminal.app or
   a Windows console** (gh #367). Those terminals drop the Shift modifier, so
   `Shift+Enter` arrives as a bare `\r` — byte-identical to `Enter` — and the
