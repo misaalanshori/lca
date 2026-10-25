@@ -18,9 +18,11 @@ use std::sync::Arc;
 
 use crate::engine::core::CURSOR_MARKER;
 use crate::engine::keybindings::KeybindingsManager;
-use crate::engine::text::{truncate_to_width, visible_width};
+use crate::engine::text::visible_width;
 use crate::widgets::autocomplete::{AutocompleteProvider, Suggestions};
 use crate::widgets::editor_rows;
+
+pub mod popup_layout;
 
 /// The most suggestion rows the popup ever shows (gh #175): pi's
 /// `autocompleteMaxVisible` default. The popup is windowed, never
@@ -243,6 +245,17 @@ impl Editor {
     /// The selected suggestion index.
     pub fn suggestion_index(&self) -> usize {
         self.suggestion_index
+    }
+
+    /// Show `suggestions` directly, without a provider.
+    ///
+    /// A host that computes its own row list (or a test that needs a known
+    /// one) sets it here rather than routing it through
+    /// [`AutocompleteProvider`], which would test the provider instead of the
+    /// popup.
+    pub fn set_suggestions(&mut self, suggestions: Suggestions) {
+        self.suggestions = Some(suggestions);
+        self.suggestion_index = 0;
     }
 
     fn clear_suggestions(&mut self) {
@@ -1107,30 +1120,16 @@ impl Editor {
             return Vec::new();
         };
         let width = width as usize;
-        s.items[start..end]
+        // Gh #386 gap 1a: one measured column for the whole list (pi's
+        // `getPrimaryColumnWidth`), not a per-row `"  " + desc`. See
+        // `popup_layout` for the rule and its two thresholds.
+        let visible = &s.items[start..end];
+        let column = popup_layout::primary_column_width(visible);
+        visible
             .iter()
             .enumerate()
             .map(|(k, item)| {
-                let marker = if start + k == self.suggestion_index {
-                    "▸ "
-                } else {
-                    "  "
-                };
-                let desc = item
-                    .description
-                    .as_ref()
-                    .map(|d| format!("  {d}"))
-                    .unwrap_or_default();
-                // Gh #408: a trigger-owned row names its source, so a row from an
-                // extension is never mistaken for a built-in one. Typed on the item
-                // and composed here, so the editor never re-parses a string.
-                let origin = item
-                    .origin
-                    .as_ref()
-                    .map(|o| format!("  [{o}]"))
-                    .unwrap_or_default();
-                let line = format!("{marker}{}{desc}{origin}", item.label);
-                truncate_to_width(&line, width, "…", false)
+                popup_layout::row(item, start + k == self.suggestion_index, width, column)
             })
             .collect()
     }
@@ -1179,3 +1178,7 @@ fn printable_char(data: &str) -> Option<char> {
 #[cfg(test)]
 #[path = "editor_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "popup_column_tests.rs"]
+mod popup_column_tests;

@@ -21,3 +21,6 @@ mod at_sign_completes_anywhere_a_word_starts;
 // Gh #366 gap 3: a split terminal reply is no longer typed into the prompt.
 #[path = "366-split-reply-never-typed.rs"]
 mod split_reply_never_typed;
+// Gh #386 gap 1: the popup's ragged description column and missing provenance.
+#[path = "386-autocomplete-column-and-provenance.rs"]
+mod autocomplete_column_and_provenance;

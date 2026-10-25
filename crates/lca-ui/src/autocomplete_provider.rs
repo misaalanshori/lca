@@ -11,7 +11,8 @@ use std::sync::Arc;
 
 use lca_tui::widgets::autocomplete::trigger::TriggerChain;
 use lca_tui::widgets::autocomplete::{
-    ArgumentCompletions, AutocompleteItem, CombinedAutocompleteProvider, SlashCommand,
+    ArgumentCompletions, AutocompleteItem, CombinedAutocompleteProvider, Origin, OriginScope,
+    SlashCommand,
 };
 
 use crate::state::UiOptions;
@@ -37,6 +38,37 @@ pub(crate) fn provider_for(options: &UiOptions) -> TriggerChain {
         )),
     );
     chain
+}
+
+/// Where a host-supplied command name came from (gh #386 gap 1b).
+///
+/// `UiOptions::slash_commands` is a `Vec<String>` (a host-facing list), so the
+/// provenance has to be recovered from the *name*, and this is the one place
+/// that does it. The vocabulary is the name shapes the host already produces:
+///
+/// - `/skill:<name>` - a skill's own row (`lca-cli`'s `slash_commands`).
+/// - `<ext>.login` / `<ext>.logout` / `<ext>.usage` - a provider extension's
+///   identity command (`lca-core`'s auto-namespacing, ADR-0012). The suffix is
+///   the `Origin::Extension` name.
+/// - everything else - a built-in command.
+///
+/// Recovering it here rather than widening `UiOptions` keeps the change out of
+/// `lca-cli` (this cycle's file boundary) and keeps the *spelling* in
+/// `Origin::tag`, where the renderer already asks for it.
+#[must_use]
+pub fn origin_for_command(name: &str) -> Origin {
+    if name.starts_with("skill:") {
+        return Origin::Skill;
+    }
+    for suffix in [".login", ".logout", ".usage"] {
+        if let Some(extension) = name.strip_suffix(suffix)
+            && !extension.is_empty()
+            && !extension.contains(':')
+        {
+            return Origin::Extension(extension.to_string());
+        }
+    }
+    Origin::Builtin
 }
 
 /// The built-in provider: command names, their arguments, and file paths.
@@ -77,7 +109,9 @@ fn inner_provider_for(options: &UiOptions) -> CombinedAutocompleteProvider {
                                 value: entry.id.clone(),
                                 label: entry.label.clone(),
                                 description: None,
-                                origin: None,
+                                // A model id the active provider offers: the
+                                // agent's own vocabulary, not an extension's row.
+                                origin: Origin::Builtin,
                                 dim: false,
                             })
                             .collect()
@@ -93,7 +127,8 @@ fn inner_provider_for(options: &UiOptions) -> CombinedAutocompleteProvider {
                                 value: p.clone(),
                                 label: p.clone(),
                                 description: None,
-                                origin: None,
+                                // A provider name from the host's own list.
+                                origin: Origin::Builtin,
                                 dim: false,
                             })
                             .collect()
@@ -102,6 +137,7 @@ fn inner_provider_for(options: &UiOptions) -> CombinedAutocompleteProvider {
                 _ => None,
             };
             SlashCommand {
+                origin: origin_for_command(&name),
                 name,
                 description: None,
                 argument_hint: None,
@@ -114,6 +150,13 @@ fn inner_provider_for(options: &UiOptions) -> CombinedAutocompleteProvider {
         for template in templates() {
             if !commands.iter().any(|c| c.name == template.name) {
                 commands.push(SlashCommand {
+                    // A prompt template is its own kind, and the host does not
+                    // say which scope supplied it through this list - so the
+                    // user scope is the honest report (a project template is
+                    // not distinguishable by name) and the report names it.
+                    origin: Origin::PromptTemplate {
+                        scope: OriginScope::User,
+                    },
                     name: template.name,
                     description: (!template.description.is_empty()).then_some(template.description),
                     argument_hint: (!template.argument_hint.is_empty())

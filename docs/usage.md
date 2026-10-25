@@ -30,7 +30,10 @@ a newline (or `Ctrl+J` where the terminal eats modified keys).
 `Tab` completes file paths. An `@` anywhere a word starts completes
 file paths too — `Check @src/m`, `(@src/m` and `请查看，@src/m` all work —
 while a `/` only opens the command menu at the start of a message, so a
-url or a path you type mid-sentence never raises one. `!command` runs a
+url or a path you type mid-sentence never raises one. When the menu has
+descriptions, they share one column measured from the widest label, and
+rows that come from somewhere other than the agent itself say so —
+`[skill]`, `[extension: name]`, `[prompt: project]`. `!command` runs a
 shell command and sends its output with your message; `!!command` runs one the model
 never sees. The card says which one you ran: `!bash …` in the accent
 color, `!!bash …` quiet, so the context boundary is visible at a glance

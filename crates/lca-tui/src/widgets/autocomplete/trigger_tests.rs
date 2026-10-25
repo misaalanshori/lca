@@ -123,7 +123,7 @@ impl AutocompleteProvider for RecordingInner {
                 value: "from-inner".into(),
                 label: "from-inner".into(),
                 description: None,
-                origin: None,
+                origin: Origin::Builtin,
                 dim: false,
             }],
             prefix: text.to_string(),
@@ -136,7 +136,7 @@ fn row(value: &str) -> AutocompleteItem {
         value: value.into(),
         label: value.into(),
         description: None,
-        origin: None,
+        origin: Origin::Builtin,
         dim: false,
     }
 }
@@ -146,7 +146,7 @@ fn chain_with(query: Arc<dyn TriggerQuery>) -> (TriggerChain, Arc<RecordingInner
     let inner = RecordingInner::new();
     let mut chain = TriggerChain::new(inner.clone(), Duration::from_secs(2));
     chain
-        .register("#", "extension: github-issues", query)
+        .register("#", "github-issues", query)
         .expect("`#` is a legal trigger");
     (chain, inner)
 }
@@ -184,7 +184,7 @@ fn a_slow_first_query_result_never_lands_after_a_second_keystroke() {
     let inner = RecordingInner::new();
     let mut built = TriggerChain::new(inner, Duration::from_secs(5));
     built
-        .register("#", "extension: github-issues", manual.clone())
+        .register("#", "github-issues", manual.clone())
         .expect("legal");
     let chain = Arc::new(built);
 
@@ -309,10 +309,18 @@ fn a_multi_character_trigger_is_refused_at_registration() {
 fn rows_are_typed_with_an_origin_tag() {
     let (chain, _) = chain_with(Arc::new(Instant(vec![row("#12")])));
     let suggestions = chain.get_suggestions("#1", false).expect("offers");
+    // Gh #386 gap 1b: the field is a typed `Origin`, not a pre-formatted
+    // string - so the assertion is on the *kind*, and the renderer owns the
+    // spelling (`origin.tag()`).
     assert_eq!(
-        suggestions.items[0].origin.as_deref(),
+        suggestions.items[0].origin,
+        super::super::Origin::Extension("github-issues".to_string()),
+        "the row says which extension it came from, as a typed field"
+    );
+    assert_eq!(
+        suggestions.items[0].origin.tag().as_deref(),
         Some("extension: github-issues"),
-        "the row carries where it came from as a typed field"
+        "and the renderer spells it"
     );
     assert!(
         !suggestions.items[0].dim,

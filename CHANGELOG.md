@@ -7,6 +7,14 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **The completion popup's descriptions zigzagged, and rows had no provenance** (gh #386
+  gap 1). Each row placed its description right after its own label, so the column moved
+  with every label length; descriptions now share one column measured from the widest
+  visible label and clamped to 12–32 cells, and the column disappears entirely on a pane
+  40 cells wide or narrower (or when too little room would be left for it). Rows also say
+  where they came from — `[skill]`, `[extension: name]`, `[prompt: project]` — so
+  `/deslop`, `/debug-models` and `/skill:deploy-cloudflare` are no longer interchangeable,
+  and two same-named commands from different scopes can be told apart.
 - **A terminal's own reply could be typed into your prompt** (gh #366 gap 3). Startup
   queries split across two packets by a slow SSH link or a multiplexer left a half-arrived
   answer in the input buffer, which timed out and was delivered as text — so literal
