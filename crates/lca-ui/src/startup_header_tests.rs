@@ -220,23 +220,22 @@ fn apple_terminal_never_shows_half_blocks_in_the_header() {
 fn the_mark_keeps_its_own_colours_in_the_composition() {
     // The separation again, at the header's level: the mark's cells keep the three
     // logo hex values while the text is dim, so a theme switch cannot reach them.
-    let rows = compose(
-        &Theme::colored(),
-        &KeybindingsManager::new(),
-        &version(),
-        200,
-        false,
-    );
+    let theme = Theme::colored();
+    let rows = compose(&theme, &KeybindingsManager::new(), &version(), 200, false);
     let joined = rows.join("");
     for hex in ["38;2;98;174;220", "38;2;226;140;0", "38;2;236;205;0"] {
         assert!(joined.contains(hex), "the mark keeps {hex}: {joined:?}");
     }
     // And the text beside it is a dim role, so the two are distinguishable.
     // `theme.dim` is the accessor with the attribute on it (`2;38;2;…`), not the
-    // bare `role(Dim)` colour - a row caught that difference.
+    // bare `role(Dim)` colour - a row caught that difference. Derived from the
+    // theme rather than pinned, because `dim` is now a calibrated neutral
+    // (gh #387 gap 3) and a literal would need editing whenever it moves.
+    let dim = (theme.dim)("x");
+    let dim_sgr = dim.split('x').next().unwrap_or_default();
     assert!(
-        joined.contains("\u{1b}[2;38;2;102;102;102m"),
-        "the text rows are dim, as pi's header is: {joined:?}"
+        !dim_sgr.is_empty() && joined.contains(dim_sgr),
+        "the text rows are dim ({dim_sgr:?}), as pi's header is: {joined:?}"
     );
 }
 

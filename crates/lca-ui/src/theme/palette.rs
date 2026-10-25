@@ -17,15 +17,21 @@ impl Palette {
     /// The pi `dark.json` palette.
     pub fn dark() -> Palette {
         let mut palette = Palette::from(&[
-            (Role::Accent, "#8abeb7"),
-            (Role::Border, "#5f87ff"),
-            (Role::BorderAccent, "#00d7ff"),
-            (Role::BorderMuted, "#505050"),
-            (Role::Success, "#b5bd68"),
-            (Role::Error, "#cc6666"),
-            (Role::Warning, "#ffff00"),
-            (Role::Muted, "#808080"),
-            (Role::Dim, "#666666"),
+            // Gh #387 gap 3: the accent family is *calibrated*, not hand-picked.
+            // Every accent sits at `OKHSL 67%` (see `theme::accents`), so a
+            // warning and a success read at the same weight; only hue and
+            // chroma differ. `muted`/`dim` hold that lightness at near-zero
+            // chroma. The pure `#ffff00` warning and the `#8abeb7` teal are
+            // gone - both were the issue's own complaint.
+            (Role::Accent, "#ab8ff5"),
+            (Role::Border, "#6aadce"),
+            (Role::BorderAccent, "#ab8ff5"),
+            (Role::BorderMuted, "#a0a4a6"),
+            (Role::Success, "#38be81"),
+            (Role::Error, "#f5777a"),
+            (Role::Warning, "#cb9b31"),
+            (Role::Muted, "#9ca5a9"),
+            (Role::Dim, "#97a6ae"),
             (Role::Text, "#d4d4d4"),
             (Role::ThinkingText, "#808080"),
             (Role::SelectedBg, "#3a3a4a"),
@@ -47,13 +53,16 @@ impl Palette {
             (Role::MdHeading, "#f0c674"),
             (Role::MdLink, "#81a2be"),
             (Role::MdLinkUrl, "#666666"),
-            (Role::MdCode, "#8abeb7"),
+            // Gh #387 gap 3: inline code and list bullets take the calibrated
+            // accent rather than the old teal, which `MdCode`'s declared
+            // `Accent` fallback already said they should.
+            (Role::MdCode, "#ab8ff5"),
             (Role::MdCodeBlock, "#b5bd68"),
             (Role::MdCodeBlockBorder, "#808080"),
             (Role::MdQuote, "#808080"),
             (Role::MdQuoteBorder, "#808080"),
             (Role::MdHr, "#808080"),
-            (Role::MdListBullet, "#8abeb7"),
+            (Role::MdListBullet, "#ab8ff5"),
             (Role::ToolDiffAdded, "#b5bd68"),
             (Role::ToolDiffRemoved, "#cc6666"),
             (Role::ToolDiffContext, "#808080"),
@@ -78,15 +87,20 @@ impl Palette {
     /// The pi `light.json` palette.
     pub fn light() -> Palette {
         let mut palette = Palette::from(&[
-            (Role::Accent, "#5a8080"),
-            (Role::Border, "#547da7"),
-            (Role::BorderAccent, "#5a8080"),
-            (Role::BorderMuted, "#b0b0b0"),
-            (Role::Success, "#588458"),
-            (Role::Error, "#aa5555"),
-            (Role::Warning, "#9a7326"),
-            (Role::Muted, "#6c6c6c"),
-            (Role::Dim, "#767676"),
+            // Gh #387 gap 3, the light half. Target `OKHSL 41%`, not pi's 47%:
+            // at 47% four accents land below the 4.5:1 body-text floor on this
+            // palette's own user band. 41% is the lightest value that clears it
+            // everywhere an accent is painted (worst 4.85:1). See
+            // `theme::accents::LIGHT_ACCENT_OKHSL` for the full reasoning.
+            (Role::Accent, "#702bd2"),
+            (Role::Border, "#3e667b"),
+            (Role::BorderAccent, "#702bd2"),
+            (Role::BorderMuted, "#5d6163"),
+            (Role::Success, "#21714c"),
+            (Role::Error, "#ac2536"),
+            (Role::Warning, "#795b16"),
+            (Role::Muted, "#5a6266"),
+            (Role::Dim, "#55636a"),
             (Role::Text, "#1f2328"),
             (Role::ThinkingText, "#6c6c6c"),
             (Role::SelectedBg, "#d0d0e0"),
@@ -108,13 +122,14 @@ impl Palette {
             (Role::MdHeading, "#9a7326"),
             (Role::MdLink, "#547da7"),
             (Role::MdLinkUrl, "#767676"),
-            (Role::MdCode, "#5a8080"),
+            // Gh #387 gap 3: the light half, matching the calibrated accent.
+            (Role::MdCode, "#702bd2"),
             (Role::MdCodeBlock, "#588458"),
             (Role::MdCodeBlockBorder, "#6c6c6c"),
             (Role::MdQuote, "#6c6c6c"),
             (Role::MdQuoteBorder, "#6c6c6c"),
             (Role::MdHr, "#6c6c6c"),
-            (Role::MdListBullet, "#588458"),
+            (Role::MdListBullet, "#702bd2"),
             (Role::ToolDiffAdded, "#588458"),
             (Role::ToolDiffRemoved, "#aa5555"),
             (Role::ToolDiffContext, "#6c6c6c"),

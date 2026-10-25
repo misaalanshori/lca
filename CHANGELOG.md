@@ -6,6 +6,15 @@ Dates are UTC.
 
 ## [Unreleased]
 
+### Changed
+- **The built-in `dark` and `light` palettes are calibrated, not hand-picked** (gh #387
+  gap 3). Every accent — success, error, warning, accent and the accent border — now sits
+  at one perceptual lightness (OKHSL `67%` dark, `41%` light), so a warning and a success
+  read at the same weight and differ only in hue and saturation. `muted` and `dim` keep
+  that weight at near-zero saturation. The pure-`#ffff00` warning and the `#8abeb7` teal
+  are gone, and every accent clears the 4.5:1 contrast floor on the surfaces it is
+  painted on. Custom theme files are unaffected.
+
 ### Fixed
 - **The completion popup's descriptions zigzagged, and rows had no provenance** (gh #386
   gap 1). Each row placed its description right after its own label, so the column moved
