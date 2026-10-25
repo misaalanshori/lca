@@ -16,6 +16,13 @@ Dates are UTC.
   painted on. Custom theme files are unaffected.
 
 ### Fixed
+- **`terminal.clear_on_shrink` works** (gh #538). The scrollback renderer gained pi's
+  behaviour a cycle ago (gh #372 bug 4), but nothing in production ever called the
+  setter: the config key parsed, merged, defaulted and did nothing, and the doc row had
+  to say so. The tunable now travels from the merged config through the interface's
+  `DisplayTuning` to the renderer, on the initial screen and on every `/fullscreen`
+  switch back — one seam, so the two construction paths cannot drift. Off by default, as
+  pi ships it; it also appears in `/settings` for the first time.
 - **The completion popup's descriptions zigzagged, and rows had no provenance** (gh #386
   gap 1). Each row placed its description right after its own label, so the column moved
   with every label length; descriptions now share one column measured from the widest

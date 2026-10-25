@@ -19,6 +19,12 @@ use lca_protocol::CommandEffect;
 #[path = "cache_cause/mod.rs"]
 pub(super) mod cache_cause;
 
+// Gh #538: the clear-on-shrink path rows, split out for the 1,200-line ceiling
+// (gate 11). Same pattern and same reason as `cache_cause` above.
+#[cfg(test)]
+#[path = "clear_on_shrink_tests.rs"]
+pub(super) mod clear_on_shrink_tests;
+
 /// A short relative age (`now`, `5m`, `3h`, `2d`, `3w`, `2mo`, `1y`), pi's
 /// session-row format (`selectors-large.md`).
 pub(super) fn age_label(now_ms: u64, then_ms: u64) -> String {
@@ -325,6 +331,12 @@ pub(super) fn setting_meta(key: &str) -> (String, String) {
         "terminal.show_images" => known("Show images", "Display inline images in the transcript"),
         "terminal.image_width_cells" => known("Image width", "Inline image width cap in cells"),
         "terminal.show_progress" => known("Progress bar", "Taskbar progress around turns"),
+        // Gh #538: the key is reachable now, so the selector offers it (pi's own
+        // row: "Clear empty rows when content shrinks (may cause flicker)").
+        "terminal.clear_on_shrink" => known(
+            "Clear on shrink",
+            "Clear empty rows when content shrinks (may flicker)",
+        ),
         "images.auto_resize" => known("Auto resize", "Resize pasted images to fit"),
         "markdown.code_block_indent" => known("Code indent", "Prefix spaces on fenced code lines"),
         "markdown.mermaid" => known("Mermaid", "Mermaid diagram rendering mode"),
@@ -567,6 +579,13 @@ pub(super) fn settings_rows(
                 "Terminal & Execution",
                 "terminal.show_progress",
                 &["true", "false"],
+            ),
+            // Gh #538: pi places its clear-on-shrink row right after terminal
+            // progress; same order here.
+            row(
+                "Terminal & Execution",
+                "terminal.clear_on_shrink",
+                &["false", "true"],
             ),
             row(
                 "Terminal & Execution",
@@ -954,6 +973,7 @@ mod setting_meta_tests {
             "terminal.show_images",
             "terminal.image_width_cells",
             "terminal.show_progress",
+            "terminal.clear_on_shrink",
             "images.auto_resize",
             "markdown.code_block_indent",
             "markdown.mermaid",

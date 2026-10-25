@@ -95,6 +95,45 @@ fn offered_levels(configured: Option<&[String]>, advertised: Option<&str>) -> Ve
     }
 }
 
+/// The live display tunables (gh #82): the config cell's values as the
+/// renderer receives them, read fresh on every call so a `/settings` cycle
+/// applies without a restart.
+///
+/// Split out of [`Ui::hooks`] (gh #538) because the closure was the only place
+/// a production [`DisplayTuning`](lca_ui::state::DisplayTuning) was built, and a
+/// closure cannot be called from a test. As a function it can, so the row that
+/// pins "the configured value reaches the renderer" drives the same code the
+/// interface does.
+pub(super) fn display_tuning(config: &lca_config::Config) -> lca_ui::state::DisplayTuning {
+    lca_ui::state::DisplayTuning {
+        autocomplete_max_visible: config.ui_autocomplete_max_visible().clamp(3, 20) as u8,
+        editor_padding_x: config.ui_editor_padding_x().min(3) as u8,
+        output_pad: config.ui_output_pad().min(1) as u8,
+        fullscreen_scrollbar: config.ui_fullscreen_scrollbar().to_string(),
+        fullscreen_copy_on_select: config.ui_fullscreen_copy_on_select(),
+        fullscreen_wheel_lines: config.ui_fullscreen_wheel_lines().to_string(),
+        fullscreen_exit_output: config.ui_fullscreen_exit_output().to_string(),
+        show_images: config.terminal_show_images(),
+        image_width_cells: config.terminal_image_width_cells().max(1) as u16,
+        show_progress: config.terminal_show_progress(),
+        clear_on_shrink: config.terminal_clear_on_shrink(),
+        auto_resize_images: config.images_auto_resize(),
+        code_block_indent: config.markdown_code_block_indent().to_string(),
+        mermaid: config.markdown_mermaid().to_string(),
+        // Gh #399: the setting's three spellings map onto the three rungs
+        // here, so `lca-ui` never learns them.
+        startup_header: match config.ui_quiet_startup() {
+            "true" => lca_ui::state::StartupHeaderRung::Hidden,
+            "header" => lca_ui::state::StartupHeaderRung::VersionOnly,
+            _ => lca_ui::state::StartupHeaderRung::Full,
+        },
+        startup_version: (
+            env!("PRODUCT_VERSION").to_string(),
+            lca_session::ABI_VERSION.to_string(),
+        ),
+    }
+}
+
 impl Ui {
     /// The host hooks wired for this composition (S1).
     pub(super) fn hooks(self: &Arc<Self>) -> UiHooks {
@@ -313,41 +352,10 @@ impl Ui {
                         .to_string()
                 }))
             },
-            display_tuning: {
+            display_tuning: Some(Arc::new({
                 let ui = self.clone();
-                // Reads the live cell every frame: a `/settings`
-                // cycle applies without a restart.
-                Some(Arc::new(move || {
-                    let config = crate::lock(&ui.config);
-                    lca_ui::state::DisplayTuning {
-                        autocomplete_max_visible: config.ui_autocomplete_max_visible().clamp(3, 20)
-                            as u8,
-                        editor_padding_x: config.ui_editor_padding_x().min(3) as u8,
-                        output_pad: config.ui_output_pad().min(1) as u8,
-                        fullscreen_scrollbar: config.ui_fullscreen_scrollbar().to_string(),
-                        fullscreen_copy_on_select: config.ui_fullscreen_copy_on_select(),
-                        fullscreen_wheel_lines: config.ui_fullscreen_wheel_lines().to_string(),
-                        fullscreen_exit_output: config.ui_fullscreen_exit_output().to_string(),
-                        show_images: config.terminal_show_images(),
-                        image_width_cells: config.terminal_image_width_cells().max(1) as u16,
-                        show_progress: config.terminal_show_progress(),
-                        auto_resize_images: config.images_auto_resize(),
-                        code_block_indent: config.markdown_code_block_indent().to_string(),
-                        mermaid: config.markdown_mermaid().to_string(),
-                        // Gh #399: the setting's three spellings map onto the three
-                        // rungs here, so `lca-ui` never learns them.
-                        startup_header: match config.ui_quiet_startup() {
-                            "true" => lca_ui::state::StartupHeaderRung::Hidden,
-                            "header" => lca_ui::state::StartupHeaderRung::VersionOnly,
-                            _ => lca_ui::state::StartupHeaderRung::Full,
-                        },
-                        startup_version: (
-                            env!("PRODUCT_VERSION").to_string(),
-                            lca_session::ABI_VERSION.to_string(),
-                        ),
-                    }
-                }))
-            },
+                move || display_tuning(&crate::lock(&ui.config))
+            })),
             current_session_id: {
                 let ui = self.clone();
                 Some(Arc::new(move || {

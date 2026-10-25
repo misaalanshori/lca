@@ -237,3 +237,149 @@ fn no_key_is_reported_twice() {
         "duplicate key in resolved(): {keys:?}"
     );
 }
+
+// ============================================================================
+// gh #538: `terminal.clear_on_shrink` is wired, so it is exercised from every
+// layer it can be set from. The renderer side lives in `MainScreenRenderer`
+// (gh #372 bug 4); these rows pin the *value* the renderer receives.
+// ============================================================================
+
+/// The value the renderer will be handed, keyed by the dotted key, from a
+/// loaded config. One helper so every row below asserts on the same thing.
+fn loaded(input: LoadInput) -> Config {
+    Config::load(&input).expect("load")
+}
+
+// Verifies: gh #538 - the documented default is off, from an empty load. Off
+// is pi's default and the deliberate choice of the cycle that implemented the
+// renderer half (gh #372 bug 4): a key that defaults to changing behaviour is
+// not a setting.
+#[test]
+fn clear_on_shrink_defaults_to_off_when_nothing_sets_it() {
+    let config = loaded(LoadInput::default());
+    assert!(
+        !config.terminal_clear_on_shrink(),
+        "unset means off, exactly as pi's terminal.clearOnShrink ships"
+    );
+    assert_eq!(
+        resolved_value(&config, "terminal.clear_on_shrink"),
+        Some(("false".to_string(), MergeSource::Default)),
+        "the inspector reports the built-in default, and says it is the default (FR-CFG-2)"
+    );
+}
+
+// Verifies: gh #538 - the user config file sets it, in both directions, so the
+// row cannot pass on a default that happens to match.
+#[test]
+fn the_user_file_sets_clear_on_shrink_both_ways() {
+    let dir = scratch("lca-clear-on-shrink-file");
+    let file = dir.join("user.toml");
+    for (written, expected) in [("true", true), ("false", false)] {
+        std::fs::write(
+            file.as_path(),
+            format!("terminal.clear_on_shrink = {written}\n"),
+        )
+        .expect("write");
+        let config = loaded(LoadInput {
+            user_file: Some(file.clone()),
+            ..Default::default()
+        });
+        assert_eq!(
+            config.terminal_clear_on_shrink(),
+            expected,
+            "the file said {written}"
+        );
+        assert_eq!(
+            resolved_value(&config, "terminal.clear_on_shrink"),
+            Some((written.to_string(), MergeSource::UserFile)),
+            "and the inspector names the user file as the source (FR-CFG-2)"
+        );
+    }
+}
+
+// Verifies: gh #538 - the environment layer sets it too, in both directions:
+// `terminal.clear_on_shrink` is in `KNOWN_KEYS`, which is the list the
+// environment loop iterates (gh #272's drift class).
+#[test]
+fn the_environment_sets_clear_on_shrink_both_ways() {
+    for (raw, expected) in [("true", true), ("false", false)] {
+        let config = loaded(LoadInput {
+            env: BTreeMap::from([("LCA_TERMINAL_CLEAR_ON_SHRINK".to_string(), raw.to_string())]),
+            ..Default::default()
+        });
+        assert_eq!(
+            config.terminal_clear_on_shrink(),
+            expected,
+            "env said {raw}"
+        );
+        assert_eq!(
+            resolved_value(&config, "terminal.clear_on_shrink"),
+            Some((raw.to_string(), MergeSource::Env))
+        );
+    }
+}
+
+// Verifies: gh #538 - the precedence ladder is the thing being exercised:
+// environment outranks the user file, and a flag outranks both.
+#[test]
+fn clear_on_shrink_follows_the_precedence_ladder() {
+    let dir = scratch("lca-clear-on-shrink-ladder");
+    let file = dir.join("user.toml");
+    std::fs::write(file.as_path(), "terminal.clear_on_shrink = true\n").expect("write");
+    let from_file = loaded(LoadInput {
+        user_file: Some(file.clone()),
+        ..Default::default()
+    });
+    assert!(from_file.terminal_clear_on_shrink());
+
+    let from_env = loaded(LoadInput {
+        user_file: Some(file.clone()),
+        env: BTreeMap::from([(
+            "LCA_TERMINAL_CLEAR_ON_SHRINK".to_string(),
+            "false".to_string(),
+        )]),
+        ..Default::default()
+    });
+    assert!(
+        !from_env.terminal_clear_on_shrink(),
+        "environment outranks the user file (FR-CFG-1)"
+    );
+
+    let from_flag = loaded(LoadInput {
+        user_file: Some(file),
+        env: BTreeMap::from([(
+            "LCA_TERMINAL_CLEAR_ON_SHRINK".to_string(),
+            "false".to_string(),
+        )]),
+        flags: BTreeMap::from([("terminal.clear_on_shrink".to_string(), "true".to_string())]),
+        ..Default::default()
+    });
+    assert!(
+        from_flag.terminal_clear_on_shrink(),
+        "a flag outranks the environment (FR-CFG-1)"
+    );
+}
+
+// Verifies: gh #538 - a value that is not a boolean is refused at load, naming
+// the key, like every other key in the inventory (the gh #273 rule: nothing is
+// silently ignored).
+#[test]
+fn a_non_boolean_clear_on_shrink_is_refused_at_load_naming_the_key() {
+    let dir = scratch("lca-clear-on-shrink-bad");
+    let file = dir.join("user.toml");
+    std::fs::write(file.as_path(), "terminal.clear_on_shrink = \"yes\"\n").expect("write");
+    let err = Config::load(&LoadInput {
+        user_file: Some(file),
+        ..Default::default()
+    })
+    .expect_err("a string is not a boolean");
+    let text = err.to_string();
+    assert!(
+        text.contains("terminal.clear_on_shrink"),
+        "the message names the key: {text}"
+    );
+    assert!(
+        text.contains("expected a boolean"),
+        "and says what was expected: {text}"
+    );
+}
