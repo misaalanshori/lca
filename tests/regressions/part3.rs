@@ -475,3 +475,9 @@ mod loop_wakes_on_every_source;
 // so one linked cell starved every other column.
 #[path = "384-table-measures-rendered-cells.rs"]
 mod table_measures_rendered_cells;
+
+// Gh #367: on a terminal that cannot report the Shift modifier (Apple's Terminal.app,
+// Windows consoles), `Enter` inserts a newline instead of submitting - the scoped,
+// overridable policy that replaces a silent data-loss bug.
+#[path = "367-enter-policy-on-shift-blind-terminals.rs"]
+mod enter_policy_on_shift_blind_terminals;

@@ -167,3 +167,25 @@ pub fn find_visual_row(rows: &[VisualRow], line: usize, col: usize) -> usize {
     }
     rows.len().saturating_sub(1)
 }
+
+/// Split a visual row at the grapheme cluster containing the char `offset`, snapped to
+/// the cluster's start (pi's grapheme-snapped caret: a multi-code-point cluster is
+/// painted whole, never in half). Returns `(before, cluster, after)`; `cluster` is
+/// `None` at end of line, which is how the render path parks a caret at the row's end.
+pub(crate) fn caret_split(visual: &str, offset: usize) -> (&str, Option<&str>, &str) {
+    use unicode_segmentation::UnicodeSegmentation as _;
+    let mut char_pos = 0usize;
+    let mut byte_pos = 0usize;
+    for cluster in visual.graphemes(true) {
+        if offset < char_pos + cluster.chars().count() {
+            return (
+                &visual[..byte_pos],
+                Some(cluster),
+                &visual[byte_pos + cluster.len()..],
+            );
+        }
+        char_pos += cluster.chars().count();
+        byte_pos += cluster.len();
+    }
+    (visual, None, "")
+}

@@ -7,6 +7,19 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **`Shift+Enter` no longer submits a half-written prompt on Apple's Terminal.app or
+  a Windows console** (gh #367). Those terminals drop the Shift modifier, so
+  `Shift+Enter` arrives as a bare `\r` — byte-identical to `Enter` — and the
+  information is gone before LCA sees it. A user reaching for a newline therefore
+  sent a partial prompt to a paid model and lost their place. Since the bytes cannot
+  distinguish the two, `\r` now has a **policy** on those terminals rather than a
+  parse: it inserts a newline, because an accidental newline costs one keystroke
+  while an accidental submit costs a prompt, a charge, and the draft. The policy is
+  scoped to the detection — everywhere else `Enter` submits exactly as before — and
+  `LCA_SHIFT_ENTER=0` turns it off (or `=1` on for any terminal). Terminals that do
+  report Shift (Kitty CSI-u, xterm `modifyOtherKeys`) are untouched, and
+  `\`+`Enter` keeps working everywhere.
+
 - **Streamed output no longer waits for the next keystroke to be noticed** (gh #370
   flaw 1). The interface's only blocking point was a 50 ms poll of the *stdin*
   channel, and nothing else could wake it: a streamed token, a shell chunk, or a

@@ -81,6 +81,8 @@ pub struct Editor {
     /// plain theme renders no escapes at all (FR-UI-5), so there the
     /// hardware cursor - positioned at the marker - stays the caret.
     paint_caret: bool,
+    /// A bare `\r` inserts a newline, not a submit (gh #367: Shift-blind terminal).
+    enter_inserts_newline: bool,
     history: Vec<String>,
     history_index: Option<usize>,
     draft: String,
@@ -134,11 +136,14 @@ impl Default for Editor {
 impl Editor {
     /// A new editor.
     pub fn new() -> Self {
+        // Gh #367: the terminal decides what a bare `\r` means (policy in `lca-tui`).
+        let enter_inserts_newline = crate::engine::keys::enter_is_ambiguous();
         Self {
             lines: vec![String::new()],
             cursor_line: 0,
             cursor_col: 0,
             paint_caret: true,
+            enter_inserts_newline,
             history: Vec::new(),
             history_index: None,
             draft: String::new(),
@@ -163,6 +168,11 @@ impl Editor {
     /// Use a specific keybinding set.
     pub fn set_keybindings(&mut self, kb: Arc<KeybindingsManager>) {
         self.keybindings = kb;
+    }
+
+    /// Choose what a bare `\r` means (gh #367); `new` reads the policy.
+    pub fn set_enter_inserts_newline(&mut self, on: bool) {
+        self.enter_inserts_newline = on;
     }
 
     /// Choose how the caret is shown: painted into the row (colored
@@ -737,9 +747,16 @@ impl Editor {
         }
         if kb.matches(data, "tui.input.submit") {
             // Workaround for terminals without Shift+Enter support: a `\`
-            // typed before Enter inserts a newline instead of submitting.
+            // typed before Enter inserts a newline instead of submitting. Checked
+            // **first**, so the gesture keeps its meaning (the backslash is consumed).
             if self.cursor_preceded_by_backslash() {
                 self.backspace();
+                self.newline();
+                return EditorEvent::Changed;
+            }
+            // Gh #367: on a Shift-blind terminal `\r` is what both keys produce, so
+            // prefer the recoverable outcome (a newline). Scoped to the detection.
+            if self.enter_inserts_newline {
                 self.newline();
                 return EditorEvent::Changed;
             }
@@ -945,7 +962,7 @@ impl Editor {
                         && self.cursor_col == row.end))
             {
                 let offset = self.cursor_col - row.start;
-                let (before, cluster, after) = Self::caret_split(text, offset);
+                let (before, cluster, after) = editor_rows::caret_split(text, offset);
                 rendered = if self.paint_caret {
                     // Gh #371 bug 2: close reverse video with `27m`, not `0m`. A full
                     // reset here would strip the foreground, background and
@@ -1040,28 +1057,6 @@ impl Editor {
             }
         }
         pos
-    }
-
-    /// Split a visual row at the grapheme cluster containing the char
-    /// `offset`, snapped to the cluster's start (pi's grapheme-snapped
-    /// caret: a multi-code-point cluster is painted whole, never in half).
-    /// `(before, cluster, after)`; `cluster` is `None` at end of line.
-    fn caret_split(visual: &str, offset: usize) -> (&str, Option<&str>, &str) {
-        use unicode_segmentation::UnicodeSegmentation as _;
-        let mut char_pos = 0usize;
-        let mut byte_pos = 0usize;
-        for cluster in visual.graphemes(true) {
-            if offset < char_pos + cluster.chars().count() {
-                return (
-                    &visual[..byte_pos],
-                    Some(cluster),
-                    &visual[byte_pos + cluster.len()..],
-                );
-            }
-            char_pos += cluster.chars().count();
-            byte_pos += cluster.len();
-        }
-        (visual, None, "")
     }
 
     /// The visible popup window into the suggestions (gh #175): pi's

@@ -163,6 +163,64 @@ fn is_windows_terminal_session() -> bool {
         && !env_set("SSH_TTY")
 }
 
+/// Whether this terminal cannot report the Shift modifier on Enter, so a bare `\r`
+/// is ambiguous between `Enter` and `Shift+Enter` (gh #367).
+///
+/// The information is gone before LCA sees the bytes: on Apple's Terminal.app and on
+/// Windows consoles whose virtual-terminal input drops the modifier, `Shift+Enter`
+/// emits a bare `\r`, byte-identical to `Enter`. No byte pattern distinguishes them,
+/// which is why the answer is a **policy** rather than a parse.
+///
+/// The signal is pi's `isAppleTerminalSession` rule — `platform == darwin &&
+/// TERM_PROGRAM == Apple_Terminal`, exactly as [`crate::engine::terminal`] already
+/// answers it for half-block art (gh #399) — plus Windows, where pi applies the same
+/// treatment unconditionally (`packages/tui/src/terminal.ts:393`). Both halves of the
+/// Apple pair matter: a Linux box claiming the name is not the terminal pi measured,
+/// and a Mac without the variable is not either.
+///
+/// A local hardware probe (`CGEventSourceFlagsState` on macOS,
+/// `dwControlKeyState` on Windows) would answer "is Shift down *now*", but over SSH
+/// that is the local keyboard rather than the remote client's and would be a lie. So
+/// the predicate checks the session is local and, when LCA cannot know, prefers the
+/// recoverable outcome instead of guessing.
+pub fn enter_is_ambiguous() -> bool {
+    enter_is_ambiguous_with(
+        cfg!(windows),
+        cfg!(target_os = "macos"),
+        is_local_session(),
+        |key| std::env::var(key).ok(),
+    )
+}
+
+/// The rule over injected pieces, so both directions are testable on one machine.
+///
+/// `LCA_SHIFT_ENTER=1|0` forces the answer, in `LCA_HALF_BLOCKS`'s shape: it is the
+/// documented escape hatch for a user on an affected terminal who wants `Enter` to
+/// submit, and how a receipt demonstrates the fallback on a machine that is not a Mac.
+pub fn enter_is_ambiguous_with(
+    on_windows: bool,
+    on_macos: bool,
+    local: bool,
+    env: impl Fn(&str) -> Option<String>,
+) -> bool {
+    if !local {
+        return false;
+    }
+    match env("LCA_SHIFT_ENTER").as_deref() {
+        Some("0") => return false,
+        Some("1") => return true,
+        _ => {}
+    }
+    on_windows || (on_macos && env("TERM_PROGRAM").as_deref() == Some("Apple_Terminal"))
+}
+
+/// Whether this session is local, so the local keyboard's modifier state would be
+/// meaningful (gh #367). Over SSH the client's keyboard is what matters and this
+/// process cannot see it.
+fn is_local_session() -> bool {
+    !env_set("SSH_CONNECTION") && !env_set("SSH_CLIENT") && !env_set("SSH_TTY")
+}
+
 fn matches_raw_backspace(data: &str, expected_modifier: u32) -> bool {
     if data == "\x7f" {
         return expected_modifier == 0;
@@ -833,3 +891,91 @@ pub fn decode_printable_key(data: &str) -> Option<String> {
 #[cfg(test)]
 #[path = "keys_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod enter_ambiguity_tests {
+    use super::enter_is_ambiguous_with;
+
+    /// A local macOS Apple_Terminal session: the affected case.
+    fn apple() -> bool {
+        enter_is_ambiguous_with(false, true, true, |key| match key {
+            "TERM_PROGRAM" => Some("Apple_Terminal".to_string()),
+            _ => None,
+        })
+    }
+
+    // Verifies: gh #367 - the detection is a **named predicate**, and macOS's
+    // Terminal.app is the terminal it names. pi's rule is the whole pair
+    // (platform + TERM_PROGRAM), so a Linux box claiming the name is not it.
+    #[test]
+    fn apple_terminal_is_an_ambiguous_session() {
+        assert!(apple(), "macOS + Apple_Terminal strips Shift from Enter");
+    }
+
+    // Verifies: gh #367 - a Mac on any other terminal is **not** ambiguous, so its
+    // `Enter` keeps submitting. The fix must not make Enter unreliable where the
+    // terminal can tell us.
+    #[test]
+    fn another_terminal_on_a_mac_is_not_ambiguous() {
+        let iterm = enter_is_ambiguous_with(false, true, true, |key| match key {
+            "TERM_PROGRAM" => Some("iTerm.app".to_string()),
+            _ => None,
+        });
+        let unset = enter_is_ambiguous_with(false, true, true, |_| None);
+        assert!(!iterm, "iTerm reports Shift properly");
+        assert!(
+            !unset,
+            "an unset TERM_PROGRAM is unknown, not Apple's Terminal"
+        );
+    }
+
+    // Verifies: gh #367 - **over SSH the local keyboard is not the user's**, so the
+    // question is not asked at all. Guessing from local state would be a lie about a
+    // remote client.
+    #[test]
+    fn a_remote_session_is_never_ambiguous() {
+        let remote = enter_is_ambiguous_with(false, true, false, |key| match key {
+            "TERM_PROGRAM" => Some("Apple_Terminal".to_string()),
+            _ => None,
+        });
+        assert!(!remote, "a remote client's keyboard is not ours to read");
+    }
+
+    // Verifies: gh #367 - the **override works in both directions**, so a user on an
+    // affected terminal can have `Enter` submit and a user elsewhere can opt into
+    // newline. A platform heuristic that cannot be overridden is a bug for everyone
+    // who does not fit it.
+    #[test]
+    fn the_override_forces_either_answer() {
+        let force_off = enter_is_ambiguous_with(false, true, true, |key| match key {
+            "TERM_PROGRAM" => Some("Apple_Terminal".to_string()),
+            "LCA_SHIFT_ENTER" => Some("0".to_string()),
+            _ => None,
+        });
+        let force_on = enter_is_ambiguous_with(false, true, true, |key| match key {
+            "LCA_SHIFT_ENTER" => Some("1".to_string()),
+            _ => None,
+        });
+        assert!(
+            !force_off,
+            "=0 restores Enter's submit on an affected terminal"
+        );
+        assert!(force_on, "=1 opts an unaffected terminal into newline");
+    }
+
+    // Verifies: gh #367 - the override is read on **every** call rather than cached,
+    // which is what makes it usable: a user who changes it and reloads must not need
+    // a new process for a setting that is about their keyboard.
+    #[test]
+    fn the_override_is_not_frozen_at_first_use() {
+        // The predicate takes the environment per call, so two calls with different
+        // values answer differently. A `OnceLock` (as `is_apple_terminal` uses, for a
+        // fact that cannot change) would have made the second call a lie.
+        assert!(!enter_is_ambiguous_with(false, true, true, |k| (k
+            == "LCA_SHIFT_ENTER")
+            .then(|| "0".into())));
+        assert!(enter_is_ambiguous_with(false, true, true, |k| (k
+            == "LCA_SHIFT_ENTER")
+            .then(|| "1".into())));
+    }
+}
