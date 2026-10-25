@@ -15,6 +15,15 @@ Dates are UTC.
   word), a closed wrapper stays part of a route (`app/[slug]/pa`), and `/` is
   unchanged — it still opens the command menu only at line start, so a mid-sentence
   url or path never raises one.
+- **Streamed output no longer waits for the next keystroke to be noticed** (gh #370
+  flaw 1). The interface's only blocking point was a 50 ms poll of the *stdin*
+  channel, and nothing else could wake it: a streamed token, a shell chunk, or a
+  permission request sat in its own channel until the timer elapsed. That capped
+  streaming at 20 frames a second and added up to 50 ms of latency to the first
+  streamed token. Every producer now signals a wake channel and the loop blocks on
+  that instead, so a delta paints on the next tick of the loop rather than the next
+  tick of the clock. Input is still taken first on every iteration - a keystroke is
+  never queued behind a producer - and 200 ms of idle still paints nothing.
 - **A program that prints `OSC 11` could repaint LCA's theme mid-session** (gh #379
   gap 1). The terminal-colour reply handler had no lifecycle: it applied every
   background answer it ever saw, so `ls` with colour, `git`, or any program echoing

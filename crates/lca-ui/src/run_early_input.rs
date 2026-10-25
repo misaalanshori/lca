@@ -218,6 +218,14 @@ pub struct EarlyStream {
 }
 
 impl EarlyStream {
+    /// The next keystroke if one is already buffered, without blocking (gh #370
+    /// flaw 1: the loop asks before it sleeps, so a key is never queued behind a
+    /// producer's wake).
+    #[must_use]
+    pub fn try_recv(&self) -> Option<String> {
+        self.receiver.try_recv().ok()
+    }
+
     /// The next keystroke, blocking for at most `timeout`.
     pub fn recv_timeout(
         &self,

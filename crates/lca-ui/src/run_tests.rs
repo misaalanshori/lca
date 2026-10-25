@@ -40,6 +40,16 @@ fn switch_screen_toggles_the_renderer() {
     assert!(!screen.is_fullscreen());
 }
 
+/// A waker for tests: every wake succeeds and nobody reads it.
+pub(crate) fn test_waker() -> crate::run_wake::Waker {
+    let (waker, wakes) = crate::run_wake::Wakes::new();
+    // Leak the loop end: the tests never block on it, and a dropped receiver would
+    // make `wake` a silent no-op (which is also fine, but keeping it alive means a
+    // test can assert the signal if it wants to).
+    std::mem::forget(wakes);
+    waker
+}
+
 pub(crate) fn options() -> UiOptions {
     UiOptions {
         prompt_slot: Default::default(),
@@ -743,7 +753,7 @@ fn pending_models_delivery_invalidates_the_snapshot() {
 fn program_status_follows_the_lifecycle() {
     let (prompt_tx, prompt_rx) = std::sync::mpsc::sync_channel(4);
     let (_dialog_tx, dialog_rx) = std::sync::mpsc::sync_channel(4);
-    let mut turns = TurnState::new(prompt_tx, prompt_rx, dialog_rx);
+    let mut turns = TurnState::new(prompt_tx, prompt_rx, dialog_rx, test_waker());
     let mut chat = chat();
     let mut term = FakeTerminal::new(80, 24);
     turns.sync_program_status(&chat, &mut term);
@@ -781,7 +791,7 @@ fn program_status_follows_the_lifecycle() {
 fn an_aborted_turn_restores_the_queue_through_the_reap_path() {
     let (prompt_tx, prompt_rx) = std::sync::mpsc::sync_channel(4);
     let (_dialog_tx, dialog_rx) = std::sync::mpsc::sync_channel(4);
-    let mut turns = TurnState::new(prompt_tx, prompt_rx, dialog_rx);
+    let mut turns = TurnState::new(prompt_tx, prompt_rx, dialog_rx, test_waker());
     let mut chat = chat();
     chat.begin_turn(lca_protocol::steer_queue());
     chat.queue_submit("steer me".into(), lca_protocol::SubmitMode::Steer);
@@ -838,7 +848,7 @@ fn badges(output: &str) -> String {
 fn quiet_turns() -> TurnState {
     let (prompt_tx, prompt_rx) = std::sync::mpsc::sync_channel(4);
     let (_dialog_tx, dialog_rx) = std::sync::mpsc::sync_channel(4);
-    TurnState::new(prompt_tx, prompt_rx, dialog_rx)
+    TurnState::new(prompt_tx, prompt_rx, dialog_rx, test_waker())
 }
 
 // Verifies: gh #369 - a background `/compact` is work the user is waiting

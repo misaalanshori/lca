@@ -465,6 +465,12 @@ mod word_motion_segments;
 #[path = "379-colour-query-lifecycle.rs"]
 mod colour_query_lifecycle;
 
+// Gh #370 flaw 1: the loop blocks on every source it has, not stdin alone - so a
+// streamed token, a shell chunk or a permission request wakes it instead of waiting for
+// the 50 ms tick; input is still tried first, and 200 ms of idle still paints nothing.
+#[path = "370-loop-wakes-on-every-source.rs"]
+mod loop_wakes_on_every_source;
+
 // GitHub #384: table layout measured `natural`/`min_word` on raw Markdown,
 // so one linked cell starved every other column.
 #[path = "384-table-measures-rendered-cells.rs"]
