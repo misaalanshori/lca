@@ -69,7 +69,10 @@ fn the_popup_paints_single_column_rows_in_a_real_pane() {
         );
     }
 
-    session.send(&["Escape"]);
+    // Clear the composer (which also dismisses the popup), then exit the way
+    // the other real-terminal rows do. An `Escape` first leaves the editor in a
+    // state the following `/exit` does not route from, and the pane then never
+    // exits - CI caught that, local runs did not.
     session.send(&["C-u"]);
     session.send(&["/exit", "Enter"]);
     wait_for_pane_end(&session, std::time::Duration::from_secs(15));
@@ -127,7 +130,10 @@ fn a_skill_row_shows_its_provenance_in_a_real_pane() {
         "and it carries its provenance tag:\n{pane}"
     );
 
-    session.send(&["Escape"]);
+    // Clear the composer (which also dismisses the popup), then exit the way
+    // the other real-terminal rows do. An `Escape` first leaves the editor in a
+    // state the following `/exit` does not route from, and the pane then never
+    // exits - CI caught that, local runs did not.
     session.send(&["C-u"]);
     session.send(&["/exit", "Enter"]);
     wait_for_pane_end(&session, std::time::Duration::from_secs(15));
