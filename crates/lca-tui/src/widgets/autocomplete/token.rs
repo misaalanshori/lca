@@ -137,6 +137,20 @@ pub fn strip_wrappers(token: &str) -> &str {
     }
 }
 
+/// A path in the form the matcher compares against: `/` separators.
+///
+/// pi normalises both sides before matching (`toDisplayPath`, applied to the
+/// query and to every walked path), which is what makes `@src/m` work on
+/// Windows. LCA passed the walked `rel` through with the OS separator, so
+/// `src\\main.rs` could not match a query containing `/` and `@src/m` found
+/// nothing there - gh #380 gap 1's Windows half, found by the rows this cycle
+/// added. Used on both the query and the candidate so the comparison is
+/// separator-free on every platform.
+#[must_use]
+pub fn to_display_path(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
 /// The attachment token at the end of `text`, if the cursor is in one.
 ///
 /// Returns the query *after* the `@`, which is what the file walk wants.
@@ -195,6 +209,28 @@ mod tests {
         assert_eq!(strip_wrappers("(marketing)/pa"), "(marketing)/pa");
         assert_eq!(strip_wrappers("@src"), "@src");
         assert_eq!(strip_wrappers(""), "");
+    }
+
+    // Gh #380 gap 1's Windows half: the walk joins with the OS separator, so
+    // a query containing `/` could not match `src\\main.rs` and `@src/m`
+    // found nothing on Windows. Both sides are normalised before matching,
+    // which is pi's `toDisplayPath`.
+    #[test]
+    fn a_windows_separated_path_matches_a_slash_query() {
+        let query = to_display_path("src/m");
+        let candidate = to_display_path("src\\main.rs");
+        assert_eq!(query, "src/m");
+        assert_eq!(candidate, "src/main.rs");
+        assert!(
+            crate::widgets::autocomplete::fuzzy_match_scored(&query, &candidate).matches,
+            "a `/` query matches a backslash-separated path once both are display-form"
+        );
+        // Without the normalisation the two do not match at all - which is
+        // exactly the Windows defect this pins.
+        assert!(
+            !crate::widgets::autocomplete::fuzzy_match_scored("src/m", "src\\main.rs").matches,
+            "the raw forms do not match, so the normalisation is load-bearing"
+        );
     }
 
     #[test]

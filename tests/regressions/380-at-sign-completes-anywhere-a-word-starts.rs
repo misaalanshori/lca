@@ -71,9 +71,19 @@ impl Drop for Tree {
     }
 }
 
+/// The `.value` of every row, normalised to `/`.
+///
+/// The walk joins paths with the OS separator, so a row that reads
+/// `src/main.rs` on Linux reads `src\\main.rs` on Windows; `to_display_path`
+/// is the same normalisation the existing autocomplete rows use.
 fn values(suggestions: Option<lca_tui::widgets::autocomplete::Suggestions>) -> Vec<String> {
     suggestions
-        .map(|s| s.items.into_iter().map(|i| i.value).collect())
+        .map(|s| {
+            s.items
+                .into_iter()
+                .map(|i| i.value.replace('\\', "/"))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -188,9 +198,42 @@ fn accepting_inserts_the_path_once_and_keeps_the_prose() {
         editor.refresh_suggestions(false);
         editor.accept_suggestion();
         assert_eq!(
-            editor.text(),
+            editor.text().replace('\\', "/"),
             expected,
             "`{typed}` accepts without swallowing prose or duplicating the `@`"
         );
     }
+}
+
+/// Gh #380 gap 1's Windows half, found by these rows on CI.
+///
+/// The walk builds each candidate from `Path::join`, so on Windows the
+/// relative path the matcher sees is `src\main.rs`. A query containing `/`
+/// then matched nothing, and `@src/m` proposed nothing at all there - the
+/// same feature, broken on one platform, with no row to notice.
+///
+/// Both sides are normalised before matching (`token::to_display_path`,
+/// pi's `toDisplayPath`), so this asserts the property directly rather than
+/// depending on which OS happens to run it.
+#[test]
+fn a_slash_query_matches_a_backslash_separated_candidate() {
+    use lca_tui::widgets::autocomplete::{fuzzy_match_scored, token};
+
+    // The pair the walk actually produces on Windows, and the query the
+    // user actually types.
+    let query = token::to_display_path("src/m");
+    let candidate = token::to_display_path(r"src\main.rs");
+    assert_eq!(query, "src/m");
+    assert_eq!(candidate, "src/main.rs");
+    assert!(
+        fuzzy_match_scored(&query, &candidate).matches,
+        "a `/` query matches a Windows-built candidate once both are display-form"
+    );
+
+    // The defect, stated so the fix cannot be quietly reverted: the raw
+    // forms do not match.
+    assert!(
+        !fuzzy_match_scored("src/m", r"src\main.rs").matches,
+        "the raw forms do not match, so the normalisation is load-bearing"
+    );
 }

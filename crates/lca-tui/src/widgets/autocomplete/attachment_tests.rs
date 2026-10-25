@@ -42,23 +42,40 @@ impl Drop for Fixture {
 }
 
 /// The `.value` of every suggested row: what accepting the row inserts.
+///
+/// Paths are normalised to `/` because the walk builds them with the native
+/// separator - the same `to_display_path` convention the existing rows in
+/// `autocomplete.rs` use, and what makes these pass on Windows.
 fn values(suggestions: Option<super::Suggestions>) -> Vec<String> {
-    suggestions
-        .map(|s| s.items.into_iter().map(|i| i.value).collect())
-        .unwrap_or_default()
+    normalise(
+        suggestions
+            .map(|s| s.items.into_iter().map(|i| i.value).collect())
+            .unwrap_or_default(),
+    )
 }
 
 /// The `.description` of every suggested row, which for a file row is the
 /// path relative to the base directory.
 fn descriptions(suggestions: Option<super::Suggestions>) -> Vec<String> {
-    suggestions
-        .map(|s| {
-            s.items
-                .iter()
-                .filter_map(|i| i.description.clone())
-                .collect()
-        })
-        .unwrap_or_default()
+    normalise(
+        suggestions
+            .map(|s| {
+                s.items
+                    .iter()
+                    .filter_map(|i| i.description.clone())
+                    .collect()
+            })
+            .unwrap_or_default(),
+    )
+}
+
+/// pi's `toDisplayPath`: the walk joins with the OS separator, so a row that
+/// should read `src/main.rs` reads `src\main.rs` on Windows.
+fn normalise(paths: Vec<String>) -> Vec<String> {
+    paths
+        .into_iter()
+        .map(|path| path.replace('\\', "/"))
+        .collect()
 }
 
 // The issue's own case. `@` at the start of a *word* starts an attachment;
@@ -226,7 +243,7 @@ fn accepting_a_mid_sentence_completion_keeps_the_prose_and_inserts_once() {
     editor.refresh_suggestions(false);
     editor.accept_suggestion();
     assert_eq!(
-        editor.text(),
+        editor.text().replace('\\', "/"),
         "Check @src/main.rs",
         "the prose is kept and the path is inserted once"
     );
@@ -238,7 +255,7 @@ fn accepting_a_mid_sentence_completion_keeps_the_prose_and_inserts_once() {
     editor.refresh_suggestions(false);
     editor.accept_suggestion();
     assert_eq!(
-        editor.text(),
+        editor.text().replace('\\', "/"),
         "请查看，@src/main.rs",
         "CJK prose is kept and the path is inserted once"
     );
@@ -250,7 +267,7 @@ fn accepting_a_mid_sentence_completion_keeps_the_prose_and_inserts_once() {
     editor.refresh_suggestions(false);
     editor.accept_suggestion();
     assert_eq!(
-        editor.text(),
+        editor.text().replace('\\', "/"),
         "(@src/main.rs",
         "the unclosed wrapper stays in the line and is not re-inserted"
     );

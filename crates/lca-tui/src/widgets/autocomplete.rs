@@ -278,8 +278,12 @@ struct WalkBudget {
 
 /// The `@file` matcher: rank by score, then path length, then name.
 fn fuzzy_files(query: &str, base: &Path) -> Suggestions {
+    // The query in display form, once: candidates are normalised per entry
+    // inside the walk, so both sides of the comparison use `/` on every
+    // platform (pi's `toDisplayPath`; gh #380's Windows half).
+    let display_query = token::to_display_path(query);
     let mut items: Vec<(f64, usize, String, AutocompleteItem)> = Vec::new();
-    collect_files(base, query, &mut items);
+    collect_files(base, &display_query, &mut items);
     items.sort_by(|a, b| {
         a.0.partial_cmp(&b.0)
             .unwrap_or(std::cmp::Ordering::Equal)
@@ -341,11 +345,15 @@ fn collect_files(root: &Path, query: &str, out: &mut Vec<(f64, usize, String, Au
                 continue;
             }
             let path = dir.join(&name);
-            let rel = path
-                .strip_prefix(root)
-                .unwrap_or(&path)
-                .to_string_lossy()
-                .to_string();
+            // Display form (`/` separators), which is what pi matches and
+            // inserts against (`toDisplayPath`). Gh #380 gap 1's Windows
+            // half: the walk's `rel` carries the OS separator, so a query
+            // containing `/` never matched and `@src/m` found nothing on
+            // Windows. Normalising here fixes the match *and* makes the
+            // inserted value portable, rather than the inserted value being
+            // a Windows path that the user's prose then carries around.
+            let rel =
+                token::to_display_path(&path.strip_prefix(root).unwrap_or(&path).to_string_lossy());
             let is_dir = path.is_dir();
             let matched = fuzzy_match_scored(query, &rel);
             if matched.matches {
