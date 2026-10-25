@@ -98,7 +98,28 @@ project sits at that `HOME`'s root.
 LCA reads extended keys where the terminal sends them and degrades
 where it does not: `Ctrl+J` is the newline alternative when
 `Shift+Enter` never arrives, `Alt+P` cycles models back where
-`Ctrl+Shift+P` is eaten. Bracketed pastes land intact (tmux's CSI-u
+`Ctrl+Shift+P` is eaten.
+
+**On Apple's Terminal.app and on Windows consoles, `Enter` inserts a newline
+instead of submitting** (gh #367). Those terminals drop the Shift modifier from
+`Shift+Enter`, so it arrives as a bare `\r` — byte-identical to `Enter` — and the
+information is gone before LCA sees it. No byte pattern can tell the two apart, so
+LCA decides what `\r` *means* there and prefers the recoverable outcome: an
+accidental newline costs one keystroke, an accidental submit sends a half-written
+prompt to a paid model and loses your place. To submit there, bind another key to
+`tui.input.submit` in `~/.lca/keybindings.toml` — for example
+
+```toml
+tui.input.submit = ["enter", "ctrl+s"]
+```
+
+`/hotkeys` shows what the editor is actually accepting. To keep `Enter` submitting
+and skip the policy entirely, set `LCA_SHIFT_ENTER=0`; `=1` forces the newline
+behaviour on any terminal, which is how the fallback is demonstrated on a machine
+that is not a Mac. The detection is scoped: on any other terminal `Enter` submits
+exactly as it always has. Where the terminal *can* report Shift — Kitty keyboard
+protocol or xterm `modifyOtherKeys` — `Shift+Enter` inserts a newline whatever this
+policy says, and `\`+`Enter` keeps working everywhere. Bracketed pastes land intact (tmux's CSI-u
 re-encoding of control bytes inside a paste is decoded, so a pasted
 newline is a newline, not a submit). Remap anything in
 `~/.lca/keybindings.toml` (`/hotkeys` shows the effective map,
