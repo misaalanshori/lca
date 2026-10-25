@@ -15,3 +15,6 @@ mod mid_turn_slash_dispatches_as_command;
 // A shared test double, kept at the crate root so every part can `crate::doubles_275`.
 #[path = "doubles_275.rs"]
 mod doubles_275;
+// Gh #380 gap 1: `@file` completed only at column 0.
+#[path = "380-at-sign-completes-anywhere-a-word-starts.rs"]
+mod at_sign_completes_anywhere_a_word_starts;

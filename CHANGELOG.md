@@ -7,6 +7,14 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **`@file` completed only at the very start of a line** (gh #380 gap 1). The prompt
+  extraction was `strip_prefix('@')`, so `Check @src/main.rs`, `(@src/m` and CJK
+  `请查看，@src/main.ts` never proposed a file — the feature worked in the one position
+  nobody types it in. `@` now completes wherever a *word* starts: line start, ASCII
+  whitespace, and CJK punctuation. `a@b.com` still opens nothing (the `@` is inside a
+  word), a closed wrapper stays part of a route (`app/[slug]/pa`), and `/` is
+  unchanged — it still opens the command menu only at line start, so a mid-sentence
+  url or path never raises one.
 - **Streamed output no longer waits for the next keystroke to be noticed** (gh #370
   flaw 1). The interface's only blocking point was a 50 ms poll of the *stdin*
   channel, and nothing else could wake it: a streamed token, a shell chunk, or a
@@ -16,7 +24,6 @@ Dates are UTC.
   that instead, so a delta paints on the next tick of the loop rather than the next
   tick of the clock. Input is still taken first on every iteration - a keystroke is
   never queued behind a producer - and 200 ms of idle still paints nothing.
-
 - **A program that prints `OSC 11` could repaint LCA's theme mid-session** (gh #379
   gap 1). The terminal-colour reply handler had no lifecycle: it applied every
   background answer it ever saw, so `ls` with colour, `git`, or any program echoing
