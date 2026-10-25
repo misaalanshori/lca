@@ -329,3 +329,264 @@ fn theme_roles_fall_back_through_declared_chains() {
         "a malformed table fails load instead of painting a wrong colour"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Gap 3: the built-in palettes are calibrated, not hand-picked
+// ---------------------------------------------------------------------------
+
+/// The dark palette's accent target: `OKHSL 67%` -> OKLab L 0.7161.
+const DARK_TARGET_OKHSL: f64 = 0.67;
+/// The light palette's accent target. **Not** pi's 47%: at 47% four of the five
+/// accents land below the 4.5:1 body-text floor on LCA's own user band
+/// (`#e8e8e8`) - success 3.85, warning 4.13, muted and dim 4.06. 41% is the
+/// lightest value that clears the floor on every surface an accent is painted
+/// on; the worst case there is 4.85:1.
+const LIGHT_TARGET_OKHSL: f64 = 0.41;
+/// How far an accent's OKLab lightness may sit from the target.
+const TOLERANCE: f64 = 0.012;
+
+/// Ottosson's toe inverse: OKHSL lightness -> OKLab L.
+fn toe_inv(x: f64) -> f64 {
+    let (k1, k2) = (0.206, 0.03);
+    let k3 = (1.0 + k1) / (1.0 + k2);
+    (x * x + k1 * x) / (k3 * (x + k2))
+}
+
+/// The accent family the calibration governs.
+const ACCENTS: [lca_ui::theme::Role; 5] = [
+    lca_ui::theme::Role::Success,
+    lca_ui::theme::Role::Error,
+    lca_ui::theme::Role::Warning,
+    lca_ui::theme::Role::Accent,
+    lca_ui::theme::Role::BorderAccent,
+];
+
+/// A role's OKLab lightness, measured from the shipped palette.
+fn lightness_of(palette: &lca_ui::theme::Palette, role: lca_ui::theme::Role) -> f64 {
+    lca_ui::theme::accents::role_lightness(palette, role)
+        .unwrap_or_else(|| panic!("{} is a concrete colour", role.key()))
+}
+
+/// A role's RGB, from the shipped palette.
+fn rgb_of(
+    palette: &lca_ui::theme::Palette,
+    role: lca_ui::theme::Role,
+) -> lca_tui::engine::colors::RgbColor {
+    match palette.get(role) {
+        lca_ui::theme::Color::Rgb(r, g, b) => lca_tui::engine::colors::RgbColor { r, g, b },
+        other => panic!("{} is not RGB: {other:?}", role.key()),
+    }
+}
+
+/// **The calibration rule**, at the shipped palettes: every accent sits at one
+/// perceptual lightness, so a warning and a success read at the same weight.
+/// This is the row that makes the palette a rule rather than a repaint.
+#[test]
+fn every_accent_sits_at_its_palette_target_lightness() {
+    for (label, palette, okhsl) in [
+        ("dark", lca_ui::theme::Palette::dark(), DARK_TARGET_OKHSL),
+        ("light", lca_ui::theme::Palette::light(), LIGHT_TARGET_OKHSL),
+    ] {
+        let target = toe_inv(okhsl);
+        for role in ACCENTS {
+            let measured = lightness_of(&palette, role);
+            assert!(
+                (measured - target).abs() <= TOLERANCE,
+                "{label}: {} is OKLab L {measured:.4}, target {target:.4} \
+                 (OKHSL {:.0}%)",
+                role.key(),
+                okhsl * 100.0
+            );
+        }
+        // And the spread, which a per-role tolerance could hide.
+        let lightnesses: Vec<f64> = ACCENTS.iter().map(|r| lightness_of(&palette, *r)).collect();
+        let high = lightnesses.iter().cloned().fold(f64::MIN, f64::max);
+        let low = lightnesses.iter().cloned().fold(f64::MAX, f64::min);
+        assert!(
+            high - low <= TOLERANCE,
+            "{label}: the accent spread is {:.4}, wider than {TOLERANCE}",
+            high - low
+        );
+    }
+}
+
+/// `muted` and `dim` keep the accent *weight* and lose the colour: same
+/// lightness, near-zero chroma.
+#[test]
+fn the_neutrals_keep_the_weight_and_drop_the_colour() {
+    for (label, palette, okhsl) in [
+        ("dark", lca_ui::theme::Palette::dark(), DARK_TARGET_OKHSL),
+        ("light", lca_ui::theme::Palette::light(), LIGHT_TARGET_OKHSL),
+    ] {
+        let target = toe_inv(okhsl);
+        for role in [lca_ui::theme::Role::Muted, lca_ui::theme::Role::Dim] {
+            let measured = lightness_of(&palette, role);
+            let chroma = lca_ui::theme::accents::role_chroma(&palette, role)
+                .unwrap_or_else(|| panic!("{} is concrete", role.key()));
+            assert!(
+                (measured - target).abs() <= TOLERANCE,
+                "{label} {} is L {measured:.4}, target {target:.4}",
+                role.key()
+            );
+            assert!(
+                chroma <= 0.030,
+                "{label} {} has chroma {chroma:.4} - it is a colour, not a \
+                 de-emphasised accent weight",
+                role.key()
+            );
+        }
+    }
+}
+
+/// The issue's concrete complaint, by value: no built-in palette ships pure
+/// `#ffff00`, and the `#8abeb7` teal is gone.
+#[test]
+fn the_reported_values_are_gone() {
+    for (label, palette) in [
+        ("dark", lca_ui::theme::Palette::dark()),
+        ("light", lca_ui::theme::Palette::light()),
+    ] {
+        for role in lca_ui::theme::Role::ALL {
+            if let lca_ui::theme::Color::Rgb(r, g, b) = palette.get(*role) {
+                assert_ne!(
+                    (r, g, b),
+                    (0xff, 0xff, 0x00),
+                    "{label} ships pure #ffff00 on {}",
+                    role.key()
+                );
+                assert_ne!(
+                    (r, g, b),
+                    (0x8a, 0xbe, 0xb7),
+                    "{label} still ships the teal on {}",
+                    role.key()
+                );
+            }
+        }
+    }
+}
+
+/// **The contrast pairs asserted**, named: every accent, `muted`, `dim` and
+/// `text`, against the four surfaces an accent or a de-emphasis is painted on -
+/// the user band and the three tool-card states.
+///
+/// Deliberately **not** asserted: an accent on `selectedBg`. Nothing paints one
+/// there (`render.rs` puts `SelectedBg` under `Role::Text` only; `chat_render.rs`
+/// selects `Role::Text`), and neither pi's palette nor this one clears 4.5:1 on a
+/// selected row (pi's own figures are 3.76-4.55). Asserting it would assert a
+/// requirement the product does not have.
+#[test]
+fn the_de_emphasis_and_accents_are_readable_where_they_are_painted() {
+    const FLOOR: f64 = 4.5;
+    let surfaces = [
+        lca_ui::theme::Role::UserMessageBg,
+        lca_ui::theme::Role::ToolSuccessBg,
+        lca_ui::theme::Role::ToolErrorBg,
+        lca_ui::theme::Role::ToolPendingBg,
+    ];
+    for (label, palette) in [
+        ("dark", lca_ui::theme::Palette::dark()),
+        ("light", lca_ui::theme::Palette::light()),
+    ] {
+        let foregrounds: Vec<lca_ui::theme::Role> = ACCENTS
+            .iter()
+            .copied()
+            .chain([
+                lca_ui::theme::Role::Muted,
+                lca_ui::theme::Role::Dim,
+                lca_ui::theme::Role::Text,
+            ])
+            .collect();
+        for role in foregrounds {
+            let foreground = rgb_of(&palette, role);
+            for surface in surfaces {
+                let background = rgb_of(&palette, surface);
+                let ratio = lca_ui::theme::accents::contrast(foreground, background);
+                assert!(
+                    ratio >= FLOOR,
+                    "{label}: {} on {} is {ratio:.2}:1, below {FLOOR}:1",
+                    role.key(),
+                    surface.key()
+                );
+            }
+        }
+    }
+}
+
+/// The shipped values are what the *rule* produces, so editing a hex without
+/// editing the rule (or the reverse) fails here rather than drifting.
+#[test]
+fn the_shipped_palette_is_the_rules_output() {
+    use lca_ui::theme::accents::{accent, hex, neutral};
+    let authored = [
+        (lca_ui::theme::Role::Accent, 295.0_f64, 0.85_f64),
+        (lca_ui::theme::Role::BorderAccent, 295.0, 0.85),
+        (lca_ui::theme::Role::Success, 159.0, 0.85),
+        (lca_ui::theme::Role::Error, 20.0, 0.85),
+        (lca_ui::theme::Role::Warning, 83.0, 0.85),
+    ];
+    for (label, palette, okhsl) in [
+        ("dark", lca_ui::theme::Palette::dark(), DARK_TARGET_OKHSL),
+        ("light", lca_ui::theme::Palette::light(), LIGHT_TARGET_OKHSL),
+    ] {
+        for (role, hue, fraction) in authored {
+            assert_eq!(
+                rgb_of(&palette, role),
+                accent(okhsl, hue, fraction),
+                "{label} {} is {} but the rule produces {}",
+                role.key(),
+                hex(rgb_of(&palette, role)),
+                hex(accent(okhsl, hue, fraction))
+            );
+        }
+        for (role, chroma) in [
+            (lca_ui::theme::Role::Muted, 0.012),
+            (lca_ui::theme::Role::Dim, 0.020),
+        ] {
+            assert_eq!(
+                rgb_of(&palette, role),
+                neutral(okhsl, chroma),
+                "{label} {} is not what the rule produces",
+                role.key()
+            );
+        }
+    }
+}
+
+/// `plain` emits no SGR, so no palette value can reach it.
+#[test]
+fn the_plain_theme_is_untouched_by_the_palette() {
+    let theme = lca_ui::theme::Theme::plain();
+    for role in ACCENTS
+        .iter()
+        .copied()
+        .chain([lca_ui::theme::Role::Muted, lca_ui::theme::Role::Dim])
+    {
+        let painted = (theme.role(role))("x");
+        assert!(
+            !painted.contains('\x1b'),
+            "plain {} emitted an escape: {painted:?}",
+            role.key()
+        );
+    }
+}
+
+/// A user's theme file still wins over every calibrated value, and a role it
+/// does not name keeps the palette's own value - so an existing theme is
+/// unaffected by this cycle.
+#[test]
+fn a_user_theme_file_still_wins_over_the_calibration() {
+    let base = lca_ui::theme::Palette::dark();
+    let (overlaid, applied) = base
+        .overlay("[colors]\nwarning = \"#123456\"\n")
+        .expect("a valid theme file");
+    assert_eq!(applied, 1);
+    assert_eq!(
+        overlaid.get(lca_ui::theme::Role::Warning),
+        lca_ui::theme::Color::Rgb(0x12, 0x34, 0x56)
+    );
+    assert_eq!(
+        overlaid.get(lca_ui::theme::Role::Success),
+        base.get(lca_ui::theme::Role::Success),
+        "a role the file does not name keeps the palette's value"
+    );
+}

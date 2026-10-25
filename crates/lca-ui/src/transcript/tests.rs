@@ -271,9 +271,12 @@ fn tool_card_titles_and_arguments_carry_the_roles_pi_gives() {
         header.contains("\x1b[1;38;2;212;212;212mread\x1b[22;39m"),
         "the name is toolTitle + bold: {header:?}"
     );
+    // Derived from the palette, not pinned: the accent is calibrated (gh #387
+    // gap 3), so a literal here would need editing whenever it moves.
+    let accent = theme.role(crate::theme::Role::Accent)("src/main.rs");
     assert!(
-        header.contains("\x1b[38;2;138;190;183msrc/main.rs\x1b[39m"),
-        "the path argument is accent: {header:?}"
+        header.contains(&accent),
+        "the path argument is accent ({accent:?}): {header:?}"
     );
 
     // A model-requested shell call: name and command in one bold title.
@@ -309,7 +312,7 @@ fn tool_card_titles_and_arguments_carry_the_roles_pi_gives() {
         "the name is still toolTitle + bold: {header:?}"
     );
     assert!(
-        header.contains(r#"{"target":"x"}"#) && !header.contains("38;2;138;190;183"),
+        header.contains(r#"{"target":"x"}"#) && !header.contains("src/main.rs"),
         "an unknown tool's arguments are plain: {header:?}"
     );
 }

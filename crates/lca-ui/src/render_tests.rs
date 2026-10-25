@@ -544,9 +544,14 @@ fn the_selected_picker_row_carries_the_selected_background() {
         selected.contains("\x1b[48;2;58;58;74m"),
         "selectedBg #3a3a4a: {selected:?}"
     );
+    // Derived from the palette rather than pinned as a literal: the accent is a
+    // calibrated value (gh #387 gap 3), and a row hardcoding it would need
+    // editing every time the calibration moved.
+    let painted = theme.role(Role::Accent)("x");
+    let accent_sgr = painted.split('x').next().unwrap_or_default();
     assert!(
-        selected.contains("\x1b[38;2;138;190;183m"),
-        "the selected cells are accent #8abeb7: {selected:?}"
+        !accent_sgr.is_empty() && selected.contains(accent_sgr),
+        "the selected cells are the accent role ({accent_sgr:?}): {selected:?}"
     );
     assert!(
         selected.contains(&theme.role(Role::Border)("│ ")),
