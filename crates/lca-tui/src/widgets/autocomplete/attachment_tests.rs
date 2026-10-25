@@ -13,7 +13,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use super::{AutocompleteProvider, CombinedAutocompleteProvider};
+use super::{AutocompleteProvider, CombinedAutocompleteProvider, Origin};
 
 /// A scratch tree with one file, so a `@` query has something to match.
 struct Fixture {
@@ -192,6 +192,7 @@ fn a_mid_sentence_slash_does_not_pop_a_command_menu() {
     let fixture = Fixture::new("slash-asymmetry");
     let provider = CombinedAutocompleteProvider::new(
         vec![super::SlashCommand {
+            origin: Origin::Builtin,
             name: "model".to_string(),
             description: Some("Pick a model".to_string()),
             argument_hint: None,

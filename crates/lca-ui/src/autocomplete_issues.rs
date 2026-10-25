@@ -34,7 +34,7 @@ use std::sync::{Arc, Mutex};
 #[cfg(test)]
 #[path = "autocomplete_issues_tests.rs"]
 mod tests;
-use lca_tui::widgets::autocomplete::AutocompleteItem;
+use lca_tui::widgets::autocomplete::{AutocompleteItem, Origin};
 
 /// How many issues one query lists (pi's `MAX_ISSUES`).
 const MAX_ISSUES: u32 = 100;
@@ -84,7 +84,9 @@ impl Issue {
             label: format!("#{}", self.number),
             // pi's shape: the state leads, so open issues are recognisable.
             description: Some(format!("[{}] {}", self.state.to_lowercase(), self.title)),
-            origin: None,
+            // A `#12` row comes from the host's issue board, which is the
+            // agent's own surface, not an installed extension.
+            origin: Origin::Builtin,
             dim: false,
         }
     }

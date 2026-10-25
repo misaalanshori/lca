@@ -7,6 +7,15 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **The completion popup's descriptions zigzagged, and rows had no provenance** (gh #386
+  gap 1). Each row placed its description right after its own label, so the column moved
+  with every label length; descriptions now share one column measured from the widest
+  visible label and clamped to 12–32 cells, and the column disappears entirely on a pane
+  40 cells wide or narrower (or when too little room would be left for it). Rows also say
+  where they came from — `[skill]`, `[extension: name]`, `[prompt: project]` — so
+  `/deslop`, `/debug-models` and `/skill:deploy-cloudflare` are no longer interchangeable,
+  and two same-named commands from different scopes can be told apart.
+
 - **On Termux, the soft keyboard no longer wipes the transcript** (gh #372 bug 3).
   Showing or hiding the on-screen keyboard changes the terminal height by 10-15 rows
   every few seconds, and each change ran a full re-render that cleared the screen *and

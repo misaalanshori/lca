@@ -38,7 +38,7 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use super::{AutocompleteItem, AutocompleteProvider, Suggestions};
+use super::{AutocompleteItem, AutocompleteProvider, Origin, Suggestions};
 
 /// Why a trigger prefix was refused at registration (gh #408 rule 2).
 ///
@@ -264,7 +264,9 @@ impl TriggerChain {
     /// (gh #408 design point 4); the popup renderer appends it as
     /// `[extension: name]`.
     fn tag_origin(item: &mut AutocompleteItem, origin: &str) {
-        item.origin = Some(origin.to_string());
+        // A trigger is registered by an extension, so a trigger-owned row is
+        // always `Origin::Extension` - the typed vocabulary (gh #386 gap 1b).
+        item.origin = Origin::Extension(origin.to_string());
     }
 
     /// The one row that reports a failure or a timeout (gh #408 rule 5).
@@ -278,7 +280,9 @@ impl TriggerChain {
                 value: token.to_string(),
                 label: "(unavailable)".to_string(),
                 description: Some(reason.to_string()),
-                origin: None,
+                // The row reports a failed trigger query; the trigger itself is
+                // what failed, so it is still the agent's own vocabulary.
+                origin: Origin::Builtin,
                 dim: true,
             }],
             prefix: token.to_string(),
@@ -286,6 +290,10 @@ impl TriggerChain {
     }
 
     /// Start a query for `(trigger, body)` and wait up to the budget.
+    ///
+    /// A registered `origin` is the extension's *bare* name - `Origin::Extension`
+    /// spells its own `extension: ` prefix, so a caller that pre-formats the tag
+    /// would render it twice (gh #386 gap 1b).
     fn run(&self, trigger: &RegisteredTrigger, token: &str, body: &str) -> Option<Suggestions> {
         let mine = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let signal = AbortSignal {

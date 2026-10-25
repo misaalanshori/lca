@@ -117,37 +117,45 @@ fn a_superseded_result_is_discarded_by_generation() {
     );
 }
 
-/// The row's origin is a typed field. The editor must not be handed a string it has
-/// to parse back out (gh #408 design point 4).
+/// The row's origin is a **typed** field, and since gh #386 gap 1b it is an
+/// `Origin` enum rather than a pre-formatted `Option<String>`. The editor must
+/// not be handed a string it has to parse back out (gh #408 design point 4),
+/// and the spelling must live in exactly one place (the `Origin::tag` accessor)
+/// rather than in the renderer.
+///
+/// This row was written against `Option<String>`; gh #386 gap 1b replaced it,
+/// which is what makes two same-named commands from different scopes
+/// distinguishable without the renderer re-parsing anything.
 #[test]
 fn the_origin_is_a_typed_field_not_a_string_in_the_label() {
     let items = code_only(&read("crates/lca-tui/src/widgets/autocomplete.rs"));
     assert!(
-        items.contains("pub origin: Option<String>"),
-        "the item carries its origin as data"
+        items.contains("pub origin: Origin"),
+        "the item carries its origin as a typed field"
+    );
+    assert!(
+        items.contains("pub enum Origin"),
+        "the vocabulary is an enum, so a constructor has to say what kind of row it is"
+    );
+    assert!(
+        items.contains("pub fn tag(&self)"),
+        "and the spelling lives in one accessor, not in the renderer"
     );
     let trigger = code_only(&read("crates/lca-tui/src/widgets/autocomplete/trigger.rs"));
     assert!(
-        trigger.contains("item.origin = Some("),
+        trigger.contains("item.origin = Origin::Extension("),
         "the chain sets the typed field"
     );
-    // And the popup composer is the only place the bracket form is built. Keyed on
-    // shape rather than one formatted line: `cargo fmt` reflows a method chain, and a
-    // guard that breaks when the formatter runs is a guard that gets deleted.
-    let editor = code_only(&read("crates/lca-tui/src/widgets/editor.rs"));
-    let popup = editor
-        .find("pub fn render_popup")
-        .expect("the popup renderer exists");
-    let body = &editor[popup..];
-    let end = body.find("\n    }\n").unwrap_or(body.len());
-    let body = &body[..end];
+    // The renderer reads the field and asks it to spell itself; it never
+    // builds the bracket form from a string.
+    let layout = code_only(&read("crates/lca-tui/src/widgets/editor/popup_layout.rs"));
     assert!(
-        body.contains(".origin"),
-        "the renderer reads the typed origin field"
+        layout.contains(".origin.tag()"),
+        "the renderer asks the typed origin to spell itself"
     );
     assert!(
-        body.contains("[{o}]"),
-        "and builds the bracket form from it, in one place"
+        layout.contains("format!(\"[{tag}]\")"),
+        "and builds the bracket form in one place"
     );
 }
 

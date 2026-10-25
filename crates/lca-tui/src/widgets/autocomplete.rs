@@ -22,6 +22,76 @@ mod attachment_tests;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+/// Where a completion row came from (gh #386 gap 1b).
+///
+/// A **typed** vocabulary rather than a formatted string: the row says *what
+/// kind of thing* it is and, where it matters, which scope produced it, and the
+/// renderer decides how to spell that. A `String` here would be a second copy of
+/// the vocabulary that drifts the first time a tag is reworded.
+///
+/// The field is **required** on [`AutocompleteItem`] on purpose: making it
+/// mandatory means the compiler lists every constructor, so a call site that
+/// cannot say where its items came from is a finding rather than a silent
+/// `None`. A built-in row says [`Origin::Builtin`], which is a statement, not an
+/// absence.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Origin {
+    /// A command or path the agent itself provides.
+    #[default]
+    Builtin,
+    /// A trigger-owned row from an installed extension, named so two
+    /// extensions offering one command name cannot be confused (gh #408).
+    Extension(String),
+    /// A skill's own `/skill:<name>` row.
+    Skill,
+    /// A prompt template, and which scope contributed it - the reason two
+    /// same-named templates from different scopes must be tellable apart.
+    PromptTemplate {
+        /// Where the template file lives.
+        scope: OriginScope,
+    },
+}
+
+/// Which scope contributed a prompt template (gh #386 gap 1b).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OriginScope {
+    /// The project's `.lca/prompts/`.
+    Project,
+    /// The user's `~/.lca/prompts/`.
+    User,
+    /// Shipped with the agent.
+    Builtin,
+}
+
+impl OriginScope {
+    /// The word the renderer spells.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Project => "project",
+            Self::User => "user",
+            Self::Builtin => "builtin",
+        }
+    }
+}
+
+impl Origin {
+    /// The provenance tag as the popup spells it, or `None` for a built-in row.
+    ///
+    /// `None` rather than an empty string so the renderer's "no tag" branch is a
+    /// type-level fact: a built-in row carries no bracket, because a tag on
+    /// every row is noise and would cost the description column its width.
+    #[must_use]
+    pub fn tag(&self) -> Option<String> {
+        match self {
+            Self::Builtin => None,
+            Self::Extension(name) => Some(format!("extension: {name}")),
+            Self::Skill => Some("skill".to_string()),
+            Self::PromptTemplate { scope } => Some(format!("prompt: {}", scope.as_str())),
+        }
+    }
+}
+
 /// One completion suggestion.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AutocompleteItem {
@@ -31,10 +101,9 @@ pub struct AutocompleteItem {
     pub label: String,
     /// An optional description.
     pub description: Option<String>,
-    /// Where the row came from, for a provider that is not the built-in one -
-    /// rendered as `[extension: github-issues]` (gh #408, issuedraft 022's origin
-    /// tag). `None` for the built-in command and path rows.
-    pub origin: Option<String>,
+    /// Where the row came from (see [`Origin`]). Required, so every constructor
+    /// has to state it.
+    pub origin: Origin,
     /// Render the row dimmed (gh #408 rule 5): an `(unavailable)` row is
     /// information, not a choice, so it must not look selectable. Styling is
     /// carried as a typed flag rather than pre-baked escapes, so the popup keeps
@@ -53,6 +122,10 @@ pub struct SlashCommand {
     pub argument_hint: Option<String>,
     /// Per-argument completion.
     pub argument_completions: Option<ArgumentCompletions>,
+    /// Where the command came from (gh #386 gap 1b), carried through to the
+    /// popup row so a `/skill:…` or a prompt template is distinguishable from
+    /// a built-in.
+    pub origin: Origin,
 }
 
 /// A per-argument completion callback.
@@ -169,7 +242,9 @@ impl CombinedAutocompleteProvider {
                             (None, Some(d)) => Some(d.clone()),
                             (None, None) => None,
                         },
-                        origin: None,
+                        // The command's own provenance, carried through from
+                        // whoever registered it (gh #386 gap 1b).
+                        origin: c.origin.clone(),
                         dim: false,
                     },
                 ));
@@ -221,7 +296,8 @@ impl CombinedAutocompleteProvider {
                     },
                     label: if is_dir { format!("{name}/") } else { name },
                     description: None,
-                    origin: None,
+                    // A path the agent offers for completion.
+                    origin: Origin::Builtin,
                     dim: false,
                 },
             ));
@@ -365,7 +441,8 @@ fn collect_files(root: &Path, query: &str, out: &mut Vec<(f64, usize, String, Au
                         value: format!("@{rel}"),
                         label: name.clone(),
                         description: Some(rel.clone()),
-                        origin: None,
+                        // A workspace file the agent found.
+                        origin: Origin::Builtin,
                         dim: false,
                     },
                 ));
@@ -561,6 +638,7 @@ mod tests {
     fn provider(dir: &Path) -> CombinedAutocompleteProvider {
         let commands = vec![
             SlashCommand {
+                origin: Origin::Builtin,
                 name: "model".into(),
                 description: Some("Pick a model".into()),
                 argument_hint: Some("<id>".into()),
@@ -572,13 +650,14 @@ mod tests {
                             value: m.to_string(),
                             label: m.to_string(),
                             description: None,
-                            origin: None,
+                            origin: Origin::Builtin,
                             dim: false,
                         })
                         .collect()
                 })),
             },
             SlashCommand {
+                origin: Origin::Builtin,
                 name: "login".into(),
                 description: Some("Sign in".into()),
                 argument_hint: None,
@@ -626,6 +705,7 @@ mod tests {
         let commands = ["settings", "trust", "stats", "grants", "antigravity.login"]
             .iter()
             .map(|name| SlashCommand {
+                origin: Origin::Builtin,
                 name: name.to_string(),
                 description: None,
                 argument_hint: None,

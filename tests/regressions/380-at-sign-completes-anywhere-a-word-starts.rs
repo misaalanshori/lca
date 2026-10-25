@@ -55,6 +55,7 @@ impl Tree {
     fn provider_with_commands(&self) -> CombinedAutocompleteProvider {
         CombinedAutocompleteProvider::new(
             vec![SlashCommand {
+                origin: lca_tui::widgets::autocomplete::Origin::Builtin,
                 name: "model".to_string(),
                 description: Some("Pick a model".to_string()),
                 argument_hint: None,

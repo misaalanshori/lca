@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::engine::core::extract_cursor_position;
+use crate::widgets::autocomplete::Origin;
 use proptest::prelude::*;
 
 #[test]
@@ -513,8 +514,9 @@ fn the_caret_paints_whole_graphemes_and_deletes_them() {
 
 #[test]
 fn autocomplete_accepts_and_inserts() {
-    use crate::widgets::autocomplete::{AutocompleteItem, SlashCommand};
+    use crate::widgets::autocomplete::{AutocompleteItem, Origin, SlashCommand};
     let commands = vec![SlashCommand {
+        origin: Origin::Builtin,
         name: "model".into(),
         description: None,
         argument_hint: None,
@@ -523,7 +525,7 @@ fn autocomplete_accepts_and_inserts() {
                 value: "gpt-4o".into(),
                 label: "gpt-4o".into(),
                 description: None,
-                origin: None,
+                origin: Origin::Builtin,
                 dim: false,
             }]
         })),
@@ -559,7 +561,7 @@ impl AutocompleteProvider for SingleCandidate {
                 value: "README.md".into(),
                 label: "README.md".into(),
                 description: None,
-                origin: None,
+                origin: Origin::Builtin,
                 dim: false,
             }],
             prefix: "REA".into(),
@@ -901,7 +903,7 @@ impl AutocompleteProvider for TenCandidates {
                     value: format!("item{i}"),
                     label: format!("item{i}"),
                     description: None,
-                    origin: None,
+                    origin: Origin::Builtin,
                     dim: false,
                 })
                 .collect(),
