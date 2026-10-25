@@ -23,6 +23,23 @@ use super::core::{SEGMENT_RESET, extract_cursor_position, width_violation};
 use super::terminal::Terminal;
 use super::text::truncate_to_width;
 
+/// Whether this session is Termux, whose soft keyboard changes the terminal height by
+/// 10-15 rows every time it shows or hides (gh #372 bug 3).
+///
+/// pi's `isTermuxSession` (`packages/tui/src/tui-main-screen.ts:109`): the whole rule is
+/// a non-empty `TERMUX_VERSION`. Deliberately **not** a `TERM=screen` heuristic - tmux
+/// and GNU screen also report `screen`, and they do not have a soft keyboard that
+/// resizes the pane under the application.
+pub fn is_termux_session() -> bool {
+    is_termux_session_with(|key| std::env::var(key).ok())
+}
+
+/// The rule over an injected environment reader, so both answers are testable on one
+/// machine (`lca-tui` denies `unsafe`, and a test cannot set the process environment).
+fn is_termux_session_with(env: impl Fn(&str) -> Option<String>) -> bool {
+    env("TERMUX_VERSION").is_some_and(|v| !v.is_empty())
+}
+
 /// The main-screen differential renderer.
 #[derive(Debug, Default)]
 pub struct MainScreenRenderer {
@@ -35,6 +52,12 @@ pub struct MainScreenRenderer {
     hardware_cursor_row: usize,
     /// High-water mark of rendered lines.
     max_lines_rendered: usize,
+    /// Whether this is a Termux session (gh #372 bug 3): its soft keyboard resizes the
+    /// terminal many times a second, so a height-only change must not rebuild.
+    termux: bool,
+    /// Clear emptied rows when the content shrinks below `max_lines_rendered`
+    /// (gh #372 bug 4, pi's `terminal.clearOnShrink`).
+    clear_on_shrink: bool,
     /// Logical top of the previous viewport.
     previous_viewport_top: usize,
     /// The caret from the last frame (row, col).
@@ -44,7 +67,24 @@ pub struct MainScreenRenderer {
 impl MainScreenRenderer {
     /// A fresh renderer.
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            // Gh #372 bug 3: the Termux answer is a property of the session, decided
+            // once here rather than re-read per frame. `set_termux_session` is the seam
+            // a test drives both directions through.
+            termux: is_termux_session(),
+            ..Self::default()
+        }
+    }
+
+    /// Declare this renderer's session Termux (gh #372 bug 3).
+    pub fn set_termux_session(&mut self, on_termux: bool) {
+        self.termux = on_termux;
+    }
+
+    /// Clear emptied rows when the content shrinks (gh #372 bug 4): pi's
+    /// `setClearOnShrink`, the runtime half of the `terminal.clear_on_shrink` key.
+    pub fn set_clear_on_shrink(&mut self, clear: bool) {
+        self.clear_on_shrink = clear;
     }
 
     /// The lines from the last render.
@@ -157,8 +197,33 @@ impl MainScreenRenderer {
             return cursor_pos.map(|(r, c, _)| (r, c));
         }
 
-        // Height changes need a full redraw to re-align visible viewport
-        if height_changed {
+        // A height change needs a full redraw to re-align the visible viewport - except
+        // on Termux (gh #372 bug 3), where the soft keyboard changes the height by
+        // 10-15 rows every time it shows or hides. A full render there is
+        // `2J/H/3J`, which wipes the screen **and the scrollback** on every toggle, so
+        // the transcript the user was reading disappears repeatedly.
+        //
+        // The exemption is **height-only**: `width_changed` returned above, because a
+        // rotation or a genuine resize does invalidate wrapping and must rebuild.
+        //
+        // `shortcut:` the exemption covers the height change itself, not the
+        // deleted-lines arm further down - if a soft-keyboard toggle coincides with
+        // content *shrinking* below the new viewport top, that arm still calls
+        // `full_render`. pi has the identical hole (`tui-main-screen.ts`, the
+        // `targetRow < prevViewportTop` branch), so closing it means changing both the
+        // scroll arithmetic and this exemption together; upgrade when a Termux report
+        // shows it, rather than widening the exemption blind.
+        if height_changed && !self.termux {
+            full_render(true, self);
+            return cursor_pos.map(|(r, c, _)| (r, c));
+        }
+
+        // Gh #372 bug 4: the content shrank below what was last painted, so rows that
+        // used to carry text are now empty on screen. pi's `terminal.clearOnShrink`
+        // (`tui-main-screen.ts:357`) re-renders to clear them - and only when no
+        // overlay is open, because an overlay needs the padding that a cleared frame
+        // would remove. Off by default: the flag is the user's, not a guess.
+        if self.clear_on_shrink && new_lines.len() < self.max_lines_rendered {
             full_render(true, self);
             return cursor_pos.map(|(r, c, _)| (r, c));
         }
@@ -919,5 +984,162 @@ mod tests {
             "no screen clear on in-place edit"
         );
         assert!(out_edit.contains("\r\x1b[2Kline 5 edited"));
+    }
+    // ============================================================================
+    // gh #372 bug 3 - a Termux soft-keyboard height change must not wipe scrollback
+    // ============================================================================
+
+    /// A renderer told it is (or is not) running on Termux.
+    fn termux_renderer(on_termux: bool) -> MainScreenRenderer {
+        let mut renderer = MainScreenRenderer::new();
+        renderer.set_termux_session(on_termux);
+        renderer
+    }
+
+    /// Paint a few frames so the renderer has a previous frame and some scrollback.
+    fn prime(renderer: &mut MainScreenRenderer, term: &mut FakeTerminal, height: u16) {
+        for i in 1..=3 {
+            let lines: Vec<String> = (0..i).map(|n| format!("line {n}")).collect();
+            renderer.render(term, lines, 20, height);
+            let _ = term.take_output();
+        }
+    }
+
+    // Verifies: gh #372 bug 3 (**the defect**) - on Termux, showing or hiding the soft
+    // keyboard changes `height` by 10-15 rows every few seconds, and each change ran
+    // `full_render(true, ..)` → `\x1b[2J\x1b[H\x1b[3J`, wiping the screen **and the
+    // scrollback** repeatedly. A height-only change needs no rebuild: wrapping does not
+    // depend on height, so the visible viewport can simply re-anchor.
+    #[test]
+    fn a_height_only_change_on_termux_does_not_wipe_the_scrollback() {
+        let mut r = termux_renderer(true);
+        let mut term = FakeTerminal::new(20, 10);
+        // The Termux soft keyboard changes the height and nothing else: the content is
+        // exactly what was last painted.
+        let content: Vec<String> = (0..3).map(|n| format!("line {n}")).collect();
+        r.render(&mut term, content.clone(), 20, 10);
+        let _ = term.take_output();
+        r.render(&mut term, content, 20, 8);
+        let out = term.take_output();
+        assert!(
+            !out.contains("\x1b[3J"),
+            "a soft-keyboard height change must not clear the scrollback: {out:?}"
+        );
+        assert!(!out.contains("\x1b[2J"), "...nor the screen: {out:?}");
+    }
+
+    // Verifies: gh #372 bug 3 (the row that keeps the exemption **narrow**) - a **width**
+    // change on Termux still does the full render, because wrapping genuinely changes.
+    // An exemption from "height changed" must not become an exemption from "anything
+    // changed".
+    #[test]
+    fn a_width_change_on_termux_still_does_the_full_render() {
+        let mut r = termux_renderer(true);
+        let mut term = FakeTerminal::new(20, 10);
+        prime(&mut r, &mut term, 10);
+        // Width 20 -> 30, height unchanged.
+        r.render(&mut term, vec!["line 0".into()], 30, 10);
+        let out = term.take_output();
+        assert!(
+            out.contains("\x1b[3J") && out.contains("\x1b[2J"),
+            "a width change invalidates wrapping, so the full render still runs: {out:?}"
+        );
+    }
+
+    // Verifies: gh #372 bug 3 - a terminal that is **not** Termux keeps the old
+    // behaviour exactly: a height change re-aligns the viewport with a full render.
+    // The exemption is scoped to the detection, not global.
+    #[test]
+    fn a_height_change_elsewhere_still_does_the_full_render() {
+        let mut r = termux_renderer(false);
+        let mut term = FakeTerminal::new(20, 10);
+        prime(&mut r, &mut term, 10);
+        r.render(&mut term, vec!["line 0".into(), "line 1".into()], 20, 8);
+        let out = term.take_output();
+        assert!(
+            out.contains("\x1b[3J"),
+            "off Termux a height change still rebuilds the viewport: {out:?}"
+        );
+    }
+
+    // ============================================================================
+    // gh #372 bug 4 - `terminal.clear_on_shrink` stops being documented-inert
+    // ============================================================================
+
+    /// A renderer with the clear-on-shrink setting as the user configured it.
+    fn shrink_renderer(clear: bool) -> MainScreenRenderer {
+        let mut renderer = MainScreenRenderer::new();
+        renderer.set_clear_on_shrink(clear);
+        renderer
+    }
+
+    // Verifies: gh #372 bug 4 - with the setting **on**, content that shrinks below what
+    // was last painted clears the emptied rows. That is pi's `terminal.clearOnShrink`
+    // (`tui-main-screen.ts:357`).
+    #[test]
+    fn clear_on_shrink_clears_emptied_rows_when_enabled() {
+        let mut r = shrink_renderer(true);
+        let mut term = FakeTerminal::new(20, 20);
+        r.render(&mut term, vec!["a".into(), "b".into(), "c".into()], 20, 20);
+        let _ = term.take_output();
+        r.render(&mut term, vec!["a".into()], 20, 20);
+        let out = term.take_output();
+        assert!(
+            out.contains("\x1b[2K") || out.contains("\x1b[2J"),
+            "the emptied rows must be cleared: {out:?}"
+        );
+    }
+
+    // Verifies: gh #372 bug 4 - with the setting **off** (the default) nothing changes: a
+    // config key that defaults to changing behaviour is not a setting.
+    #[test]
+    fn clear_on_shrink_is_off_by_default() {
+        let mut r = shrink_renderer(false);
+        let mut term = FakeTerminal::new(20, 20);
+        r.render(&mut term, vec!["a".into(), "b".into(), "c".into()], 20, 20);
+        let _ = term.take_output();
+        r.render(&mut term, vec!["a".into()], 20, 20);
+        let out = term.take_output();
+        assert!(
+            !out.contains("\x1b[3J"),
+            "off means no scrollback-clearing re-render: {out:?}"
+        );
+    }
+
+    // Verifies: gh #372 bug 4 - **a grow does not clear**. The setting is about emptied
+    // rows; clearing on growth would throw away scrollback on every append.
+    #[test]
+    fn clear_on_shrink_does_not_fire_when_content_grows() {
+        let mut r = shrink_renderer(true);
+        let mut term = FakeTerminal::new(20, 20);
+        r.render(&mut term, vec!["a".into()], 20, 20);
+        let _ = term.take_output();
+        r.render(&mut term, vec!["a".into(), "b".into(), "c".into()], 20, 20);
+        let out = term.take_output();
+        assert!(
+            !out.contains("\x1b[3J"),
+            "growth must not clear the scrollback: {out:?}"
+        );
+    }
+
+    // Verifies: gh #372 bug 3 - the detection is a **named predicate keyed on Termux's own
+    // variable**, not a `TERM=screen` guess: screen and tmux are not Termux, and Termux
+    // reports `TERMUX_VERSION`.
+    #[test]
+    fn the_termux_detection_uses_termuxs_own_variable() {
+        let with_version = |key: &str| (key == "TERMUX_VERSION").then(|| "0.118".to_string());
+        assert!(
+            is_termux_session_with(with_version),
+            "TERMUX_VERSION marks Termux"
+        );
+        let screen = |key: &str| (key == "TERM").then(|| "screen-256color".to_string());
+        assert!(
+            !is_termux_session_with(screen),
+            "`TERM=screen` is tmux and GNU screen too, so it is not the signal"
+        );
+        assert!(
+            !is_termux_session_with(|_| None),
+            "and absent is not Termux"
+        );
     }
 }

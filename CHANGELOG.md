@@ -7,6 +7,20 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **On Termux, the soft keyboard no longer wipes the transcript** (gh #372 bug 3).
+  Showing or hiding the on-screen keyboard changes the terminal height by 10-15 rows
+  every few seconds, and each change ran a full re-render that cleared the screen *and
+  the scrollback* - so the history a reader was looking at vanished every time they
+  touched the prompt. A **height-only** change is now exempt on Termux, detected by its
+  own `TERMUX_VERSION` rather than a `TERM=screen` guess. The exemption is narrow: a
+  width change still rebuilds, because wrapping genuinely changes.
+- **The viewport is no longer padded to terminal height when nothing needs it** (gh #372
+  bug 2). The padding exists so an overlay lands at the visible bottom, but it ran on
+  every frame, so a frame shorter than the terminal was resized up to `height` and the
+  blank rows went into the scrollback. It is now conditioned on an overlay actually
+  being open, checked through one predicate that covers every overlay the composer can
+  draw.
+
 - **`Shift+Enter` no longer submits a half-written prompt on Apple's Terminal.app or
   a Windows console** (gh #367). Those terminals drop the Shift modifier, so
   `Shift+Enter` arrives as a bare `\r` — byte-identical to `Enter` — and the

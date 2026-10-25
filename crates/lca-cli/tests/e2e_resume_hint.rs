@@ -92,7 +92,17 @@ fn exiting_a_real_session_prints_the_resume_command() {
         .find(|line| line.contains(HINT_PREFIX))
         .unwrap_or_else(|| panic!("the exit prints the resume command; pane held:\n{frame}"));
     // The id it names is a real, resumable session - not a placeholder.
-    let id = line[HINT_PREFIX.len()..].trim();
+    //
+    // Gh #372 bug 2 made this row the last one above the dock, so tmux may join it with
+    // the tab row that follows - the gh #489 trap: a row that fills the pane width makes
+    // tmux treat the next row as a continuation, and the joined line measures 140 cells
+    // in an 80-cell pane. Comparing whitespace-free means the assertion measures the id,
+    // not the capture geometry.
+    let id: String = line[HINT_PREFIX.len()..]
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_string();
     assert!(
         !id.is_empty() && !id.contains(' '),
         "the hint names one real id, got {id:?}"
@@ -107,7 +117,7 @@ fn exiting_a_real_session_prints_the_resume_command() {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
-                if path.file_name().and_then(|name| name.to_str()) == Some(id) {
+                if path.file_name().and_then(|name| name.to_str()) == Some(id.as_str()) {
                     found = true;
                 }
                 stack.push(path);
