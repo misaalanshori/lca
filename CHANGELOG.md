@@ -6,6 +6,15 @@ Dates are UTC.
 
 ## [Unreleased]
 
+### Changed
+- **The built-in `dark` and `light` palettes are calibrated, not hand-picked** (gh #387
+  gap 3). Every accent — success, error, warning, accent and the accent border — now sits
+  at one perceptual lightness (OKHSL `67%` dark, `41%` light), so a warning and a success
+  read at the same weight and differ only in hue and saturation. `muted` and `dim` keep
+  that weight at near-zero saturation. The pure-`#ffff00` warning and the `#8abeb7` teal
+  are gone, and every accent clears the 4.5:1 contrast floor on the surfaces it is
+  painted on. Custom theme files are unaffected.
+
 ### Fixed
 - **`terminal.clear_on_shrink` works** (gh #538). The scrollback renderer gained pi's
   behaviour a cycle ago (gh #372 bug 4), but nothing in production ever called the

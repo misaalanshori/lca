@@ -10,6 +10,7 @@
 //! (TOML, pi's `theme-json.ts` shape) overlays individual roles; an invalid
 //! file keeps the last-good palette and reports why.
 
+pub mod accents;
 mod highlight;
 mod palette;
 mod scheme;

@@ -489,3 +489,23 @@ ones (`openai`, `anthropic`, `groq`, `opencode-go`, `openrouter`, ...).
 There is no runtime fetch: the catalog is build-time data only, which is
 what keeps FR-CFG-3 true. Refreshing it means a new build.
 
+
+## Calibrated accents
+
+The built-in `dark` and `light` palettes are **calibrated**, not hand-picked
+(gh #387 gap 3). Every accent role - `success`, `error`, `warning`, `accent`,
+`borderAccent` - sits at one perceptual lightness, so a warning and a success
+in the same list read at the same weight and only their hue and saturation tell
+them apart. `muted` and `dim` hold that same weight at near-zero saturation:
+de-emphasis by colour removal, not by shrinking the text's presence.
+
+The targets are `OKHSL 67%` for `dark` and `OKHSL 41%` for `light`, measured in
+**OKLab** rather than HSL (equating blue and yellow at HSL `50%` is what made the
+old palettes feel flat). The light target is deliberately lower than pi's `47%`:
+at 47%, four of the five accents fall below the 4.5:1 contrast floor on LCA's own
+user-message band. If you are writing a theme that should match a built-in's
+balance, those are the two numbers to aim for.
+
+This changes the **built-in palettes only**. A theme file under
+`~/.lca/themes/` is unaffected: it wins for every role it names, and a role it
+omits keeps whatever palette is underneath.

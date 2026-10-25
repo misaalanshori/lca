@@ -87,7 +87,15 @@ const LIGHT_CHROMA: [f64; 7] = [0.012, 0.045, 0.080, 0.100, 0.118, 0.132, 0.145]
 const DARK_LIGHTNESS: [f64; 7] = [0.440, 0.490, 0.540, 0.585, 0.630, 0.670, 0.710];
 
 /// The light ladder's OKLab lightness per level, authored from `light()`'s base.
-const LIGHT_LIGHTNESS: [f64; 7] = [0.860, 0.800, 0.745, 0.690, 0.635, 0.580, 0.528];
+///
+/// Gh #387 gap 3 moved the light error red onto the calibrated accent lightness
+/// (`OKHSL 41%`, L 0.491) and gave it more chroma, which closed the gap the
+/// `max` step had been relying on. The ladder is re-spaced to end at **0.545**
+/// (an even 0.0525 step throughout), so the border's hottest level is again
+/// distinguishable from an error by lightness alone - the gap is 0.054, over the
+/// 0.05 the row asks for. Hue was never the problem: `max` sits 25 degrees from
+/// the error red, which the other row pins.
+const LIGHT_LIGHTNESS: [f64; 7] = [0.860, 0.807, 0.755, 0.702, 0.650, 0.597, 0.545];
 
 /// How far the `system` ramp sits from the probed background at its outer end.
 ///
