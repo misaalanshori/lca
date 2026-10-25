@@ -18,6 +18,30 @@ Over SSH there is no browser to open and often no URL to click (OSC 8 does not s
 
 Process cancellation, per ADR-0014, kills a shell command's process group, not just the immediate child, since a shell command frequently forks its own children and killing only the parent leaves orphans running. This needs `setsid` or an equivalent at spawn time so the spawned process has its own process group to kill. The kill itself must pass the group as `kill -9 -- -PGID` with the `--` separator: procps `/bin/kill` before 4.0.5 (Ubuntu 24.04 ships 4.0.2) truncates `-<pgid>` to its first digit (upstream issue #354, fixed in 4.0.5), so a pgid starting with `1` becomes `kill(-1, SIGKILL)` - every process of our uid, which on CI includes the test runner and the agent and reads as a silent 30-minute hang (2026-10-15). All group kills go through one helper (`lca-tools` `kill_process_group`) with a `pgid > 1` guard so `-0`/`-1` stay unreachable.
 
+### Termux (Android): the soft keyboard resizes the terminal (gh #372 bug 3)
+
+Termux is Linux, but its soft keyboard changes the terminal height by 10-15 rows every
+time it shows or hides. The scrollback renderer used to run a full re-render on every
+height change (`\x1b[2J\x1b[H\x1b[3J`) to re-align the visible viewport, so on Termux
+that wiped the screen **and the scrollback** repeatedly - the transcript the reader was
+looking at disappeared every time they touched the prompt.
+
+So a **height-only** change is exempt on Termux: a height change does not invalidate
+wrapping, so the visible viewport can re-anchor without a rebuild. The exemption is
+narrow by construction - `width_changed` is decided first and still rebuilds, because a
+rotation or a genuine resize really does change wrapping, and there is a row that fails
+if a width change on Termux stops rendering.
+
+The detection is `TERMUX_VERSION`, which is Termux's own variable. Deliberately **not** a
+`TERM=screen` heuristic: tmux and GNU screen also report `screen`, and neither has a soft
+keyboard resizing the pane under the application.
+
+`shortcut:` the exemption covers the height change itself, not the deleted-lines arm
+further down - if a soft-keyboard toggle coincides with content shrinking below the new
+viewport top, that arm still calls the full render. pi has the identical hole, so closing
+it means changing the scroll arithmetic and the exemption together; upgrade when a Termux
+report shows it rather than widening the exemption blind.
+
 ## macOS
 
 Release targets are `x86_64-apple-darwin` and `aarch64-apple-darwin`. Apple does not support a fully static binary for anyone, on any platform; the agent, like every other native macOS binary, dynamically links `libSystem`. This is not a gap relative to the Linux musl build, it is a platform constraint every macOS binary shares, and it costs nothing in practice since `libSystem` is present on every Mac the binary will ever run on.
