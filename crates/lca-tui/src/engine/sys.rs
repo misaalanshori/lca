@@ -15,6 +15,24 @@
 
 use std::io;
 
+/// Whether the most recent Enter carried the Shift modifier (gh #367).
+///
+/// On a console whose virtual-terminal input drops the modifier, `Enter` and
+/// `Shift+Enter` both arrive as `\r` - but the **console record** still knows which
+/// physical key it was, so this is answerable on Windows rather than merely guessed.
+/// `false` everywhere else: a Unix terminal that strips Shift gives the reader no
+/// such second source, which is why those are handled by a policy instead.
+pub(crate) fn shift_was_held_on_enter() -> bool {
+    #[cfg(windows)]
+    {
+        windows_backend::shift_was_held_on_enter()
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 /// Saved terminal state, restored on stop.
 pub(crate) struct RawModeState {
     #[cfg(unix)]
@@ -209,6 +227,21 @@ mod windows_backend {
         SetConsoleMode,
     };
 
+    /// Whether the most recent Enter arrived with Shift held (gh #367), latched by
+    /// `wait_stdin` from the `KEY_EVENT` record itself.
+    static SHIFT_PRESSED_ON_ENTER: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+
+    /// `winuser.h`'s `SHIFT_PRESSED`, the `dwControlKeyState` bit for a held Shift.
+    const SHIFT_PRESSED: u32 = 0x0010;
+    /// `winuser.h`'s `VK_RETURN`.
+    const VK_RETURN: u16 = 0x0D;
+
+    /// Whether the last Enter carried Shift (gh #367).
+    pub(super) fn shift_was_held_on_enter() -> bool {
+        SHIFT_PRESSED_ON_ENTER.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     pub(super) struct Saved {
         stdin_mode: u32,
         stdout_mode: u32,
@@ -346,6 +379,21 @@ mod windows_backend {
                     && peeked > 0
                 {
                     if record.EventType == KEY_EVENT as u16 {
+                        // Gh #367: latch whether Shift was held on this Enter. The
+                        // `KEY_EVENT` record carries `dwControlKeyState`, which is
+                        // timestamped to the exact key event - strictly more accurate
+                        // than polling the keyboard, and this is the peek path that
+                        // already runs. `VK_RETURN` with Shift is the only case the
+                        // editor needs, because a Shift-blind console sends both
+                        // `Enter` and `Shift+Enter` as the same `\r`.
+                        // SAFETY: `record` was filled by `PeekConsoleInputW` above.
+                        let key_event = unsafe { record.Event.KeyEvent };
+                        if key_event.wVirtualKeyCode == VK_RETURN {
+                            SHIFT_PRESSED_ON_ENTER.store(
+                                key_event.dwControlKeyState & SHIFT_PRESSED != 0,
+                                std::sync::atomic::Ordering::SeqCst,
+                            );
+                        }
                         return Ok(true);
                     }
                     let mut consumed = 0u32;

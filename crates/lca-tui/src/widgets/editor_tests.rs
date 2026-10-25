@@ -974,3 +974,118 @@ fn clicking_a_wrapped_row_maps_into_the_line() {
 #[cfg(test)]
 #[path = "editor_word_tests.rs"]
 mod editor_word_tests;
+
+// ============================================================================
+// gh #367 - a terminal that cannot report Shift must not submit on a bare `\r`
+// ============================================================================
+//
+// On macOS's `Terminal.app` and on Windows consoles where virtual-terminal input
+// strips the modifier, `Shift+Enter` emits a bare `\r` - byte-identical to `Enter`.
+// The information is gone before LCA sees it, so the fix is a **policy**: when the
+// terminal cannot tell us, `\r` inserts a newline. An accidental newline costs one
+// keystroke; an accidental submit sends a half-written prompt to a paid model.
+
+/// An editor told its terminal cannot report Shift (the affected case).
+fn affected_editor() -> Editor {
+    let mut e = Editor::new();
+    e.set_enter_inserts_newline(true);
+    e
+}
+
+/// An editor told its terminal reports Shift properly (the normal case).
+fn reporting_editor() -> Editor {
+    Editor::new()
+}
+
+// Verifies: gh #367 (**the row that bites**) - on a terminal that cannot report
+// Shift, a bare `\r` inserts a newline instead of submitting. Before this, the
+// half-written prompt went to the model.
+#[test]
+fn on_an_affected_terminal_a_bare_enter_inserts_a_newline() {
+    let mut e = affected_editor();
+    e.insert_str("first line");
+    let event = e.handle_key("\r");
+    assert!(
+        matches!(event, EditorEvent::Changed),
+        "a bare \\r must not submit on an affected terminal: {event:?}"
+    );
+    assert_eq!(
+        e.lines(),
+        &["first line", ""],
+        "it opened a new line instead"
+    );
+    assert_eq!(
+        e.text(),
+        "first line\n",
+        "and the buffer still holds the draft"
+    );
+}
+
+// Verifies: gh #367 (**the no-regression row**) - on a terminal that *can* report
+// Shift, a bare `\r` still submits. The fallback must be scoped to the detection,
+// not global: making `Enter` unreliable everywhere would be a worse bug.
+#[test]
+fn on_a_reporting_terminal_a_bare_enter_still_submits() {
+    let mut e = reporting_editor();
+    e.insert_str("send me");
+    let event = e.handle_key("\r");
+    assert!(
+        matches!(event, EditorEvent::Submitted(ref text) if text == "send me"),
+        "Enter still submits where Shift is reportable: {event:?}"
+    );
+}
+
+// Verifies: gh #367 - `Ctrl+J` still inserts a newline on an affected terminal, so
+// the documented fallback keeps working while `Enter` is repurposed.
+#[test]
+fn ctrl_j_still_inserts_a_newline_on_an_affected_terminal() {
+    let mut e = affected_editor();
+    e.insert_str("draft");
+    let event = e.handle_key("\n");
+    assert!(matches!(event, EditorEvent::Changed), "{event:?}");
+    assert_eq!(e.lines(), &["draft", ""]);
+}
+
+// Verifies: gh #367 - `Shift+Enter` delivered by a protocol that **does** carry the
+// modifier (Kitty CSI-u here) inserts a newline on an affected terminal too, and
+// does not submit. The policy must not fight the protocol that already works.
+#[test]
+fn kitty_shift_enter_inserts_a_newline_on_an_affected_terminal() {
+    let mut e = affected_editor();
+    e.insert_str("draft");
+    let event = e.handle_key("\x1b[13;2u");
+    assert!(matches!(event, EditorEvent::Changed), "{event:?}");
+    assert_eq!(e.lines(), &["draft", ""]);
+}
+
+// Verifies: gh #367 - the escape hatch. A user on an affected terminal who wants
+// `Enter` to submit turns the policy off and gets the ordinary behaviour back, so
+// the platform heuristic is never a trap for someone who does not fit it.
+#[test]
+fn the_override_gives_enter_back_its_submit_on_an_affected_terminal() {
+    let mut e = Editor::new();
+    e.set_enter_inserts_newline(true);
+    e.set_enter_inserts_newline(false);
+    e.insert_str("send me");
+    let event = e.handle_key("\r");
+    assert!(
+        matches!(event, EditorEvent::Submitted(ref text) if text == "send me"),
+        "the override restores submit: {event:?}"
+    );
+}
+
+// Verifies: gh #367 - the `\`+Enter workaround still works **under** the policy, so
+// a user who learned it is not broken by the fix. On an affected terminal both the
+// bare `\r` and the `\`-form insert a newline.
+#[test]
+fn the_backslash_workaround_still_works_under_the_policy() {
+    let mut e = affected_editor();
+    e.insert_str("line\\");
+    let event = e.handle_key("\r");
+    assert!(matches!(event, EditorEvent::Changed), "{event:?}");
+    assert_eq!(
+        e.lines(),
+        &["line", ""],
+        "the backslash is consumed and a newline inserted"
+    );
+}
