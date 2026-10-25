@@ -78,7 +78,15 @@ fn wheel_lines_for(tuning: &crate::state::DisplayTuning) -> u8 {
 /// behavior follow config, so a `/settings` cycle applies on the next
 /// switch. Lives beside the selection reset because `copy_on_select` is what
 /// decides whether a release copies the selection at all.
+///
+/// Gh #538: the main screen gets `clear_on_shrink` here. This is the one place
+/// every main-screen renderer passes through - the initial screen in `run` and
+/// the fresh one the `/fullscreen` switch back constructs - so the setting
+/// reaches both without a second construction site to drift.
 pub(super) fn apply_screen_tuning(screen: &mut Screen, tuning: &crate::state::DisplayTuning) {
+    if let Screen::Main(main) = screen {
+        main.set_clear_on_shrink(tuning.clear_on_shrink);
+    }
     if let Screen::Alt(alt) = screen {
         alt.copy_on_select = tuning.fullscreen_copy_on_select;
         alt.wheel_lines = wheel_lines_for(tuning);
