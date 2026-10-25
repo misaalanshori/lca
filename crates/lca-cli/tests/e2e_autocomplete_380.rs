@@ -18,7 +18,20 @@ mod common;
 #[cfg(unix)]
 use common::*;
 
-/// Type `text` into the composer and return the pane after it settles.
+/// Type `text` into the composer and wait until `needle` appears in the pane.
+///
+/// Uses [`Tmux::wait_for`] rather than a single paint capture: the popup is
+/// drawn by the keystroke's own refresh, so "the pane painted" (the paste echo)
+/// is not "the popup arrived". On a loaded macOS runner those are two frames
+/// apart, which is how this row failed CI once while passing locally.
+#[cfg(unix)]
+fn type_and_wait(session: &Tmux, text: &str, needle: &str) -> String {
+    session.paste_text(text);
+    session.wait_for(needle, std::time::Duration::from_secs(20))
+}
+
+/// Type `text` and return the pane after the popup had its chance to appear,
+/// for the rows asserting that it did **not**.
 #[cfg(unix)]
 fn type_and_capture(session: &Tmux, text: &str) -> String {
     session.paste_text(text);
@@ -52,7 +65,7 @@ fn the_at_popup_follows_a_word_start_in_a_real_pane() {
 
     // Frame 1: a mid-sentence `@` proposes the file. Before the fix the popup
     // needed the `@` at column 0, so `Check @src/m` proposed nothing.
-    let mid_sentence = type_and_capture(&session, "Check @src/m");
+    let mid_sentence = type_and_wait(&session, "Check @src/m", "main.rs");
     assert!(
         mid_sentence.contains("main.rs"),
         "a mid-sentence `@` proposes `src/main.rs`:\n{mid_sentence}"
@@ -79,7 +92,7 @@ fn the_at_popup_follows_a_word_start_in_a_real_pane() {
 
     // Frame 3: CJK prose before the `@`, with no ASCII space after the
     // fullwidth comma.
-    let cjk = type_and_capture(&session, "请查看，@src/m");
+    let cjk = type_and_wait(&session, "请查看，@src/m", "main.rs");
     assert!(
         cjk.contains("main.rs"),
         "a CJK sentence completes the attachment:\n{cjk}"

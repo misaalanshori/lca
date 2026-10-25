@@ -18,3 +18,6 @@ mod doubles_275;
 // Gh #380 gap 1: `@file` completed only at column 0.
 #[path = "380-at-sign-completes-anywhere-a-word-starts.rs"]
 mod at_sign_completes_anywhere_a_word_starts;
+// Gh #366 gap 3: a split terminal reply is no longer typed into the prompt.
+#[path = "366-split-reply-never-typed.rs"]
+mod split_reply_never_typed;
