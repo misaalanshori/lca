@@ -118,6 +118,14 @@ A **typed** `[` is still text, so filtering for `[draft]` works; and a bracketed
 paste fills the field with its payload whether the terminal delivers it whole or in
 pieces.
 
+The same rule protects the **prompt** from the terminal's own answers. Startup
+queries (keyboard flags, device attributes, background colour) can be split across
+two packets by a slow SSH link or by a multiplexer, and a half-arrived answer used
+to be typed into the composer as literal `[?62;1;2c`. A fragment that could be the
+start of a reply LCA asked for is now dropped instead, along with the tail of that
+reply; anything not shaped like one of those replies - including a pasted escape
+sequence - is still delivered as your input (gh #366).
+
 ### Completion triggers: `/`, `@`, and `#`
 
 Three things complete in the prompt editor, and they never compete:

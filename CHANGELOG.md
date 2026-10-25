@@ -7,6 +7,13 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **A terminal's own reply could be typed into your prompt** (gh #366 gap 3). Startup
+  queries split across two packets by a slow SSH link or a multiplexer left a half-arrived
+  answer in the input buffer, which timed out and was delivered as text — so literal
+  `[?62;1;2c` appeared in the composer before you typed anything. A fragment that could be
+  the start of a reply LCA asked for is now dropped instead, along with that reply's tail;
+  anything not shaped like one of those replies is still delivered as your input, and a
+  bare `Escape` still arrives within its usual 10 ms.
 - **`@file` completed only at the very start of a line** (gh #380 gap 1). The prompt
   extraction was `strip_prefix('@')`, so `Check @src/main.rs`, `(@src/m` and CJK
   `请查看，@src/main.ts` never proposed a file — the feature worked in the one position

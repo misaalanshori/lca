@@ -13,12 +13,50 @@
 //! events it can emit synchronously and leaves any incomplete remainder in
 //! the buffer; the caller's read loop uses [`StdinBuffer::pending_timeout_ms`]
 //! and [`StdinBuffer::flush`] to reproduce pi's dual 50/10 ms timeout.
+//!
+//! # Reply fragments are not text (gh #366 gap 3)
+//!
+//! A terminal's answer to one of our startup queries can straddle two packets
+//! by more than the 50 ms flush timeout over SSH or a multiplexer. The old
+//! `flush` delivered the head as **text**, where it is indistinguishable from
+//! typing, so `[?62;1;2c` landed in the composer on startup.
+//!
+//! The decision therefore lives **here**, in the reassembly seam, not in the
+//! editor: by the time a fragment reaches `handle_key` nothing knows it was
+//! ever part of a sequence. [`is_reply_prefix`] answers "could this be the
+//! start of a reply we asked for", [`StdinBuffer::flush`] drops such a head
+//! instead of delivering it, and a bounded **content** window
+//! ([`REPLY_TAIL_MAX_CHARS`]) keeps the tail - which now arrives as ordinary
+//! characters - from being typed either. Content, not a clock: a link slow
+//! enough to split the intro is slow enough to stretch the tail past any fixed
+//! deadline, which a 200 ms window demonstrated by failing a 400 ms split.
+//!
+//! The recognition is deliberately **narrow**: only the four replies the
+//! startup queries can elicit are candidates, so pasted content containing
+//! `ESC [` is still delivered (see the narrowness rows).
 
 const ESC: char = '\x1b';
 /// Default maximum wait for an incomplete (non-lone-ESC) sequence.
 pub const DEFAULT_SEQUENCE_TIMEOUT_MS: u64 = 50;
 /// Default maximum wait after a lone ESC (Alt+key reassembly window).
 pub const DEFAULT_ESCAPE_TIMEOUT_MS: u64 = 10;
+/// How many characters after a discarded reply head can still belong to its
+/// tail.
+///
+/// Deliberately a **content** budget, not a clock. A time window cannot cover
+/// an arbitrary split - a link slow enough to split the intro can be slow
+/// enough to stretch the tail past any fixed deadline (a 200 ms window failed a
+/// 400 ms split, which is exactly the shape this bug is about). A reply's tail
+/// is a short run of digits, `;`, `?`, `:` and one final byte, so bounding it
+/// by *shape* closes the gap on any link and gives up after a bounded number of
+/// characters instead of never.
+///
+/// 64 is generous for every reply we ask for (`?62;1;2c` is 8; the longest
+/// realistic `DA1` is under 30) while a user typing ordinary prose passes
+/// through it in a fraction of a second - and even then the window only opens
+/// after a discarded reply head, which a user cannot produce by typing.
+pub const REPLY_TAIL_MAX_CHARS: usize = 64;
+
 const BRACKETED_PASTE_START: &str = "\x1b[200~";
 const BRACKETED_PASTE_END: &str = "\x1b[201~";
 
@@ -152,6 +190,184 @@ fn parse_unmodified_kitty_printable_codepoint(sequence: &str) -> Option<u32> {
     }
 }
 
+/// A reply we asked for at startup, in the shapes `parse_negotiation` and
+/// the theme/status handlers recognise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReplyKind {
+    /// Kitty keyboard flags: `ESC [ ? <digits> u`.
+    KittyFlags,
+    /// Device attributes (`DA1`): `ESC [ ? <digits>[;<digits>]* c`.
+    DeviceAttributes,
+    /// DEC colour-scheme report: `ESC [ ? 996 [;1|;2] n`.
+    ColorScheme,
+    /// `OSC 11` background colour: `ESC ] 11 ; <body> (BEL | ST)`.
+    Osc11,
+    /// `OSC 7501` program-status support reply: `ESC ] 7501 ; ? [;...] (BEL | ST)`.
+    ProgramStatus,
+}
+
+impl ReplyKind {
+    /// The final byte, once the sequence has produced one.
+    fn final_byte(self) -> u8 {
+        match self {
+            Self::KittyFlags => b'u',
+            Self::DeviceAttributes => b'c',
+            Self::ColorScheme => b'n',
+            Self::Osc11 | Self::ProgramStatus => 0,
+        }
+    }
+}
+
+/// Whether `fragment` is a strict *prefix* of a reply we asked for.
+///
+/// This is the narrowness the fix turns on. `ESC [` alone is **not** a reply
+/// prefix (a cursor-position CSI, a pasted `ESC [` and any other CSI all start
+/// the same way), so it stays typing. A prefix qualifies only once it has
+/// committed to the reply family:
+///
+/// - `ESC [ ?` — every reply in the `CSI ?` family starts here (the Kitty
+///   flags answer, `DA1`, the colour-scheme report), so the bare introducer
+///   is enough;
+/// - `ESC [ ? 9 9 6` — only the colour-scheme reply starts with `996`, which
+///   is what keeps an unrelated `ESC [ ? 9 9 z` typing;
+/// - `ESC ] 1 1 ;` — only `OSC 11` starts here (`OSC 10` is the foreground,
+///   `OSC 110` a reset), so the separator commits;
+/// - `ESC ] 7 5 0 1` — only the program-status reply starts here;
+/// - `ESC ] 11` / `ESC ] 7501` with the separator still outstanding.
+///
+/// A fragment that has already produced its final byte **and** left the intro
+/// grammar is *not* a prefix: `ESC [ ? a` cannot become any of these replies,
+/// so it is text.
+#[must_use]
+pub fn is_reply_prefix(fragment: &str) -> bool {
+    let Some(kind) = reply_matches_so_far(fragment) else {
+        return false;
+    };
+    // A fragment that already ended its sequence is a complete reply, which
+    // `process` would have emitted; as a prefix it is no longer growing into
+    // one of ours, so it is not our business.
+    !fragment_is_finished(fragment, kind)
+}
+
+/// Which reply family `fragment` has committed to, if any.
+fn reply_matches_so_far(fragment: &str) -> Option<ReplyKind> {
+    if !fragment.starts_with(ESC) {
+        return None;
+    }
+    let body = &fragment[ESC.len_utf8()..];
+    if let Some(rest) = body.strip_prefix('[') {
+        // The `CSI ?` family.
+        let rest = rest.strip_prefix('?')?;
+        // `996` commits to the colour-scheme reply; a shorter run of digits
+        // could still grow into any of the `CSI ?` replies.
+        if rest.starts_with("996") {
+            let tail = rest.strip_prefix("996")?;
+            return tail_ok(tail, b'n', |c| c.is_ascii_digit() || c == ';')
+                .then_some(ReplyKind::ColorScheme);
+        }
+        // Digits then a final byte. `u` is Kitty flags, `c` is DA1; any other
+        // final byte is not a reply we asked for.
+        //
+        // `ESC [ ?` with nothing after it already commits to this family -
+        // that is exactly the split the bug is about, and every `CSI ?` reply
+        // we asked for starts here, so it is reported as the representative
+        // kind. Which one it turns out to be is `parse_negotiation`'s problem
+        // once the tail arrives; the buffer only needs to know it is not text.
+        let digits_len = rest.bytes().take_while(u8::is_ascii_digit).count();
+        let after = &rest[digits_len..];
+        if after.is_empty() {
+            return Some(ReplyKind::KittyFlags);
+        }
+        let first = after.as_bytes()[0];
+        if first == b'u' {
+            return (after.len() == 1).then_some(ReplyKind::KittyFlags);
+        }
+        if first == b'c' || first == b';' {
+            return tail_ok(after, b'c', |c| c.is_ascii_digit() || c == ';')
+                .then_some(ReplyKind::DeviceAttributes);
+        }
+        return None;
+    }
+    // The OSC families.
+    if let Some(rest) = body.strip_prefix(']') {
+        if rest == "1" {
+            return Some(ReplyKind::Osc11);
+        }
+        if rest == "11" {
+            return Some(ReplyKind::Osc11);
+        }
+        if let Some(after) = rest.strip_prefix("11;") {
+            return osc_body_ok(after).then_some(ReplyKind::Osc11);
+        }
+        if rest == "7" || rest == "75" || rest == "750" || rest == "7501" {
+            return Some(ReplyKind::ProgramStatus);
+        }
+        if let Some(after) = rest.strip_prefix("7501;") {
+            return osc_body_ok(after).then_some(ReplyKind::ProgramStatus);
+        }
+        return None;
+    }
+    None
+}
+
+/// Whether `tail` is a permitted continuation of a `CSI ?` parameter run
+/// that ends in `final_byte`.
+///
+/// `tail` may be a *prefix* of the finished sequence: `62;` and `62;1` are
+/// both legitimate heads of `ESC [ ? 62 ; 1 ; 2 c`, and a head is exactly what
+/// the flush boundary produces. So the rule is "digits and semicolons, and the
+/// final byte only if present":
+///
+/// - all but the last character must be in the parameter alphabet;
+/// - if the last character is not in that alphabet it must be `final_byte`;
+/// - anything else (a different final byte) is not this reply.
+fn tail_ok(tail: &str, final_byte: u8, is_param: impl Fn(char) -> bool) -> bool {
+    let Some((last, rest)) = tail
+        .char_indices()
+        .next_back()
+        .map(|(i, c)| (c, &tail[..i]))
+    else {
+        // Empty tail: the introducer alone is a valid head.
+        return true;
+    };
+    if !rest.chars().all(&is_param) {
+        return false;
+    }
+    is_param(last) || last == char::from(final_byte)
+}
+
+/// Whether an OSC body is still inside the reply's grammar (no terminator
+/// required - an unterminated body is exactly a prefix).
+fn osc_body_ok(body: &str) -> bool {
+    // Printable ASCII only, and not yet terminated: a terminator means the
+    // sequence is complete, which `process` emits on its own.
+    body.chars().all(|c| (' '..='~').contains(&c))
+}
+
+/// Whether a fragment already ended a sequence, so it is not a prefix of
+/// something longer.
+fn fragment_is_finished(fragment: &str, kind: ReplyKind) -> bool {
+    match kind {
+        ReplyKind::Osc11 | ReplyKind::ProgramStatus => {
+            fragment.ends_with("\x1b\\") || fragment.ends_with('\x07')
+        }
+        _ => fragment.bytes().last() == Some(kind.final_byte()),
+    }
+}
+
+/// Whether `c` can appear in the tail of a reply we asked for.
+///
+/// A reply tail is parameter data: digits and `;` for `DA1` and the Kitty
+/// flags, digits/`;`/`:` for the scheme report, `?`/`;` for `OSC 7501`, and
+/// printable ASCII for an `OSC 11` colour body (`rgb:1e1e/1e1e/1e1e`). A final
+/// byte (`u`, `c`, `n`) is also admitted here and ends the window separately.
+///
+/// Anything else - a letter in prose, a space, a control byte - is not
+/// reply-shaped, which is what stops the window from ever eating a sentence.
+fn is_reply_tail_char(c: char) -> bool {
+    c.is_ascii_digit() || matches!(c, ';' | ':' | '/' | '?' | '#' | '.') || c.is_ascii_alphabetic()
+}
+
 /// Split `buffer` into complete sequences plus an incomplete remainder.
 fn extract_complete_sequences(buffer: &str) -> (Vec<String>, String) {
     let mut sequences = Vec::new();
@@ -220,6 +436,15 @@ pub struct StdinBuffer {
     paste_mode: bool,
     paste_buffer: String,
     pending_kitty_printable_codepoint: Option<u32>,
+    /// How many reply heads have been discarded (gh #366 gap 3). A counter, not
+    /// a flag, so a test can say "the drop happened" rather than "nothing was
+    /// printed".
+    discarded_fragments: u32,
+    /// Set when a reply head was discarded: which reply is being completed and
+    /// how many more characters may still belong to its tail. After a flush the
+    /// tail arrives as ordinary text, so content is the only way the buffer can
+    /// still recognise it (see [`REPLY_TAIL_MAX_CHARS`]).
+    reply_tail: Option<(ReplyKind, usize)>,
 }
 
 impl Default for StdinBuffer {
@@ -238,6 +463,8 @@ impl StdinBuffer {
             paste_mode: false,
             paste_buffer: String::new(),
             pending_kitty_printable_codepoint: None,
+            discarded_fragments: 0,
+            reply_tail: None,
         }
     }
 
@@ -327,6 +554,73 @@ impl StdinBuffer {
     }
 
     fn push_data(&mut self, events: &mut Vec<StdinEvent>, sequence: String) {
+        // Gh #366 gap 3: after a discarded reply head, the reply's tail arrives
+        // as ordinary characters (`62;1;2c`). Drop them so the fragment cannot
+        // reassemble itself in the composer.
+        //
+        // The window closes on **shape**, not on a clock (the budget rationale
+        // is on `REPLY_TAIL_MAX_CHARS`). Each character is judged in turn, so a
+        // tail that arrives whole in one read is handled exactly like one that
+        // dribbles in: a character that cannot appear in a reply tail - a
+        // space, a control byte - ends the window, and everything from it
+        // onward is the user's own input and is delivered.
+        if let Some((kind, left)) = self.reply_tail {
+            // `ST` (`ESC \`) is emitted by the reassembler as one two-character
+            // chunk, because the generic "ESC + one char is a meta pair" rule
+            // treats it as such. It terminates an OSC reply, so swallow the
+            // chunk whole rather than reading the ESC as prose.
+            if matches!(kind, ReplyKind::Osc11 | ReplyKind::ProgramStatus) && sequence == "\x1b\\" {
+                self.reply_tail = None;
+                return;
+            }
+            let mut kept = String::new();
+            let mut remaining = left;
+            let mut open = true;
+            let mut previous_esc = false;
+            for c in sequence.chars() {
+                if !open {
+                    kept.push(c);
+                    continue;
+                }
+                // An OSC reply ends on BEL or on `ST` (`ESC \`); a `CSI ?`
+                // reply ends on its own final byte. Family matters: an `OSC 11`
+                // colour body legitimately contains `c` (`#1e1e2c`) and `n`, so
+                // a blanket "a letter ends it" rule would cut a colour short and
+                // then deliver the rest as typing.
+                let ends = match kind {
+                    ReplyKind::Osc11 | ReplyKind::ProgramStatus => {
+                        c == '\x07' || (previous_esc && c == '\\')
+                    }
+                    _ => c as u8 == kind.final_byte(),
+                };
+                previous_esc = c == ESC;
+                if ends {
+                    self.reply_tail = None;
+                    open = false;
+                    continue;
+                }
+                if !is_reply_tail_char(c) {
+                    // Not reply-shaped: the user is typing. Close and keep it.
+                    self.reply_tail = None;
+                    open = false;
+                    kept.push(c);
+                    continue;
+                }
+                remaining = remaining.saturating_sub(1);
+                if remaining == 0 {
+                    self.reply_tail = None;
+                    open = false;
+                }
+            }
+            if open {
+                self.reply_tail = Some((kind, remaining));
+            }
+            if kept.is_empty() {
+                return;
+            }
+            events.push(StdinEvent::Data(kept));
+            return;
+        }
         // Kitty "report alternate keys" sends a printable both as CSI-u and
         // as a plain char; drop the echo.
         let raw_codepoint = if sequence.chars().count() == 1 {
@@ -356,14 +650,52 @@ impl StdinBuffer {
         })
     }
 
-    /// Flush the incomplete remainder as raw data (the timeout path).
+    /// The sequence timeout this buffer was built with.
+    #[must_use]
+    pub fn sequence_timeout_ms(&self) -> u64 {
+        self.sequence_timeout_ms
+    }
+
+    /// The lone-`ESC` timeout this buffer was built with.
+    #[must_use]
+    pub fn escape_timeout_ms(&self) -> u64 {
+        self.escape_timeout_ms
+    }
+
+    /// How many reply fragments have been discarded instead of delivered
+    /// (gh #366 gap 3).
+    #[must_use]
+    pub fn discarded_fragments(&self) -> u32 {
+        self.discarded_fragments
+    }
+
+    /// Flush the incomplete remainder (the timeout path).
+    ///
+    /// A remainder that is a **prefix of a reply we asked for** is dropped
+    /// rather than delivered (gh #366 gap 3), and the tail window opens so the
+    /// rest of that reply - which now arrives as ordinary characters - is
+    /// dropped too. Anything else is the user's input and is delivered.
     pub fn flush(&mut self) -> Vec<StdinEvent> {
         if self.buffer.is_empty() {
             return Vec::new();
         }
         let seq = std::mem::take(&mut self.buffer);
         self.pending_kitty_printable_codepoint = None;
+        if is_reply_prefix(&seq) {
+            self.discarded_fragments = self.discarded_fragments.saturating_add(1);
+            if let Some(kind) = reply_matches_so_far(&seq) {
+                self.reply_tail = Some((kind, REPLY_TAIL_MAX_CHARS));
+            }
+            return Vec::new();
+        }
         vec![StdinEvent::Data(seq)]
+    }
+
+    /// Whether a discarded reply's tail may still be arriving: the characters
+    /// now are the remainder of a reply whose head was flushed away.
+    #[must_use]
+    pub fn discarding_reply_tail(&self) -> bool {
+        self.reply_tail.is_some_and(|(_, left)| left > 0)
     }
 
     /// Discard all buffered state.
@@ -379,6 +711,10 @@ impl StdinBuffer {
         &self.buffer
     }
 }
+
+#[cfg(test)]
+#[path = "stdin_buffer/reply_fragment_tests.rs"]
+mod reply_fragment_tests;
 
 #[cfg(test)]
 mod tests {
