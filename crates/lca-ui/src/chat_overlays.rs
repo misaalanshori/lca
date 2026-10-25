@@ -109,8 +109,14 @@ impl Chat {
         width: u16,
         height: u16,
     ) {
-        // Pad to at least terminal height so overlays have screen-relative positions
-        // at the visible bottom.
+        // Gh #372 bug 2: pad only when there is an overlay to anchor. Padding exists so
+        // an overlay lands at the visible bottom; applying it on every frame appended
+        // `height - content` blank rows to a short session, which shoved the prompt and
+        // header up out of the scrollback. Asking first is what makes the action follow
+        // its reason - the same lesson bug 1 taught one layer up.
+        if !self.has_overlay() {
+            return;
+        }
         let working_height = lines.len().max(height as usize);
         if lines.len() < working_height {
             lines.resize(working_height, String::new());
@@ -118,6 +124,20 @@ impl Chat {
         let viewport_start = lines.len().saturating_sub(height as usize);
         let viewport_slice = &mut lines[viewport_start..];
         self.compose_overlays(viewport_slice, width, height);
+    }
+
+    /// Whether anything would be composited over the viewport right now.
+    ///
+    /// One predicate for the padding decision (gh #372 bug 2), so a **new** overlay
+    /// cannot be added to [`Self::compose_overlays`] and silently miss its bottom
+    /// anchor. It answers the same question that function asks, in the same order:
+    /// a picker (which returns early), a modal, or the side panel.
+    fn has_overlay(&self) -> bool {
+        self.picker_open()
+            || self.world.modal_active()
+            || self.world.panel_open
+            || self.world.dialog.is_some()
+            || self.world.wizard.is_some()
     }
 
     /// Composite the modals and the side panel over the viewport.

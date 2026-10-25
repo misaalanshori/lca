@@ -169,3 +169,115 @@ fn only_the_renderer_emits_the_scrollback_clear() {
         }
     }
 }
+
+// ============================================================================
+// Bugs 2-4 of the same issue: three ways a frame acted without a reason
+// ============================================================================
+
+/// The overlay composition seam, so its guard can be read.
+fn overlays_source() -> String {
+    std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/crates/lca-ui/src/chat_overlays.rs"
+    ))
+    .expect("chat_overlays.rs is readable")
+}
+
+/// The scrollback renderer, so the two exemptions can be read.
+fn main_screen_source() -> String {
+    std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/crates/lca-tui/src/engine/main_screen.rs"
+    ))
+    .expect("main_screen.rs is readable")
+}
+
+// Verifies: gh #372 bug 2 - **the padding follows its reason.** The seam padded to the
+// viewport height on every frame, so a fresh 8-line session in a 45-row terminal
+// appended 37 blank rows and pushed the prompt and header out of the scrollback.
+// Padding exists so an overlay lands at the visible bottom, so it is conditioned on an
+// overlay being open - the same lesson bug 1 taught: act only when there is something
+// to act on.
+#[test]
+fn the_viewport_padding_is_conditioned_on_an_open_overlay() {
+    let source = overlays_source();
+    let start = source
+        .find("fn compose_overlays_bottom_anchored")
+        .expect("the seam exists");
+    let body = &source[start..];
+    let end = body.find("\n    }\n").unwrap_or(body.len());
+    let body = &body[..end];
+    let guard = body
+        .find("has_overlay()")
+        .expect("the padding asks whether anything needs it");
+    let pad = body
+        .find("lines.resize(")
+        .expect("the padding is still there");
+    assert!(
+        guard < pad,
+        "the overlay check must precede the pad: {body}"
+    );
+    // ...and the predicate covers every overlay `compose_overlays` composites, so a new
+    // one cannot be added without its bottom anchor.
+    let predicate = source.find("fn has_overlay").expect("the predicate exists");
+    let pred_body = &source[predicate..];
+    let pred_end = pred_body.find("\n    }\n").unwrap_or(pred_body.len());
+    let pred_body = &pred_body[..pred_end];
+    for overlay in [
+        "picker_open",
+        "modal_active",
+        "panel_open",
+        "dialog",
+        "wizard",
+    ] {
+        assert!(
+            pred_body.contains(overlay),
+            "the predicate must know about `{overlay}`"
+        );
+    }
+}
+
+// Verifies: gh #372 bug 3 - **the Termux exemption is height-only.** The soft keyboard
+// changes the height by 10-15 rows every few seconds, and each change ran
+// `full_render(true, ..)` -> `\x1b[2J\x1b[H\x1b[3J`, wiping screen and scrollback
+// repeatedly. A width change still rebuilds, because it invalidates wrapping.
+#[test]
+fn the_termux_exemption_is_height_only() {
+    let source = main_screen_source();
+    // Anchor on the *arms*, not the flag computations: `let width_changed = ...` and
+    // the `prev_viewport_top` branch also mention these names and come first.
+    let width_arm = source
+        .find("\n        if width_changed {")
+        .expect("the width arm exists");
+    let height_arm = source
+        .find("\n        if height_changed && !self.termux {")
+        .expect("the height arm exists");
+    assert!(
+        width_arm < height_arm,
+        "a width change is decided first, so the height exemption cannot swallow it"
+    );
+    assert!(
+        source.contains("TERMUX_VERSION"),
+        "the detection reads Termux's own variable, not `TERM=screen`"
+    );
+}
+
+// Verifies: gh #372 bug 4 - **the key is off by default and fires only on a shrink.**
+// The risk in either direction: on by default would clear scrollback for everyone, and
+// firing on growth would clear it on every append.
+#[test]
+fn clear_on_shrink_is_off_by_default_and_gated_on_shrinking() {
+    let source = main_screen_source();
+    assert!(
+        source.contains("self.clear_on_shrink && new_lines.len() < self.max_lines_rendered"),
+        "the clear is gated on the setting AND on the content having shrunk"
+    );
+    assert!(
+        source.contains("pub fn set_clear_on_shrink"),
+        "the setting has one setter"
+    );
+    assert!(
+        !source.contains("clear_on_shrink: true"),
+        "nothing turns it on by default"
+    );
+}

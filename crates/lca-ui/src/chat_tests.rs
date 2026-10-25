@@ -1029,6 +1029,10 @@ mod tooltip_tests;
 #[path = "chat_overlay_tests.rs"]
 mod overlay_tests;
 
+// gh #372 bug 2 (the padding follows its reason), split at the ceiling.
+#[path = "chat_padding_tests.rs"]
+mod padding_tests;
+
 // Gh #398 gap 1: the sign-in URL over SSH/tmux (one-key exact copy, in-place
 // confirmation, and a clickable label only where clicking works).
 #[path = "chat_auth_url_tests.rs"]
