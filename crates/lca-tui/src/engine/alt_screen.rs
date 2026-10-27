@@ -360,8 +360,8 @@ impl AltScreenRenderer {
     /// row, which removed every syntax highlight, diff, markdown and theme colour
     /// along with the markers.
     ///
-    /// The dump is therefore the [document](Self::set_document), narrowed by
-    /// [`strip_own_markers`] - never by `strip_terminal_sequences`, which is the
+    /// The dump is therefore the [document](Self::set_document), narrowed by the
+    /// private `strip_own_markers` - never by `strip_terminal_sequences`, which is the
     /// right instrument for every other caller (comparisons, hit-tests, plain
     /// rendering) and the wrong one here.
     ///
