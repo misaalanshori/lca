@@ -18,6 +18,16 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **`Alt+Tab` keeps the selection you were about to paste** (gh #374 gap 2).
+  Drag-select a command in fullscreen, release, then switch to a browser to paste,
+  and the terminal reports the focus change *after* your release — which LCA read as
+  "throw the selection away". A finished selection now survives leaving the window;
+  an interrupted drag (a press you never released) keeps nothing, because a
+  half-dragged highlight has no coherent range. Every other gesture state still
+  aborts, so nothing is left armed to fire on return. This also fixed the reason the
+  bug could not reproduce before: fullscreen never asked the terminal for focus
+  reports at all, and the report would have been dropped as an unknown key even if
+  it had arrived.
 - **The IME candidate window follows the field you are typing into** (gh #371 bug 3).
   Exactly one caret marker may be live in a frame, and it belongs to whoever owns
   the keyboard. With a picker, search or modal open the composer kept emitting its

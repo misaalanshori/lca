@@ -606,8 +606,14 @@ impl Drop for ProcessTerminal {
 
 /// What the drop writes: mouse tracking off, the alternate screen left only
 /// while it is still active, then wrap and cursor restored.
+///
+/// `?1004l` is here as well as in the alt screen's own `MOUSE_DISABLE` (gh #374
+/// gap 2). The renderer's leave runs on an orderly exit; this sequence runs on a
+/// **drop**, which is the crash and panic path, where the renderer never got to
+/// write its own teardown. Focus reporting left on there would keep delivering
+/// `ESC [ O` to a shell prompt that has no idea what it is.
 fn teardown_sequence(in_alt_screen: bool) -> String {
-    let mut out = String::from("\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l");
+    let mut out = String::from("\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1004l");
     if in_alt_screen {
         out.push_str("\x1b[?1049l");
     }

@@ -245,3 +245,115 @@ fn the_document_rides_the_frame_composition_instead_of_a_second_walk() {
         "the double-composition entry point is gone, not merely unused"
     );
 }
+
+// ============================================================================
+// gh #374 gap 2 - `FOCUS_OUT` must not wipe a finished selection.
+//
+// The behavioural rows live beside the code
+// (`lca-tui`'s `alt_screen::focus_tests` and `lca-ui`'s
+// `run_tests::focus_reports`). This file is the NFR-24 named guard, so it pins
+// the two *seams* from outside, because this defect had a rare shape: the
+// guarded `clear()` alone would have been **dead code**, and every row would
+// still have passed.
+// ============================================================================
+
+// Verifies: gh #374 gap 2 - the focus arms are reachable, and the clear is
+// guarded rather than unconditional.
+//
+// Two independent ways the fix can be inert, both pinned here:
+//
+// 1. The old arm was `if data == "\x1b[O" { self.selection.clear(); }`. A guard
+//    that keeps that `clear()` on the finished path is the bug itself.
+// 2. `\x1b[O` never reached the renderer: the host dispatched to the screen only
+//    inside the `\x1b[<` gate, so the arm could not run at all. That is why this
+//    row checks *both* files - a renderer row cannot see the host's gate.
+#[test]
+fn a_focus_loss_is_dispatched_and_only_clears_an_in_progress_gesture() {
+    let alt = production_source("crates/lca-tui/src/engine/alt_screen.rs");
+    let focus = function_body(&alt, "fn on_focus_out(&mut self)");
+    // The exact predicate, not merely a mention of the field: the first version
+    // of this row asserted only `focus.contains("press_active")`, which a
+    // mutation setting `let interrupted = true;` still satisfied - a vacuous
+    // guard. The assignment is what has to be there.
+    assert!(
+        focus.contains("let interrupted = self.selection.press_active;"),
+        "the guard asks 'was a press still unreleased', read from the predicate \
+         that a release also clears: {focus}"
+    );
+    // And the clear is *inside* that condition, never before it.
+    let clear_at = focus
+        .find("self.selection.clear();")
+        .unwrap_or_else(|| panic!("the interrupted gesture is still cleared: {focus}"));
+    let guard_at = focus
+        .find("if interrupted {")
+        .unwrap_or_else(|| panic!("the clear is behind `if interrupted`: {focus}"));
+    assert!(
+        guard_at < clear_at,
+        "the clear sits behind `if interrupted`, so a finished selection \
+         survives: {focus}"
+    );
+    // Each non-selection gesture state is aborted, because one can be forgotten.
+    for field in [
+        "self.drag_edge = None;",
+        "self.press_cell = None;",
+        "self.scrollbar_drag = false;",
+        "self.click_count = 0;",
+    ] {
+        assert!(
+            focus.contains(field),
+            "focus loss must abort `{field}` too, or it trades one stale state \
+             for another: {focus}"
+        );
+    }
+
+    // And the host dispatches the report outside the SGR-mouse gate.
+    let run = production_source("crates/lca-ui/src/run.rs");
+    let dispatch = function_body(&run, "fn handle_input(");
+    // The arm's own condition, spelled out: a mutation that deletes the arm or
+    // moves it behind the `\x1b[<` gate must not satisfy this.
+    assert!(
+        dispatch.contains("if data == lca_tui::engine::alt_screen::FOCUS_OUT"),
+        "the host has an arm that dispatches a focus-out by name: {dispatch}"
+    );
+    let gate = dispatch
+        .find("data.starts_with(\"\\x1b[<\")")
+        .unwrap_or_else(|| panic!("the SGR gate exists"));
+    let focus_arm = dispatch
+        .find("if data == lca_tui::engine::alt_screen::FOCUS_OUT")
+        .unwrap_or_else(|| panic!("the focus arm exists"));
+    assert!(
+        focus_arm < gate,
+        "the focus arm sits before the `\\x1b[<` gate: a focus report does not \
+         start with `\\x1b[<`, so inside the gate it is unreachable - which is \
+         how the arm stayed dead"
+    );
+    assert!(
+        dispatch.contains("chat.scroll_drag = None;"),
+        "and the host clears its own half (the scrollbar grab), which no \
+         renderer reset can reach"
+    );
+}
+
+// Verifies: gh #374 gap 2 - the alt screen asks for focus reports at all.
+//
+// Without `?1004h` the terminal never sends `\x1b[O`, so the guard above could
+// never run: the fix would be correct and unreachable, which is the worst kind
+// of green. pi enables it in `ENABLE_BUTTON_MOTION_MOUSE`.
+#[test]
+fn the_fullscreen_renderer_asks_for_focus_reports_and_stops_them() {
+    let alt = production_source("crates/lca-tui/src/engine/alt_screen.rs");
+    let enable = function_body(&alt, "pub fn mouse_enable_sequences()");
+    assert!(
+        enable.contains("\\x1b[?1004h"),
+        "the terminal is asked to report focus changes: {enable}"
+    );
+    let disable = alt
+        .lines()
+        .find(|line| line.contains("pub const MOUSE_DISABLE"))
+        .unwrap_or_else(|| panic!("MOUSE_DISABLE exists"));
+    assert!(
+        disable.contains("\\x1b[?1004l"),
+        "and the exit turns it off, or the shell prompt reads the reports as \
+         typing: {disable}"
+    );
+}

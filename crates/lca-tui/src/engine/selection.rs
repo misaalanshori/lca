@@ -52,8 +52,20 @@ pub struct Selection {
     pub granularity: Granularity,
     /// The initial word/line range at the anchor.
     anchor_range: Option<(u16, u16)>,
-    /// Whether a drag is in progress.
-    pub dragging: bool,
+    /// Whether a press is still unreleased — the gesture is **in progress**.
+    ///
+    /// Not "is anything selected" and not "did the pointer move": a press that
+    /// has not been released yet is the one state that means an interrupted
+    /// gesture, whose highlight has no coherent meaning to keep. A finished
+    /// selection is the opposite - it is exactly what the user is about to
+    /// paste - so this is the predicate a focus loss must ask (gh #374 gap 2).
+    ///
+    /// pi keeps the same state as `selectionPressActive`
+    /// (`tui-alt-screen.ts:226`); it is set by [`Self::start`] and cleared by
+    /// [`Self::end`] (the mouse release) as well as by [`Self::clear`], so it
+    /// answers both ways without focus loss being involved - which is what makes
+    /// a guard on it live code rather than a branch that can never be false.
+    pub press_active: bool,
     /// The click count that started it.
     pub click_count: u8,
     /// The painted scrollbar's `(column, rows)` when one is on the frame
@@ -123,7 +135,7 @@ impl Selection {
     ) {
         self.granularity = granularity;
         self.click_count = click_count;
-        self.dragging = true;
+        self.press_active = true;
         let range = match granularity {
             Granularity::Word => Some(line_word_range(line, point.col)),
             Granularity::Line => Some((0, visible_width(line) as u16)),
@@ -150,7 +162,7 @@ impl Selection {
 
     /// Update the focus during a drag, expanding a word/line range.
     pub fn update(&mut self, point: SelectionPoint, line: &str) {
-        if !self.dragging {
+        if !self.press_active {
             return;
         }
         let focus = match (self.granularity, self.anchor_range) {
@@ -175,9 +187,10 @@ impl Selection {
         self.focus = Some(focus);
     }
 
-    /// End a drag (release).
+    /// End a drag (release): the gesture is finished, and from here on the
+    /// highlight is a finished selection rather than an in-progress one.
     pub fn end(&mut self) {
-        self.dragging = false;
+        self.press_active = false;
     }
 
     /// Clear the selection entirely.
@@ -185,7 +198,7 @@ impl Selection {
         self.anchor = None;
         self.focus = None;
         self.anchor_range = None;
-        self.dragging = false;
+        self.press_active = false;
         // Gh #403 gap 1: this mirror is written by `start` and read by
         // nothing, but leaving a stale count on a cleared selection invites
         // exactly the bug the reset exists to prevent - a later reader could

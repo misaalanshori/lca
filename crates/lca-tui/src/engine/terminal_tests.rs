@@ -438,6 +438,28 @@ fn the_drop_leaves_the_alt_screen_only_while_it_is_active() {
     }
 }
 
+// Verifies: gh #374 gap 2 - the crash/panic teardown also stops focus reporting.
+//
+// The renderer's leave writes `?1004l` on an orderly exit; a **drop** is the
+// path where the renderer never ran, so the reporting it turned on would survive
+// into a shell prompt that reads `ESC [ O` as typing. Asserted separately from
+// the mouse modes above because it is the one mode the alt screen requests that
+// a shell has no business receiving.
+#[test]
+fn the_drop_also_stops_focus_reporting() {
+    for in_alt in [true, false] {
+        let out = teardown_sequence(in_alt);
+        assert!(
+            out.contains("\x1b[?1004l"),
+            "focus reporting is turned off whatever the screen: {out:?}"
+        );
+        assert!(
+            !out.contains("\x1b[?1004h"),
+            "and the teardown never turns it on: {out:?}"
+        );
+    }
+}
+
 // Verifies: gh #33 - the flag the drop reads is folded from the
 // renderers' own sequences, so it tracks the screen rather than a
 // separate bookkeeping call.

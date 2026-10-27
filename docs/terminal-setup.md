@@ -17,6 +17,17 @@ scrollbar; `End` jumps back to the live bottom. If mouse or scroll
 acts strangely, say which renderer you are in; they own different
 halves of the input stack.
 
+**A finished selection survives leaving the window** (gh #374 gap 2).
+Drag-select a command in fullscreen, release the mouse, then `Alt+Tab`
+to a browser to paste: the highlight is still there when you come back,
+because the terminal reports the focus change *after* your release and
+LCA keeps a selection that a finished gesture produced. An interrupted
+drag is different — a press you never released while the window lost
+focus keeps nothing, because a half-dragged highlight has no coherent
+range to restore. Returning to the window resumes nothing: no scroll
+drag, no auto-scroll, no press. A copy works the same either way, so
+`Alt+Tab` → paste still gets the bytes.
+
 **Exiting fullscreen hands the whole session back to the terminal**
 (gh #374 gap 1). Quitting while in fullscreen (`/exit`, `Ctrl+D`)
 writes every row the session has — not just the ones on screen — into

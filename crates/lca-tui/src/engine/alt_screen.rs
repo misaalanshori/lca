@@ -126,16 +126,33 @@ pub fn is_multiplexer() -> bool {
 }
 
 /// The mouse-enable sequences for this environment.
+///
+/// Includes `?1004h` (focus reporting), which is what makes a focus loss
+/// *observable* at all (gh #374 gap 2). Without it the terminal never sends
+/// `ESC [ O`, the handler below is dead, and a fix that guards it is dead with
+/// it. pi enables exactly this in `ENABLE_BUTTON_MOTION_MOUSE` /
+/// `ENABLE_ALL_MOTION_MOUSE` (`tui-alt-screen.ts:67-68`).
 pub fn mouse_enable_sequences() -> &'static str {
     if is_multiplexer() {
-        "\x1b[?1000h\x1b[?1002h\x1b[?1006h"
+        "\x1b[?1000h\x1b[?1002h\x1b[?1004h\x1b[?1006h"
     } else {
-        "\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h"
+        "\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1004h\x1b[?1006h"
     }
 }
 
+/// The focus reports this renderer consumes (gh #374 gap 2): what a terminal
+/// sends when focus reporting (`?1004h`) is on and the window enters or leaves
+/// the focused state.
+pub const FOCUS_IN: &str = "\x1b[I";
+/// See [`FOCUS_IN`].
+pub const FOCUS_OUT: &str = "\x1b[O";
+
 /// The mouse-disable sequences.
-pub const MOUSE_DISABLE: &str = "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l";
+///
+/// `?1004l` is included for the mirror reason [`mouse_enable_sequences`] carries
+/// `?1004h`: leaving focus reporting on would keep delivering reports after the
+/// interface has gone, where a shell prompt would see them as typing.
+pub const MOUSE_DISABLE: &str = "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1004l";
 
 /// Wheel velocity acceleration (gh #206, pi's `WheelScrollAccelerator`
 /// from `wheel-scroll.ts` with LCA's fixed three-line `auto` replaced
@@ -512,12 +529,63 @@ impl AltScreenRenderer {
         if let Some(mouse) = parse_sgr_mouse(data) {
             return self.handle_mouse(mouse);
         }
-        // Focus out clears selection and drags.
-        if data == "\x1b[O" {
-            self.selection.clear();
+        if data == FOCUS_OUT {
+            self.on_focus_out();
+            return true;
+        }
+        if data == FOCUS_IN {
+            // Nothing resumes (gh #374 gap 2), and consuming it keeps the
+            // sequence from reaching the composer as an unknown CSI.
             return true;
         }
         false
+    }
+
+    /// Abort every in-flight gesture on focus loss, **keeping a finished
+    /// selection** (gh #374 gap 2).
+    ///
+    /// The defect: this used to be an unconditional `selection.clear()`, so the
+    /// classic flow — drag-select a command, release, `Alt+Tab` to a browser to
+    /// paste — wiped the finished highlight the user was about to copy from,
+    /// because the terminal sends `FOCUS_OUT` after the release.
+    ///
+    /// The question is **was a gesture still in progress**, not *is there a
+    /// selection*: an interrupted drag has no coherent highlight to keep, while
+    /// a finished one is the thing being pasted from. [`Selection::press_active`]
+    /// answers exactly that, and it is set by a press and cleared by a release, so
+    /// it is genuinely both-valued without focus loss (the #377/#379 trap: a
+    /// predicate focus loss is the only writer of can never be false).
+    ///
+    /// Everything else still aborts, because leaving any of it armed would trade
+    /// one stale state for another:
+    ///
+    /// - `drag_edge` would keep the auto-scroll tick extending a selection nobody
+    ///   is dragging;
+    /// - `scrollbar_drag` would swallow the next real motion and release;
+    /// - `press_cell` would make the next release look like a click on a cell from
+    ///   before the focus change;
+    /// - the click run (`click_count`/`last_click`) would let the next single click
+    ///   continue a word or line grab nobody started.
+    ///
+    /// pi drops its component mouse capture here too (`clearComponentMouseGesture`);
+    /// LCA has no per-component capture, and its analogues are the four above plus
+    /// the host's `scroll_drag`, which the host clears on the same event.
+    ///
+    /// `scrollbar_hover` is dropped for pi's reason (`stopScrollbarHover`): it is a
+    /// pointer position, and the pointer is no longer over this window.
+    fn on_focus_out(&mut self) {
+        let interrupted = self.selection.press_active;
+        self.selection.press_active = false;
+        self.drag_edge = None;
+        self.press_cell = None;
+        self.scrollbar_drag = false;
+        self.scrollbar_hover = false;
+        self.click_count = 0;
+        self.last_click = None;
+        if interrupted {
+            // An interrupted gesture keeps no highlight: it has no coherent range.
+            self.selection.clear();
+        }
     }
 
     /// Whether the pointer hovers the scrollbar (gh #164).
@@ -649,7 +717,7 @@ impl AltScreenRenderer {
             return true;
         }
         if motion {
-            if self.selection.dragging {
+            if self.selection.press_active {
                 // A drag is not a click.
                 self.press_cell = None;
                 // Edge auto-scroll (R6): a drag at the top/bottom row arms a
@@ -1124,3 +1192,8 @@ mod wheel_tests {
 #[cfg(test)]
 #[path = "alt_screen/exit_handoff_tests.rs"]
 mod exit_handoff_tests;
+
+// Gh #374 gap 2's focus rows, likewise.
+#[cfg(test)]
+#[path = "alt_screen/focus_tests.rs"]
+mod focus_tests;

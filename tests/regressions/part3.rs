@@ -495,5 +495,11 @@ mod clear_on_shrink_is_wired;
 // rows in the scrollback. These rows pin the seams: the narrow strip, the
 // document rather than the frame, the one synchronized block, and the host that
 // has to feed it.
+//
+// Gap 2 followed in the same file: `FOCUS_OUT` wiped a finished selection. That
+// one had a shape worth remembering - the guarded `clear()` alone would have been
+// dead code, because the host never dispatched the sequence to the renderer and
+// the alt screen never asked the terminal to report focus. The two focus rows pin
+// the dispatch and the `?1004h` request as well as the guard.
 #[path = "374-fullscreen-exit-handoff.rs"]
 mod fullscreen_exit_handoff;

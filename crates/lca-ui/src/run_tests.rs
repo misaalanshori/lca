@@ -1189,3 +1189,7 @@ fn both_hints_share_the_same_command_string() {
 /// Gh #374 gap 1's document rows, split out for the 1,200-line ceiling.
 #[path = "run_tests_374.rs"]
 mod document_handoff;
+
+/// Gh #374 gap 2's focus rows, likewise.
+#[path = "run_focus_tests.rs"]
+mod focus_reports;

@@ -95,6 +95,17 @@ impl Screen {
         }
     }
 
+    /// Whether the pointer hovers the fullscreen scrollbar (gh #164).
+    ///
+    /// The reader half of [`AltScreenRenderer::set_scrollbar_hover`], so a row can
+    /// assert that a gesture really reached the renderer rather than being
+    /// swallowed: `FOCUS_OUT` drops the hover, and nothing else on the input path
+    /// writes it without a motion event.
+    #[cfg(test)]
+    pub(crate) fn scrollbar_hovered(&self) -> bool {
+        matches!(self, Screen::Alt(r) if r.scrollbar_hovered())
+    }
+
     pub(crate) fn copy_on_select(&self) -> bool {
         matches!(self, Screen::Alt(r) if r.copy_on_select)
     }
@@ -249,6 +260,29 @@ fn handle_input(
     // `theme_query::handle_reply` owns the dispatch and the lifecycle, so the
     // apply path and the composer guard share one recogniser.
     if crate::theme_query::handle_reply(chat, data) {
+        return InputResult::Continue;
+    }
+    // Focus reports (gh #374 gap 2): the alt screen consumes them so a finished
+    // selection survives `Alt+Tab` while an interrupted gesture does not.
+    //
+    // This has to sit **outside** the SGR gate below, and that gate is exactly
+    // why the bug was invisible: `screen.handle_mouse` is only called for input
+    // starting with `\x1b[<`, and `\x1b[O` does not, so the renderer's focus arm
+    // was unreachable. The guard alone would have been dead code (#377/#379's
+    // failure mode), so the dispatch and the `?1004h` request both land here.
+    //
+    // The host also own half the gesture state: `Chat::scroll_drag` is the
+    // scrollbar grab offset, which no renderer reset can reach.
+    if data == lca_tui::engine::alt_screen::FOCUS_OUT
+        || data == lca_tui::engine::alt_screen::FOCUS_IN
+    {
+        screen.handle_mouse(data);
+        if data == lca_tui::engine::alt_screen::FOCUS_OUT {
+            chat.scroll_drag = None;
+            chat.scrollbar_hover = false;
+            chat.drawer_hover = false;
+            chat.dismiss_tooltip();
+        }
         return InputResult::Continue;
     }
     // Mouse (selection, wheel) is the renderer's - except wheel motion
