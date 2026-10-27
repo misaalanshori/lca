@@ -61,9 +61,33 @@ fn leaving_the_alt_screen_parks_the_cursor_below_the_restored_document() {
         out.contains("\x1b[?1049l"),
         "leaves the alt screen: {out:?}"
     );
+    // The park is `\r\n` + wrap-on + cursor-on, and nothing follows it.
+    //
+    // SANCTIONED CHANGE (gh #374 gap 1, by that brief's "name them" clause): this
+    // row used to require the exact suffix `"line three\r\n\x1b[?7h\x1b[?25h"`.
+    // gh #374 gap 1 wraps the dump in one synchronized block so a many-row write
+    // lands atomically, which means an `\x1b[?2026l` necessarily sits between the
+    // last row and the park - so the old suffix is **physically impossible**, not
+    // merely inconvenient. The behaviour the row exists for is unchanged and is
+    // now pinned more tightly: the park is the final write, the block closes
+    // exactly once, immediately before it, and nothing at all follows the park.
     assert!(
-        out.ends_with("line three\r\n\x1b[?7h\x1b[?25h"),
-        "the park comes after the final line, then wrap+cursor: {out:?}"
+        out.ends_with("\r\n\x1b[?7h\x1b[?25h"),
+        "the park is the last thing written, wrap and cursor on: {out:?}"
+    );
+    assert_eq!(
+        out.matches("\x1b[?2026l").count(),
+        1,
+        "one synchronized block closes exactly once: {out:?}"
+    );
+    let after_last_row = out
+        .rsplit_once("line three")
+        .map(|(_, rest)| rest)
+        .unwrap_or_else(|| panic!("the final line is written: {out:?}"));
+    assert_eq!(
+        after_last_row, "\x1b[?2026l\r\n\x1b[?7h\x1b[?25h",
+        "between the last row and the end there is only the block close and the \
+         park - nothing else may move the cursor: {out:?}"
     );
 }
 
@@ -167,9 +191,13 @@ fn the_exit_byte_stream_switches_the_screen_once_and_parks_after_the_document() 
 
     let log = std::fs::read_to_string(&path).expect("the engine logged every write");
     let _ = std::fs::remove_file(&path);
+    // SANCTIONED CHANGE (gh #374 gap 1): the same `?2026l`-before-the-park
+    // consequence as the row above. The contract asserted here is the one that
+    // matters on a real terminal: the document ends parked, and no second
+    // `?1049l` restores the cursor onto it.
     assert!(
-        log.contains("footer\r\n\x1b[?7h\x1b[?25h"),
-        "the document ends with the park: {log:?}"
+        log.contains("footer\x1b[?2026l\r\n\x1b[?7h\x1b[?25h"),
+        "the document ends with the block close and the park: {log:?}"
     );
     assert_eq!(
         log.matches("\x1b[?1049l").count(),

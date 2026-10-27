@@ -28,6 +28,20 @@ Dates are UTC.
   painted on. Custom theme files are unaffected.
 
 ### Fixed
+- **Leaving fullscreen keeps the whole session, with its colours** (gh #374 gap 1).
+  Quitting while in fullscreen wrote only the frame it was showing — a 200-line
+  session left 24 rows in the scrollback, everything above was gone — and ran
+  `strip_terminal_sequences` over each row first, so even those 24 came back as
+  uncoloured plain text. The exit now hands back the **document** (the transcript's
+  every row, then the dock) with syntax, diff, markdown and theme colours intact,
+  stripping only LCA's own in-band markers (the caret marker and any `OSC 133`
+  zone prefix) — pi's `afterTerminalStop` shape. It goes out as one synchronized
+  block with autowrap off, so a 200-row write lands atomically instead of
+  reflowing per line. The fullscreen chrome — tab bar, app-drawn scrollbar,
+  overlays, toasts — is deliberately not in the dump: it is screen state, not
+  history. Measured in a real 100×24 pane: before, 2,426 bytes after `?1049l`,
+  the oldest card missing, **0** SGR sequences; after, all eight cards, **323**
+  SGR sequences, the dump 13,480 bytes.
 - **`terminal.clear_on_shrink` works** (gh #538). The scrollback renderer gained pi's
   behaviour a cycle ago (gh #372 bug 4), but nothing in production ever called the
   setter: the config key parsed, merged, defaulted and did nothing, and the doc row had

@@ -17,6 +17,17 @@ scrollbar; `End` jumps back to the live bottom. If mouse or scroll
 acts strangely, say which renderer you are in; they own different
 halves of the input stack.
 
+**Exiting fullscreen hands the whole session back to the terminal**
+(gh #374 gap 1). Quitting while in fullscreen (`/exit`, `Ctrl+D`)
+writes every row the session has — not just the ones on screen — into
+the real scrollback, with its colours, so the transcript you can scroll
+through afterwards is the whole conversation and not a colourless
+24-row tail. Two things are therefore absent from what you get back,
+deliberately: the fullscreen chrome (the session tab bar, the app-drawn
+scrollbar, any dialog or toast that happened to be open) and LCA's own
+in-band markers. The terminal's own scrollback and scrollbar take over
+from there.
+
 ## Links, images, colors, progress
 
 LCA detects these automatically. Override only when detection is

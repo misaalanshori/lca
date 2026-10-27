@@ -488,3 +488,11 @@ mod enter_policy_on_shift_blind_terminals;
 // hand is exactly how the gap survived a cycle.
 #[path = "538-clear-on-shrink-is-wired.rs"]
 mod clear_on_shrink_is_wired;
+
+// Gh #374 gap 1: leaving fullscreen wrote only the visible `height` rows and
+// stripped every colour on the way out - a 200-line session became 24 uncoloured
+// rows in the scrollback. These rows pin the seams: the narrow strip, the
+// document rather than the frame, the one synchronized block, and the host that
+// has to feed it.
+#[path = "374-fullscreen-exit-handoff.rs"]
+mod fullscreen_exit_handoff;
