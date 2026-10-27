@@ -25,6 +25,12 @@ pub(super) mod cache_cause;
 #[path = "clear_on_shrink_tests.rs"]
 pub(super) mod clear_on_shrink_tests;
 
+// Gh #371 bug 4: the hardware-cursor opt-in's path rows, split out for the
+// 1,200-line ceiling for the same reason as the module above.
+#[cfg(test)]
+#[path = "hardware_cursor_tests.rs"]
+pub(super) mod hardware_cursor_tests;
+
 /// A short relative age (`now`, `5m`, `3h`, `2d`, `3w`, `2mo`, `1y`), pi's
 /// session-row format (`selectors-large.md`).
 pub(super) fn age_label(now_ms: u64, then_ms: u64) -> String {
@@ -337,6 +343,14 @@ pub(super) fn setting_meta(key: &str) -> (String, String) {
             "Clear on shrink",
             "Clear empty rows when content shrinks (may flicker)",
         ),
+        // Gh #371 bug 4: pi's own row wording (`Show hardware cursor`), and the
+        // one sentence that says what it is for - a user who needs it knows the
+        // words "screen reader"; a user who does not should read why it exists
+        // and leave it alone.
+        "ui.show_hardware_cursor" => known(
+            "Show hardware cursor",
+            "Show the terminal's own cursor too, for screen readers and magnifiers",
+        ),
         "images.auto_resize" => known("Auto resize", "Resize pasted images to fit"),
         "markdown.code_block_indent" => known("Code indent", "Prefix spaces on fenced code lines"),
         "markdown.mermaid" => known("Mermaid", "Mermaid diagram rendering mode"),
@@ -488,6 +502,14 @@ pub(super) fn settings_rows(
         vec![
             row("Display & Appearance", "ui.theme", &[]),
             row("Display & Appearance", "ui.color", &["auto", "never"]),
+            // Gh #371 bug 4: pi places its hardware-cursor row in the display
+            // group; same place here, and `false` first so the default is the
+            // row's own starting point.
+            row(
+                "Display & Appearance",
+                "ui.show_hardware_cursor",
+                &["false", "true"],
+            ),
             row("Display & Appearance", "ui.fullscreen", &["false", "true"]),
             row(
                 "Display & Appearance",
@@ -970,6 +992,7 @@ mod setting_meta_tests {
             "ui.fullscreen_copy_on_select",
             "ui.fullscreen_wheel_lines",
             "ui.fullscreen_exit_output",
+            "ui.show_hardware_cursor",
             "terminal.show_images",
             "terminal.image_width_cells",
             "terminal.show_progress",

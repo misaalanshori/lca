@@ -1160,3 +1160,8 @@ mod thinking_save_tests;
 // field has the keyboard (the IME anchor).
 #[path = "chat_focus_tests.rs"]
 mod focus_tests;
+
+// Gh #371 bug 4: the caret's form as a display tuning - the interface's half of
+// the config path.
+#[path = "chat_hardware_cursor_tests.rs"]
+mod hardware_cursor_tests;

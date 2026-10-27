@@ -111,7 +111,10 @@ contract is pi's: main screen = bottom-anchored append to the real
 terminal scrollback (`\r\n` appends, `CSI 2K` per repainted row), alt
 screen = app-owned selection + mouse capture. Theme roles are a ~56-token
 vocabulary; `fg()`/`bg()` reset **only their own channel**. The caret is
-**painted into the row** (pi's model) — never trust the terminal cursor.
+**painted into the row** (pi's model) — never trust the terminal cursor — except
+when `ui.show_hardware_cursor` asks for the terminal's own cursor too (an
+accessibility opt-in; the painted caret is still the default and still what the
+renderer's bookkeeping assumes).
 When in doubt about TUI behavior, read the reverse-engineering workspace
 `~/projects/pi-tui-re/` first (it documents pi's exact rules with file
 references), then pi's source.

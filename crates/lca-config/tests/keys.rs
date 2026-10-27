@@ -383,3 +383,76 @@ fn a_non_boolean_clear_on_shrink_is_refused_at_load_naming_the_key() {
         "and says what was expected: {text}"
     );
 }
+
+// Verifies: gh #371 bug 4 - `ui.show_hardware_cursor` is a real boolean that
+// travels, in both directions, through the file and the environment.
+//
+// The key already parsed before this cycle; what these rows pin is that it
+// still does now that something *reads* it, because a key wired into the
+// renderer and silently mis-parsed would be worse than an inert one.
+#[test]
+fn show_hardware_cursor_loads_from_the_file_and_the_environment() {
+    let dir = scratch("lca-371g4-hw-cursor");
+    let file = dir.join("user.toml");
+    std::fs::write(file.as_path(), "ui.show_hardware_cursor = true\n").expect("write");
+    let from_file = Config::load(&LoadInput {
+        user_file: Some(file.clone()),
+        ..Default::default()
+    })
+    .expect("load");
+    assert!(
+        from_file.ui_show_hardware_cursor(),
+        "the file's `true` loads"
+    );
+
+    for (raw, expected) in [("true", true), ("false", false)] {
+        let from_env = Config::load(&LoadInput {
+            user_file: Some(file.clone()),
+            env: std::collections::BTreeMap::from([(
+                "LCA_UI_SHOW_HARDWARE_CURSOR".to_string(),
+                raw.to_string(),
+            )]),
+            ..Default::default()
+        })
+        .expect("load");
+        assert_eq!(
+            from_env.ui_show_hardware_cursor(),
+            expected,
+            "the environment's `{raw}` wins over the file's `true` (FR-CFG-1)"
+        );
+    }
+}
+
+// Verifies: gh #371 bug 4 - the key's default is off, which is the whole
+// safety argument for shipping it: an unset config leaves the painted-caret
+// model exactly as it was.
+#[test]
+fn show_hardware_cursor_defaults_to_the_painted_caret() {
+    assert!(
+        !Config::defaults().ui_show_hardware_cursor(),
+        "off by default: the painted caret is the product, not the opt-in"
+    );
+}
+
+// Verifies: gh #371 bug 4 - a value that is not a boolean is refused at load,
+// naming the key (the gh #273 rule: nothing is silently ignored).
+#[test]
+fn a_non_boolean_show_hardware_cursor_is_refused_at_load_naming_the_key() {
+    let dir = scratch("lca-371g4-hw-cursor-bad");
+    let file = dir.join("user.toml");
+    std::fs::write(file.as_path(), "ui.show_hardware_cursor = \"yes\"\n").expect("write");
+    let err = Config::load(&LoadInput {
+        user_file: Some(file),
+        ..Default::default()
+    })
+    .expect_err("a string is not a boolean");
+    let text = err.to_string();
+    assert!(
+        text.contains("ui.show_hardware_cursor"),
+        "the message names the key: {text}"
+    );
+    assert!(
+        text.contains("expected a boolean"),
+        "and says what was expected: {text}"
+    );
+}

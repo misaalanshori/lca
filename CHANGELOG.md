@@ -6,6 +6,17 @@ Dates are UTC.
 
 ## [Unreleased]
 
+### Added
+- **`ui.show_hardware_cursor` shows the terminal's own cursor at the caret** (gh #371
+  bug 4). An accessibility opt-in for screen-reader, magnifier and blinking-cursor
+  users: LCA paints the caret into the row, which those users cannot follow, so the
+  key asks the terminal to show a real cursor at the same insertion point. It changes
+  only the cursor's visibility — the marker's position and the renderer's cursor
+  bookkeeping are identical either way — and it applies live from `/settings`. Off by
+  default, and the default is unchanged: the painted caret remains the product.
+  Switching to the plain theme at runtime now stops the painting too, which it did
+  not before this change.
+
 ### Fixed
 - **The IME candidate window follows the field you are typing into** (gh #371 bug 3).
   Exactly one caret marker may be live in a frame, and it belongs to whoever owns

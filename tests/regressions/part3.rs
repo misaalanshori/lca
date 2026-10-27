@@ -419,7 +419,8 @@ mod reload_rebinds_editor;
 // a full `\x1b[0m`, stripping the style of everything after it. Behaviour rows live in
 // `main_screen.rs` and `widgets/editor.rs`; this file guards the two shapes that would
 // let either come back. Bug 3 (overlay marker ownership) landed on top and added three
-// shape guards here; bug 4 (`show_hardware_cursor`) stays open on the issue.
+// shape guards here; bug 4 (`show_hardware_cursor`, the accessibility opt-in) closed the
+// issue and added two more - the key travels config -> caret, and `/settings` offers it.
 #[path = "371-caret-row-and-sgr-close.rs"]
 mod caret_row_and_sgr_close;
 

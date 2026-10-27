@@ -27,6 +27,18 @@ use lca_tui::engine::core::CURSOR_MARKER;
 
 use super::chat::Chat;
 
+/// Whether the caret is painted, from the two facts that decide it (gh #371
+/// bug 4).
+///
+/// A pure function so the composition is assertable without building a `Chat`:
+/// the plain theme and the accessibility opt-in each turn painting off, and `&&`
+/// is what keeps them from fighting. A plain theme must never paint (FR-UI-5
+/// promises no escapes at all), and the toggle must never *re-enable* painting
+/// the theme has taken away - it only ever subtracts.
+pub(crate) fn paint_caret(theme_is_colored: bool, show_hardware_cursor: bool) -> bool {
+    theme_is_colored && !show_hardware_cursor
+}
+
 /// A one-line text field that takes keystrokes while its surface is open.
 ///
 /// Not every keyboard-owning surface has one: a permission modal, a yes/no
@@ -177,11 +189,27 @@ impl Chat {
         None
     }
 
-    /// Whether the caret is painted into the row rather than left to the
-    /// hardware cursor (FR-UI-5, ADR-0037): the plain theme renders no escapes
-    /// at all, so there the terminal's own cursor is the caret.
+    /// Whether LCA paints the caret into the row rather than asking the
+    /// terminal to draw one (FR-UI-5, ADR-0037, gh #371 bug 4).
+    ///
+    /// Two things turn the painting off, and they compose:
+    ///
+    /// - **The plain theme** renders no escapes at all (FR-UI-5), so there is
+    ///   nothing to paint with and the hardware cursor is the only caret the
+    ///   terminal can offer.
+    /// - **`ui.show_hardware_cursor`** is the accessibility opt-in: a screen
+    ///   reader, a magnifier or a blinking-cursor user needs a real cursor, so
+    ///   the user can ask for the terminal's at the same insertion point. The
+    ///   *position* is unchanged either way - only who draws the cell flips.
+    ///
+    /// `&&` rather than `||` because the painted caret is the product: the
+    /// toggle subtracts a capability, it never adds one back that the theme has
+    /// already taken away.
     pub(crate) fn paints_caret(&self) -> bool {
-        self.theme.colored
+        paint_caret(
+            self.theme.colored,
+            self.display_tuning().show_hardware_cursor,
+        )
     }
 
     /// The zero-width marker plus, when the caret is painted, the reverse-video

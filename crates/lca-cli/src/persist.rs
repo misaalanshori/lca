@@ -88,7 +88,13 @@ fn file_is_empty(path: &std::path::Path) -> bool {
 }
 
 /// [`persist_setting`] against an explicit path (the testable half).
-fn persist_setting_at(
+///
+/// `pub(crate)` since gh #371 bug 4: the `/settings` rows that pin a cycle's
+/// persistence live in `tui::*_tests`, and the alternative was a second copy of
+/// the writer inside a test - the shape this repository keeps consolidating
+/// away. It is the same function `persist_setting` calls, not a seam added for
+/// the test.
+pub(crate) fn persist_setting_at(
     path: &std::path::Path,
     key: &str,
     value: Option<&str>,

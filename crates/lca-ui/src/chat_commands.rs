@@ -1130,6 +1130,12 @@ impl Chat {
         let tuning = self.display_tuning();
         self.editor.max_visible = tuning.autocomplete_max_visible.clamp(3, 20) as usize;
         self.editor.padding_x = tuning.editor_padding_x.min(3) as usize;
+        // Gh #371 bug 4: the caret's *form* is a tuning now, so a `/settings`
+        // cycle applies without a restart. This is also the one place the
+        // painted-caret decision is made, which fixes a pre-existing gap: a
+        // theme switched at runtime (`/theme plain`) used to keep painting,
+        // because `set_paint_caret` ran only in `Chat::new`.
+        self.editor.set_paint_caret(self.paints_caret());
         self.transcript.apply_display(&tuning);
     }
 }

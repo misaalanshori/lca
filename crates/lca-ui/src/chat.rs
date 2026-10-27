@@ -1179,3 +1179,12 @@ pub(crate) mod tests;
 #[cfg(test)]
 #[path = "usage_tests.rs"]
 mod usage_tests;
+
+/// The caret's paint decision, for tests outside this crate (gh #371 bug 4).
+///
+/// `paint_caret` is the composition itself; this exists so the CLI's
+/// config-to-frame rows can assert the same arithmetic the interface uses
+/// without constructing a whole `Chat`.
+pub fn paint_caret_for_tests(theme_is_colored: bool, show_hardware_cursor: bool) -> bool {
+    crate::chat_focus::paint_caret(theme_is_colored, show_hardware_cursor)
+}

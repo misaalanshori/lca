@@ -44,7 +44,7 @@ pub mod ext;
 mod headless;
 mod invoke;
 mod models;
-mod persist;
+pub(crate) mod persist;
 /// Project-local extensions (gh #138).
 mod project_ext;
 pub(crate) mod prompt;

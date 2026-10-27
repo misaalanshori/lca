@@ -128,6 +128,13 @@ fn settings_changes_a_setting_and_config_toml_carries_it() {
     // frame never eats a step.
     for marker in [
         "> Color",
+        // Gh #371 bug 4 added the hardware-cursor row right after `Color` (pi's
+        // order in the display group). The property this list pins is unchanged -
+        // every Down lands on the next curated row, so a re-sorted or re-sectioned
+        // list fails loudly here rather than silently retargeting - so the row is
+        // inserted rather than the walk rewritten. The value text is what the row
+        // paints for an unset boolean in this sandbox.
+        "> Show hardware cursor = off [project inherit, default]",
         "> Display mode",
         "> Quiet startup",
         "> Completion rows",

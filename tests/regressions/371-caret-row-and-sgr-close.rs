@@ -362,3 +362,109 @@ fn every_frame_carries_exactly_one_marker_by_construction() {
          finish the job instead of rediscovering the failure"
     );
 }
+
+// =============================================================================
+// Bug 4: `ui.show_hardware_cursor` is an accessibility opt-in, not inert.
+// =============================================================================
+
+// Verifies: gh #371 bug 4 - the key travels from config to the caret's form.
+//
+// The defect this guards is not "the setting is wrong", it is "the setting is
+// dead": the key parsed, defaulted and merged for a whole cycle while nothing
+// read it, and the doc row had to say so. That is gh #538's shape, and #538's
+// root cause was the *absence of a callable seam* - the fill lived inside a
+// closure, so no row could reach it. Here the seam exists (`display_tuning` is a
+// plain function, and `Chat::paints_caret` composes the two facts), so the guard
+// is that both links are actually used in production.
+#[test]
+fn the_hardware_cursor_key_reaches_the_caret_form() {
+    // 1. The value crosses from config into the tunable.
+    let hooks = read("crates/lca-cli/src/tui/hooks.rs");
+    let fill = hooks
+        .find("show_hardware_cursor: config.ui_show_hardware_cursor()")
+        .expect(
+            "the CLI fills the tunable from the configured value; without this the \
+             key is inert again (the whole of gh #371 bug 4)",
+        );
+    assert!(fill > 0, "and it is inside the production fill");
+
+    // 2. The tunable reaches the editor, in the one place the caret's form is
+    //    decided. A tuning nobody applies is the #538 defect.
+    let commands = read("crates/lca-ui/src/chat_commands.rs");
+    let sync = commands
+        .find("fn sync_display_tuning(")
+        .expect("the one apply seam exists");
+    let body = &commands[sync..];
+    let body = &body[..body.find("\n    }\n").map_or(body.len(), |at| at + 6)];
+    assert!(
+        body.contains("self.editor.set_paint_caret(self.paints_caret())"),
+        "the tuning is applied to the editor's caret, so `/settings` and the config \
+         file both land without a restart: {body}"
+    );
+
+    // 3. The composition is the one documented: `&&`, so the toggle only ever
+    //    subtracts. A change to `||` would re-enable painting on a plain theme,
+    //    breaking FR-UI-5's no-escape promise.
+    let focus = read("crates/lca-ui/src/chat_focus.rs");
+    assert!(
+        focus.contains("theme_is_colored && !show_hardware_cursor"),
+        "the plain theme and the opt-in compose with `&&`: either one alone turns \
+         painting off, and the toggle never adds it back"
+    );
+
+    // 4. And the doc row stops claiming inertness, in the direction #538 already
+    //    established for the sibling key.
+    let docs = read("docs/configuration.md");
+    let row = docs
+        .lines()
+        .find(|line| line.starts_with("| `ui.show_hardware_cursor`"))
+        .expect("the key has a row in the configuration table");
+    assert!(
+        !row.contains("inert"),
+        "the key works now, so the row must not call it inert: {row}"
+    );
+    assert!(
+        !row.contains("No effect"),
+        "and must not deny having an effect: {row}"
+    );
+    assert!(
+        row.contains("accessibility"),
+        "the row states the scope, which is the product claim: {row}"
+    );
+    assert!(
+        row.contains("| `false` |"),
+        "and its default is still off (FR-CFG-1's inspector reads it): {row}"
+    );
+    assert!(
+        row.contains("painted caret remains the product"),
+        "with the default's caret model stated, not implied: {row}"
+    );
+}
+
+// Verifies: gh #371 bug 4 - `/settings` offers the row.
+//
+// A key wired into the renderer but absent from the selector is wired only for
+// people who edit TOML by hand, and the brief names this as a deliverable: the
+// user has to be able to see the effect.
+#[test]
+fn the_key_is_offered_in_settings() {
+    let display = read("crates/lca-cli/src/tui/display.rs");
+    assert!(
+        display.contains("\"ui.show_hardware_cursor\" => known("),
+        "the selector has its label and description"
+    );
+    assert!(
+        display.contains("\"ui.show_hardware_cursor\",\n                &[\"false\", \"true\"],"),
+        "and offers it as a cycle, off first"
+    );
+    let meta = display
+        .lines()
+        .skip_while(|line| !line.contains("\"ui.show_hardware_cursor\" => known("))
+        .take(4)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        meta.contains("Show hardware cursor"),
+        "with pi's own wording: {meta}"
+    );
+}

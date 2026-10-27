@@ -460,6 +460,14 @@ pub struct DisplayTuning {
     /// `terminal.clearOnShrink`). Scrollback mode only: the alt screen repaints
     /// its whole viewport anyway.
     pub clear_on_shrink: bool,
+    /// Ask the terminal to show its own cursor at the caret as well as the
+    /// painted one (gh #371 bug 4, pi's `ui.showHardwareCursor`). An
+    /// **accessibility opt-in**, default `false`: a screen reader, a magnifier or
+    /// a blinking-cursor user needs a real cursor, and a reverse-video cell
+    /// painted into a row is none of those things. It changes the `?25h`/`?25l`
+    /// policy at the marker and nothing else - the marker's position, and so
+    /// `hardware_cursor_row`, are identical either way.
+    pub show_hardware_cursor: bool,
     /// Downscale images before sending.
     pub auto_resize_images: bool,
     /// Code block content indent.
@@ -492,6 +500,7 @@ impl Default for DisplayTuning {
             image_width_cells: 60,
             show_progress: true,
             clear_on_shrink: false,
+            show_hardware_cursor: false,
             auto_resize_images: true,
             code_block_indent: "  ".to_string(),
             mermaid: "streaming".to_string(),
@@ -512,7 +521,7 @@ pub enum StartupHeaderRung {
     Hidden,
     /// The version row only, as before #399 (`"header"`).
     VersionOnly,
-    /// The logo block: mark, version, live hints, nudge (`false`, the default).
+    /// The logo block: mark, version, live hints, nudge (`false`; the default).
     #[default]
     Full,
 }

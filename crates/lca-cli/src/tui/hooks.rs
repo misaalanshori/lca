@@ -117,6 +117,7 @@ pub(super) fn display_tuning(config: &lca_config::Config) -> lca_ui::state::Disp
         image_width_cells: config.terminal_image_width_cells().max(1) as u16,
         show_progress: config.terminal_show_progress(),
         clear_on_shrink: config.terminal_clear_on_shrink(),
+        show_hardware_cursor: config.ui_show_hardware_cursor(),
         auto_resize_images: config.images_auto_resize(),
         code_block_indent: config.markdown_code_block_indent().to_string(),
         mermaid: config.markdown_mermaid().to_string(),
