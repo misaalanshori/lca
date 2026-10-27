@@ -456,6 +456,10 @@ pub struct DisplayTuning {
     pub image_width_cells: u16,
     /// OSC 9;4 taskbar progress around turns.
     pub show_progress: bool,
+    /// Clear the rows content left behind when it shrinks (gh #538, pi's
+    /// `terminal.clearOnShrink`). Scrollback mode only: the alt screen repaints
+    /// its whole viewport anyway.
+    pub clear_on_shrink: bool,
     /// Downscale images before sending.
     pub auto_resize_images: bool,
     /// Code block content indent.
@@ -487,6 +491,7 @@ impl Default for DisplayTuning {
             show_images: true,
             image_width_cells: 60,
             show_progress: true,
+            clear_on_shrink: false,
             auto_resize_images: true,
             code_block_indent: "  ".to_string(),
             mermaid: "streaming".to_string(),

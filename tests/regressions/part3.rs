@@ -481,3 +481,10 @@ mod table_measures_rendered_cells;
 // overridable policy that replaces a silent data-loss bug.
 #[path = "367-enter-policy-on-shift-blind-terminals.rs"]
 mod enter_policy_on_shift_blind_terminals;
+
+// Gh #538: `terminal.clear_on_shrink` was implemented in the renderer (gh #372 bug 4)
+// but nothing in production called the setter, so the documented key was inert. The
+// wiring is one line; these rows pin the *path*, because a row that sets the flag by
+// hand is exactly how the gap survived a cycle.
+#[path = "538-clear-on-shrink-is-wired.rs"]
+mod clear_on_shrink_is_wired;
