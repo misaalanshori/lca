@@ -180,8 +180,8 @@ pub struct SecretPrompt {
 ///
 /// [`Self::Answer`] is the only variant that can carry something the user typed,
 /// and its value is already redacted where the step declared itself a secret -
-/// [`crate::login_step::complete_login_step`] is the sole constructor path, so a
-/// secret cannot reach the screen by being appended.
+/// `login_step`'s recorder is the sole construction path, so a secret cannot
+/// reach the screen by being appended.
 pub enum LoginHistoryEntry {
     /// A step that showed something and was not answered: the sign-in URL's
     /// page, the device code, a `waiting…` line the provider has moved past.
