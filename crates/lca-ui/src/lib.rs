@@ -13,6 +13,9 @@ mod chat_commands;
 mod chat_confirm;
 mod chat_ext_commands;
 mod chat_extman;
+// Gh #371 bug 3: who owns the IME anchor this frame.
+mod chat_focus;
+mod chat_host_dialog;
 mod chat_hub;
 mod chat_keys;
 pub(crate) mod run_wake;

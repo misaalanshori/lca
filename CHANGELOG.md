@@ -7,6 +7,17 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **The IME candidate window follows the field you are typing into** (gh #371 bug 3).
+  Exactly one caret marker may be live in a frame, and it belongs to whoever owns
+  the keyboard. With a picker, search or modal open the composer kept emitting its
+  own, so a CJK or emoji input method opened its candidate list at the inactive
+  bottom editor — or nowhere, when the overlay covered that column. Every
+  keyboard-owning surface now takes the caret: `/model`, `/resume`, the
+  `/extensions` filter, `/settings` search and inline edit, `/tree` bookmark
+  editing, the masked `/login` field, the `/mcp` sign-in field, host dialogs'
+  input and select, and the `Ctrl+R` transcript search. The caret is painted in the
+  composer's own form, and a surface with no text field (a `[y/n]` confirm, a
+  permission prompt) now carries none rather than the composer's.
 - **A multi-step login keeps its trail instead of clobbering it** (gh #398 gap 2).
   Every step used to clear the one before it, so by the time a login failed the URL
   you had been told to visit and the code you had been told to paste were gone —

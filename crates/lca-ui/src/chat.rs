@@ -349,7 +349,10 @@ impl Chat {
         editor.set_autocomplete(Arc::new(provider_for(&world.options)));
         // V2: the caret is painted into the row on colored themes; the
         // plain theme renders no escapes at all (FR-UI-5), so there the
-        // hardware cursor keeps the job it already had.
+        // hardware cursor keeps the job it already had. Gh #371 bug 3:
+        // `Chat::paints_caret` is the one answer, and every overlay field
+        // paints from it too, so no field can show a caret form the composer
+        // would not.
         editor.set_paint_caret(theme.colored);
         let mut transcript = Transcript::new();
         // gh #23: one key-hint line on the first frame (pi's startup shape, our

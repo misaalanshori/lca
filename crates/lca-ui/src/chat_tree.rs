@@ -265,6 +265,22 @@ impl TreePicker {
     /// `Theme::plain()` renders byte-identical to the old unstyled rows,
     /// so unit asserts read through `strip`.
     pub fn paint_rows(&self, theme: &crate::theme::Theme, width: usize) -> Vec<String> {
+        self.paint_rows_with_caret(theme, width, "")
+    }
+
+    /// [`Self::paint_rows`] with the label field's caret appended after the
+    /// editing buffer (gh #371 bug 3).
+    ///
+    /// The caller passes the caret text because the *ownership* answer lives on
+    /// the chat (one predicate, both sides reading it) while the buffer lives
+    /// here. An empty `caret` is every non-editing frame and every frame where
+    /// something else owns the keyboard in a higher layer.
+    pub fn paint_rows_with_caret(
+        &self,
+        theme: &crate::theme::Theme,
+        width: usize,
+        caret: &str,
+    ) -> Vec<String> {
         let pan = self.pan_offset(width);
         self.visible
             .iter()
@@ -279,7 +295,7 @@ impl TreePicker {
                     // Unclipped: the editing buffer still rides the row.
                     if self.editing.is_some() && at == self.selected {
                         line.push_str(&format!(
-                            " \u{2710} {}",
+                            " \u{2710} {}{caret}",
                             self.editing.as_deref().unwrap_or_default()
                         ));
                     }
@@ -294,8 +310,10 @@ impl TreePicker {
                 let painted = visible_width(&strip_terminal_sequences(&line));
                 let mut line = format!("{line}{}", " ".repeat(width.saturating_sub(painted)));
                 if self.editing.is_some() && at == self.selected {
+                    // Gh #371 bug 3: the caret rides at the end of the buffer -
+                    // the insertion point of a field that only ever appends.
                     line.push_str(&format!(
-                        " \u{2710} {}",
+                        " \u{2710} {}{caret}",
                         self.editing.as_deref().unwrap_or_default()
                     ));
                 }

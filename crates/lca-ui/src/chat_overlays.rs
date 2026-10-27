@@ -241,7 +241,20 @@ impl Chat {
             // truncate arithmetic sees the width the frame actually has.
             let row_width = usize::from(crate::render::picker_inner_width(width))
                 .saturating_sub(TREE_ROW_INSET);
-            for (row, line) in picker.paint_rows(&self.theme, row_width).iter().enumerate() {
+            // Gh #371 bug 3: the bookmark field's caret rides the selected row
+            // while it owns the keyboard.
+            let caret = if self.keyboard_owner()
+                == crate::chat_focus::Focus::Field(crate::chat_focus::Field::TreeLabel)
+            {
+                self.caret_field("", crate::chat_focus::Field::TreeLabel)
+            } else {
+                String::new()
+            };
+            for (row, line) in picker
+                .paint_rows_with_caret(&self.theme, row_width, &caret)
+                .iter()
+                .enumerate()
+            {
                 let cur = if row == picker.selected { '>' } else { ' ' };
                 body.push(format!(" {cur} {line}"));
             }
@@ -258,7 +271,15 @@ impl Chat {
             return true;
         }
         if let Some(picker) = &self.resume_picker {
-            let mut body = vec![format!("  search: {}", picker.query), String::new()];
+            let mut body = vec![
+                self.caret_row(
+                    "  search: ",
+                    &picker.query,
+                    "",
+                    crate::chat_focus::Field::ResumeSearch,
+                ),
+                String::new(),
+            ];
             if picker.matches.is_empty() {
                 body.push("  (no matches)".to_string());
             }
@@ -492,11 +513,19 @@ impl Chat {
             // row can never be selected.
             let visible = picker.visible();
             let mut selected_body;
+            // Gh #371 bug 3: the search row carries the caret only while the
+            // query is on screen (an empty query hides the row, so there the
+            // anchor belongs to the selected row instead - see the edit branch).
             if picker.query.is_empty() {
                 body.push(String::new());
                 selected_body = 2 + picker.selected;
             } else {
-                body.push(format!("  search: {}", picker.query));
+                body.push(self.caret_row(
+                    "  search: ",
+                    &picker.query,
+                    "",
+                    crate::chat_focus::Field::SettingsSearch,
+                ));
                 body.push(String::new());
                 selected_body = 3 + picker.selected;
             }
@@ -524,7 +553,18 @@ impl Chat {
                 if position == picker.selected
                     && let Some(buffer) = picker.editing.as_ref()
                 {
-                    body.push(format!(" {cur} {} = {}█", row.label, buffer));
+                    // Gh #371 bug 3: the inline buffer is the field being
+                    // typed into, so its caret rides here at the insertion
+                    // point. The `█` block that used to stand at the end of
+                    // the buffer is gone: a field that paints its own cursor
+                    // in its own shape is the second caret style the brief
+                    // forbids, and on the plain theme it was the *only* thing
+                    // standing where the hardware cursor belongs.
+                    body.push(format!(
+                        " {cur} {} = {}",
+                        row.label,
+                        self.caret_field(buffer, crate::chat_focus::Field::SettingsEdit)
+                    ));
                 } else {
                     // Gh #397: a project-overridable row shows the tri-state as
                     // a word (NFR-28: never colour alone), so "this project is
@@ -574,7 +614,15 @@ impl Chat {
         }
         if let Some(picker) = &self.model_picker {
             let active = self.model_label();
-            let mut body = vec![format!("  search: {}", picker.query), String::new()];
+            let mut body = vec![
+                self.caret_row(
+                    "  search: ",
+                    &picker.query,
+                    "",
+                    crate::chat_focus::Field::ModelSearch,
+                ),
+                String::new(),
+            ];
             if picker.models.is_empty() && picker.loading {
                 // gh #232: the background discovery is still running -
                 // a spinner line, never a blank box.
@@ -653,7 +701,15 @@ impl Chat {
             return true;
         }
         if let Some(hub) = &self.extension_hub {
-            let mut body = vec![format!("  filter: {}", hub.query), String::new()];
+            let mut body = vec![
+                self.caret_row(
+                    "  filter: ",
+                    &hub.query,
+                    "",
+                    crate::chat_focus::Field::ExtensionFilter,
+                ),
+                String::new(),
+            ];
             if hub.rows.is_empty() && hub.loading {
                 let frame = crate::separator::FRAMES
                     .get(hub.loading_frame % crate::separator::FRAMES.len());
@@ -711,8 +767,22 @@ impl Chat {
             // trap over SSH, so it gets the same copy hint (and the same in-place
             // confirmation) as the login wait.
             let auth_hint = self.mcp_sign_in_url().map(|url| self.auth_url_hint(&url));
-            let (title, body, hint) =
+            let (title, mut body, hint) =
                 crate::chat_mcp_render::mcp_overlay(manager, auth_hint.as_deref());
+            // Gh #371 bug 3: the sign-in screen's pasted-redirect field is the
+            // ninth keyboard-owning text field, and the same rule applies to it:
+            // while it owns the keyboard its caret rides at the insertion point,
+            // and `mcp_overlay` (whose file this cycle does not touch) draws the
+            // field as its last `  > value` row. Adding the caret here keeps the
+            // ownership predicate single - the painter still owns the field's
+            // *text*, this owns its *caret*.
+            if self.keyboard_owner()
+                == crate::chat_focus::Focus::Field(crate::chat_focus::Field::McpRedirect)
+                && let Some(row) = body.iter_mut().find(|row| row.starts_with("  > "))
+            {
+                let value = row.trim_start_matches("  > ").to_string();
+                *row = self.caret_row("  > ", &value, "", crate::chat_focus::Field::McpRedirect);
+            }
             self.picker_overlay(
                 viewport,
                 width,
@@ -791,103 +861,6 @@ impl Chat {
         false
     }
 
-    /// Draw one host-rendered dialog (gh #124): confirm is a yes/no
-    /// box, select is a filterable list on the pickers' chrome, input
-    /// is one line. The extension's name never appears - the chrome is
-    /// the host's, so the user always knows who is asking.
-    fn compose_dialog(
-        &self,
-        viewport: &mut [String],
-        width: u16,
-        height: u16,
-        modal: &crate::state::DialogModal,
-    ) {
-        use lca_protocol::UiDialog;
-        match &modal.exchange.dialog {
-            UiDialog::Confirm { title, message } => {
-                let body = vec![
-                    message.clone(),
-                    String::new(),
-                    "Yes [y] / No [n]".to_string(),
-                ];
-                super::render::overlay_box(viewport, width, height, title, &body, &self.theme);
-            }
-            UiDialog::Select { title, options, .. } => {
-                let rows = 10usize.min(height.saturating_sub(7) as usize).max(1);
-                let total = modal.matches.len();
-                let start = modal
-                    .selected
-                    .saturating_sub(rows - 1)
-                    .min(total.saturating_sub(rows));
-                let end = (start + rows).min(total);
-                let mut body = Vec::new();
-                if !modal.query.is_empty() {
-                    body.push(format!("> {}", modal.query));
-                }
-                let base = body.len();
-                for position in start..end {
-                    let marker = if position == modal.selected { '>' } else { ' ' };
-                    let option = modal
-                        .matches
-                        .get(position)
-                        .and_then(|index| options.get(*index))
-                        .map(String::as_str)
-                        .unwrap_or("");
-                    body.push(format!(" {marker} {option}"));
-                }
-                if modal.matches.is_empty() {
-                    body.push(" (no matches)".to_string());
-                }
-                let selected = (!modal.matches.is_empty())
-                    .then(|| base + modal.selected.saturating_sub(start));
-                super::render::overlay_box_selected(
-                    viewport,
-                    width,
-                    height,
-                    title,
-                    &body,
-                    &self.theme,
-                    selected,
-                );
-            }
-            UiDialog::Input { label, .. } => {
-                let shown = if modal.input.is_empty() {
-                    "(type a value)".to_string()
-                } else {
-                    modal.input.clone()
-                };
-                let body = vec![
-                    format!("  {shown}"),
-                    String::new(),
-                    "Enter submits; Esc cancels.".to_string(),
-                ];
-                super::render::overlay_box(viewport, width, height, label, &body, &self.theme);
-            }
-            UiDialog::Notify { .. } => {
-                // Never opens (the drain notices and answers); reaching
-                // here means a bug, and a stuck modal is worse than a
-                // dropped notice.
-            }
-        }
-    }
-
-    /// The waiting screen's body rows (R4, gh #398 gap 1).
-    ///
-    /// Plain when the step shows no sign-in URL. Otherwise a URL gets the
-    /// affordances that make it usable over SSH and in tmux, where the wrapped
-    /// rows cannot be mouse-selected cleanly and `OSC 8` click-through is
-    /// unavailable:
-    ///
-    /// - a hint naming the **live** copy binding (the registry, never a
-    ///   hardcoded `ctrl+x` - a rebind must change the hint);
-    /// - the short `Cmd/Ctrl+click to open` label **only** where the terminal
-    ///   forwards `OSC 8`, and then it *is* the link, so a reader clicks one
-    ///   word instead of dragging across three wrapped rows. Rendering that
-    ///   label on a terminal that cannot click would be a stale hint, which is
-    ///   the failure this project keeps closing.
-    ///
-    /// After a copy the hint row becomes the confirmation, in place, so the
-    /// reader who pressed the key sees it worked where they were looking.
     fn login_body(&self, label: &str) -> Vec<String> {
         let Some(url) = self.world.auth_url.as_deref() else {
             let current = vec![label.to_string(), String::new(), "esc cancels".to_string()];
@@ -971,7 +944,7 @@ impl Chat {
         // A host-rendered dialog owns the screen outright (gh #124):
         // nothing stacks under it while it is open.
         if let Some(modal) = &self.world.dialog {
-            self.compose_dialog(viewport, width, height, modal);
+            self.compose_host_dialog(viewport, width, height, modal);
         } else if let Some(label) = &self.world.login_waiting {
             // R4: a cancellable waiting state, so a slow OAuth callback is
             // visible and interruptible instead of freezing the app.
@@ -1069,22 +1042,24 @@ impl Chat {
                 &self.theme,
             );
         } else if let Some(secret) = &self.world.secret {
-            let shown = if secret.masked {
-                let masked = "*".repeat(secret.input.chars().count());
-                if masked.is_empty() {
-                    "(type the secret)".to_string()
-                } else {
-                    masked
-                }
-            } else if secret.input.is_empty() {
-                "(type a value)".to_string()
+            // Gh #371 bug 3: the marker sits at the **typed value's** insertion
+            // point, which for a masked field is the end of the asterisks - not
+            // the end of the secret. The mask is built first and the caret is
+            // appended to it, so the anchor follows what the reader can see and
+            // the plaintext never reaches the frame (secrets hygiene, and what
+            // #411's inspection gate established).
+            let (shown, placeholder) = if secret.masked {
+                (
+                    "*".repeat(secret.input.chars().count()),
+                    "(type the secret)",
+                )
             } else {
-                secret.input.clone()
+                (secret.input.clone(), "(type a value)")
             };
             let current = vec![
                 secret.label.clone(),
                 String::new(),
-                format!("  {shown}"),
+                self.caret_row("  ", &shown, placeholder, crate::chat_focus::Field::Secret),
                 String::new(),
                 "Enter stores it; Esc cancels.".to_string(),
             ];

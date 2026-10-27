@@ -174,6 +174,9 @@ impl Chat {
         // The search readout (gh #239, FR-UI-12): editor chrome
         // rendered from state — the query and match count live here,
         // never in history, and the catch-all notice row is gone.
+        // Gh #371 bug 3: while it owns the keyboard its caret rides at the
+        // insertion point; the match count follows the caret so the caret is
+        // always on the last typed character.
         if let Some(query) = &self.search {
             let counts = if query.is_empty() {
                 String::new()
@@ -186,7 +189,14 @@ impl Chat {
                     self.search_matches.len()
                 )
             };
-            dock.push((self.theme.dim)(&format!("  /{query}{counts}")));
+            dock.push((self.theme.dim)(
+                &self
+                    .caret_row("  /", query, "", crate::chat_focus::Field::TranscriptSearch)
+                    .replace(
+                        lca_tui::engine::core::CURSOR_MARKER,
+                        &format!("{}{counts}", lca_tui::engine::core::CURSOR_MARKER),
+                    ),
+            ));
         }
 
         // The pending-messages band (ADR-0038): queued commands show as
@@ -271,8 +281,21 @@ impl Chat {
         // The editor widget already pads by `padding_x` and paints
         // its own caret inside, so the dock adds exactly the frame's
         // cell; the marker rides inside, so geometry follows it.
+        //
+        // Gh #371 bug 3: the marker belongs to whoever owns the keyboard, and
+        // while an overlay or the transcript search holds it the composer is
+        // the *inactive* field. Its marker is stripped here, after the rows are
+        // composed, rather than by not drawing the caret at all - the painted
+        // caret is what a reader uses to find their place in the buffer they
+        // are coming back to (ADR-0037), and the plain theme has no marker to
+        // strip. `keyboard_owner` is the same predicate the overlay fields
+        // read, so the frame can carry neither two markers nor none.
+        let composer_owns = self.keyboard_owner() == crate::chat_focus::Focus::Composer;
         let editor_rows = self.editor.render(width.saturating_sub(1));
-        for row in editor_rows.into_iter().skip(hidden_above).take(visible) {
+        for mut row in editor_rows.into_iter().skip(hidden_above).take(visible) {
+            if !composer_owns {
+                row = row.replace(lca_tui::engine::core::CURSOR_MARKER, "");
+            }
             dock.push(format!(" {row}"));
         }
         dock.push(

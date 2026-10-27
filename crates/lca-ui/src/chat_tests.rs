@@ -1155,3 +1155,8 @@ mod compaction_tests;
 // the line ceiling.
 #[path = "chat_thinking_save_tests.rs"]
 mod thinking_save_tests;
+
+// Gh #371 bug 3: exactly one `CURSOR_MARKER` per frame, owned by whichever
+// field has the keyboard (the IME anchor).
+#[path = "chat_focus_tests.rs"]
+mod focus_tests;
