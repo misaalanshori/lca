@@ -268,13 +268,13 @@ pub struct AltScreenRenderer {
     pub wheel_auto: bool,
     /// The velocity state for `wheel_auto` (gh #206).
     wheel_accel: WheelAccel,
-    /// The clock `wheel_auto` measures gaps against (gh #206): the
-    /// first wheel event starts it.
+    /// The clock `wheel_auto` measures gaps against (gh #206); the first event
+    /// starts it.
     wheel_epoch: Option<std::time::Instant>,
     last_click: Option<(std::time::Instant, u16, u16)>,
     click_count: u8,
-    /// While dragging, the edge the pointer sits on: `-1` top, `1` bottom
-    /// (R6's edge auto-scroll). `None` when not at an edge.
+    /// While dragging, the edge the pointer sits on: `-1` top, `1` bottom (R6's
+    /// edge auto-scroll); `None` when not at an edge.
     drag_edge: Option<i8>,
     /// The cell a press landed on, for click-vs-drag (R6's link open).
     press_cell: Option<(u16, u16)>,
@@ -284,21 +284,20 @@ pub struct AltScreenRenderer {
     clicked_cell: Option<(u16, u16)>,
     /// The OSC-8 URL a completed click landed on, for the loop to open.
     clicked_link: Option<String>,
-    /// Whether the pointer hovers the scrollbar (gh #164): the frame
-    /// paints the thumb solid while set. Cleared whenever an overlay
-    /// covers the viewport (pi's `stopScrollbarHover`).
+    /// Whether the pointer hovers the scrollbar (gh #164); an overlay covering the
+    /// viewport clears it (pi's `stopScrollbarHover`).
     scrollbar_hover: bool,
-    /// Whether a scrollbar drag is active (gh #164): motion and release
-    /// belong to the drag, never to text selection. The grab math lives
-    /// with the geometry in the interface; the renderer only suppresses.
+    /// Whether a scrollbar drag is active (gh #164): motion and release belong to
+    /// the drag, never to selection. The grab math lives with the geometry in the
+    /// interface; the renderer only suppresses.
     scrollbar_drag: bool,
-    /// The whole transcript this session has, as of the last frame (gh #374
-    /// gap 1): what [`leave`](Self::leave) hands back to the scrollback.
+    /// The whole transcript this session has, as of the last frame (gh #374 gap
+    /// 1): what [`leave`](Self::leave) hands back to the scrollback.
     ///
-    /// Not the rendered frame - that is `previous`, and it holds exactly
-    /// `height` rows. The host owns the document (it is the thing that can
-    /// compose the transcript above the viewport), so it hands it over every
-    /// frame and the renderer keeps the latest one for the exit.
+    /// Not the rendered frame - that is `previous`, and it holds exactly `height`
+    /// rows. The host owns the document (it is the thing that can compose the
+    /// transcript above the viewport), so it hands it over every frame and the
+    /// renderer keeps the latest one for the exit.
     document: Vec<String>,
 }
 
@@ -748,6 +747,7 @@ impl AltScreenRenderer {
             };
             self.last_click = Some((now, col, row));
             self.press_cell = Some((col, row));
+            // The press captures the word/line range (gh #374 gap 3).
             let line = self.previous.get(row as usize).cloned().unwrap_or_default();
             let granularity = Granularity::from_click_count(self.click_count);
             self.selection
@@ -1188,12 +1188,13 @@ mod wheel_tests {
     }
 }
 
-// Gh #374 gap 1's exit-handoff rows, split out for the 1,200-line ceiling.
+// The gh #374 rows, split out for the 1,200-line ceiling (gaps 1-3).
+#[cfg(test)]
+#[path = "alt_screen/backward_drag_tests.rs"]
+mod backward_drag_tests;
 #[cfg(test)]
 #[path = "alt_screen/exit_handoff_tests.rs"]
 mod exit_handoff_tests;
-
-// Gh #374 gap 2's focus rows, likewise.
 #[cfg(test)]
 #[path = "alt_screen/focus_tests.rs"]
 mod focus_tests;

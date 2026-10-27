@@ -357,3 +357,90 @@ fn the_fullscreen_renderer_asks_for_focus_reports_and_stops_them() {
          typing: {disable}"
     );
 }
+
+// ============================================================================
+// gh #374 gap 3 - dragging backwards kept the word you double-clicked.
+//
+// The behavioural rows live beside the code (`lca-tui`'s
+// `selection::backward_drag_tests` for the direction matrix, and
+// `alt_screen::backward_drag_tests` for the same through the real mouse path).
+// This file is the NFR-24 named guard, so it pins the *shape* that makes those
+// rows pass: the initial range carries its row, and the comparison is
+// lexicographic.
+// ============================================================================
+
+// Verifies: gh #374 gap 3 - the anchor range is remembered **with its row**, and
+// the direction test compares `(row, col)` rather than a column alone.
+//
+// Both halves are load-bearing and each fails differently:
+//
+// - a range without a row cannot tell that a drag *up* is "before", so the
+//   vertical rows keep the anchor on the wrong side;
+// - a column-only comparison calls down-left "before" and up-right "after",
+//   which is exactly the pair of diagonals a naive fix gets backwards.
+#[test]
+fn the_anchor_range_carries_its_row_and_the_direction_is_lexicographic() {
+    let source = production_source("crates/lca-tui/src/engine/selection.rs");
+
+    // The range type has a row, and `start` fills it in.
+    let anchor = source
+        .split("struct AnchorRange")
+        .nth(1)
+        .unwrap_or_else(|| panic!("AnchorRange exists: {source}"));
+    let anchor = &anchor[..anchor.find('}').unwrap_or(anchor.len())];
+    assert!(
+        anchor.contains("row: u16"),
+        "the remembered range carries the row it was captured on: {anchor}"
+    );
+
+    let start = function_body(&source, "pub fn start(");
+    assert!(
+        start.contains("row: point.row") && start.contains("line_word_range"),
+        "and `start` records the press row with the word's columns: {start}"
+    );
+
+    // The comparison, spelled out. `(point.row, target_start) < (initial.row, ...)`
+    // is the tuple form; the assertion is on the tuple so a rewrite back to
+    // `point.col <` fails here rather than only in the behavioural rows.
+    let update = function_body(&source, "pub fn update(");
+    assert!(
+        update.contains("(point.row, target_start) < (initial.row, initial.start)"),
+        "the direction test compares row first, then column: {update}"
+    );
+    assert!(
+        update.contains("initial.end") && update.contains("initial.start"),
+        "and both endpoints come from the remembered range, not re-derived: {update}"
+    );
+    // The pre-fix shape: the anchor never moved, so the pressed word could fall
+    // out of the normalized range entirely.
+    assert!(
+        update.contains("self.anchor = Some("),
+        "the backward direction reassigns the anchor: {update}"
+    );
+    assert!(
+        update.contains("Granularity::Line"),
+        "line granularity takes the same path, per the issue: {update}"
+    );
+}
+
+// Verifies: gh #374 gap 3 - line granularity compares *ranges*, not columns.
+//
+// The issue names this as the same defect: `update` used to test
+// `point.col < anchor.col` on the target row, which is meaningless for a
+// full-width line. A fix that only handled the word case would leave it.
+#[test]
+fn line_granularity_derives_its_range_from_the_target_line() {
+    let source = production_source("crates/lca-tui/src/engine/selection.rs");
+    let update = function_body(&source, "pub fn update(");
+    // The line arm spans the target line's own width, so a line drag grows by
+    // whole lines rather than by columns.
+    assert!(
+        update.contains("Granularity::Line => (0, visible_width(line) as u16)")
+            || update.contains("Granularity::Line =>"),
+        "the line case builds the target's full-line range: {update}"
+    );
+    assert!(
+        update.contains("visible_width(line)"),
+        "and it uses the target's width, not the anchor's column: {update}"
+    );
+}

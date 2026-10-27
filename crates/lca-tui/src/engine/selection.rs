@@ -41,6 +41,28 @@ pub struct SelectionPoint {
     pub col: u16,
 }
 
+/// The word or line a press grabbed, remembered for the whole drag (gh #374
+/// gap 3): pi's `selectionInitialRange`.
+///
+/// The anchor word is the **reference frame** of a word/line drag: both a
+/// forward and a backward drag have to keep it inside the normalized range, so
+/// its columns have to be remembered rather than recomputed. Re-running word
+/// detection on the drag's current line cannot reproduce them - which is exactly
+/// what made the drag's direction matter, and what deselected the word the user
+/// double-clicked.
+///
+/// The row is part of the range for the same reason on the vertical axis: a drag
+/// up has to be recognised as "before" even when its column is larger.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AnchorRange {
+    /// The row the range is on.
+    row: u16,
+    /// First column, inclusive.
+    start: u16,
+    /// Last column, exclusive.
+    end: u16,
+}
+
 /// The active selection state.
 #[derive(Debug, Clone, Default)]
 pub struct Selection {
@@ -50,8 +72,9 @@ pub struct Selection {
     pub focus: Option<SelectionPoint>,
     /// The granularity.
     pub granularity: Granularity,
-    /// The initial word/line range at the anchor.
-    anchor_range: Option<(u16, u16)>,
+    /// The word/line range the press grabbed, and the row it is on: the
+    /// reference frame both drag directions are measured against.
+    anchor_range: Option<AnchorRange>,
     /// Whether a press is still unreleased — the gesture is **in progress**.
     ///
     /// Not "is anything selected" and not "did the pointer move": a press that
@@ -137,20 +160,31 @@ impl Selection {
         self.click_count = click_count;
         self.press_active = true;
         let range = match granularity {
-            Granularity::Word => Some(line_word_range(line, point.col)),
-            Granularity::Line => Some((0, visible_width(line) as u16)),
+            Granularity::Word => {
+                let (start, end) = line_word_range(line, point.col);
+                Some(AnchorRange {
+                    row: point.row,
+                    start,
+                    end,
+                })
+            }
+            Granularity::Line => Some(AnchorRange {
+                row: point.row,
+                start: 0,
+                end: visible_width(line) as u16,
+            }),
             Granularity::Char => None,
         };
         self.anchor_range = range;
         match range {
-            Some((start, end)) => {
+            Some(range) => {
                 self.anchor = Some(SelectionPoint {
-                    row: point.row,
-                    col: start,
+                    row: range.row,
+                    col: range.start,
                 });
                 self.focus = Some(SelectionPoint {
-                    row: point.row,
-                    col: end,
+                    row: range.row,
+                    col: range.end,
                 });
             }
             None => {
@@ -160,30 +194,66 @@ impl Selection {
         }
     }
 
-    /// Update the focus during a drag, expanding a word/line range.
+    /// Update the focus during a drag (gh #374 gap 3: in **both** directions).
+    ///
+    /// Word and line drags are measured against the remembered range, not
+    /// against the drag's current line: the target's own word/line range is
+    /// computed, and where it falls relative to the anchor range decides which
+    /// end of the anchor range is held.
+    ///
+    /// - **Before** the anchor range (row first, then column, so a drag up
+    ///   counts whatever its column): hold the anchor's *far* end and point the
+    ///   focus at the target's start.
+    /// - **Otherwise**: hold the anchor's *start* and point the focus at the
+    ///   target's end.
+    ///
+    /// That is pi's `updateSelectionFocus` (`tui-alt-screen.ts:1220`). The
+    /// lexicographic comparison is the whole reason the diagonals work: a
+    /// column-only test calls a down-left drag "before" and an up-right drag
+    /// "after", and the anchor word leaves the range in both.
+    ///
+    /// Because the endpoints are derived from the stored range, a drag that
+    /// reverses back past the anchor restores exactly what a forward-only drag
+    /// to the same cell would have produced - there is nothing to re-derive and
+    /// so nothing to drift.
+    ///
+    /// Character granularity has no anchor range and keeps point-to-point
+    /// semantics.
     pub fn update(&mut self, point: SelectionPoint, line: &str) {
         if !self.press_active {
             return;
         }
-        let focus = match (self.granularity, self.anchor_range) {
-            (Granularity::Word, Some(range)) => SelectionPoint {
-                row: point.row,
-                col: if point.col < range.0 {
-                    range.0
-                } else {
-                    range.1
-                },
-            },
-            (Granularity::Line, Some(_)) => SelectionPoint {
-                row: point.row,
-                col: if point.col < (self.anchor.map(|a| a.col).unwrap_or(0)) {
-                    0
-                } else {
-                    visible_width(line) as u16
-                },
-            },
-            _ => point,
+        let Some(initial) = self.anchor_range else {
+            self.focus = Some(point);
+            return;
         };
+        let (target_start, target_end) = match self.granularity {
+            Granularity::Line => (0, visible_width(line) as u16),
+            // `Char` never has an anchor range, so this arm is the word case.
+            Granularity::Word | Granularity::Char => line_word_range(line, point.col),
+        };
+        let before = (point.row, target_start) < (initial.row, initial.start);
+        let (anchor_col, focus) = if before {
+            (
+                initial.end,
+                SelectionPoint {
+                    row: point.row,
+                    col: target_start,
+                },
+            )
+        } else {
+            (
+                initial.start,
+                SelectionPoint {
+                    row: point.row,
+                    col: target_end,
+                },
+            )
+        };
+        self.anchor = Some(SelectionPoint {
+            row: initial.row,
+            col: anchor_col,
+        });
         self.focus = Some(focus);
     }
 
@@ -463,3 +533,8 @@ mod tests {
         assert_eq!(sel.active_text(&lines()), "");
     }
 }
+
+// Gh #374 gap 3's direction matrix, split out for the 1,200-line ceiling.
+#[cfg(test)]
+#[path = "selection/backward_drag_tests.rs"]
+mod backward_drag_tests;

@@ -28,6 +28,14 @@ range to restore. Returning to the window resumes nothing: no scroll
 drag, no auto-scroll, no press. A copy works the same either way, so
 `Alt+Tab` → paste still gets the bytes.
 
+**A double- or triple-click is an anchor, whichever way you drag** (gh #374
+gap 3). Double-click a word and drag left, or up to a previous line: the word
+you clicked stays selected and the range grows from its far edge, so the copy
+runs from the word you dragged to and ends with the word you grabbed. Dragging
+back past it again restores exactly what dragging straight there would have
+given. A triple-click behaves the same way by whole lines. Double-clicking and
+then dragging *towards* the far side is unchanged.
+
 **Exiting fullscreen hands the whole session back to the terminal**
 (gh #374 gap 1). Quitting while in fullscreen (`/exit`, `Ctrl+D`)
 writes every row the session has — not just the ones on screen — into

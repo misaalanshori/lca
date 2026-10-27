@@ -18,6 +18,16 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **Dragging backwards keeps the word you double-clicked** (gh #374 gap 3).
+  Double-click a word and drag left, or up to a previous line, and the word
+  vanished: `Selection::update` adjusted only the focus column against the
+  current line's copy of the anchor range, never flipping `anchor`, so the
+  grabbed word fell out of the normalized range and the copy was empty. The
+  initial word/line range is now remembered with its row (pi's
+  `selectionInitialRange`) and the endpoints are derived from it, comparing
+  `(row, column)` so a drag up counts as backwards whatever its column. Dragging
+  back past the anchor restores exactly what a straight drag would give. Line
+  granularity takes the same path; character granularity is unchanged.
 - **`Alt+Tab` keeps the selection you were about to paste** (gh #374 gap 2).
   Drag-select a command in fullscreen, release, then switch to a browser to paste,
   and the terminal reports the focus change *after* your release — which LCA read as
