@@ -21,8 +21,7 @@ impl Chat {
                 if let Some(cancel) = self.world.options.hooks.cancel_login.clone() {
                     cancel();
                 }
-                self.world.login_waiting = None;
-                self.say("login cancelled".to_string());
+                self.end_login_with("login cancelled");
             }
             return Some(Action::Continue);
         }
@@ -48,11 +47,23 @@ impl Chat {
             .or_else(|| self.handle_panel(data, key))
     }
 
+    /// End the login flow: spill its trail to the transcript, then say why
+    /// (gh #398 gap 2).
+    ///
+    /// A cancel is the one ending where nothing else would be said, so without
+    /// the trail a cancelled login and a hung one would look the same.
+    pub(super) fn end_login_with(&mut self, notice: &str) {
+        if let Some(trail) = crate::state::end_login(&mut self.world) {
+            self.say(trail);
+        }
+        self.say(notice.to_string());
+    }
+
     /// The `/login` list picker, while open.
     fn handle_login_picker(&mut self, key: Option<&str>) -> Option<Action> {
         let mut prompt = self.world.picker.take()?;
         match key {
-            Some("escape") => self.say("login cancelled".to_string()),
+            Some("escape") => self.end_login_with("login cancelled"),
             Some("up" | "k") => {
                 prompt.selected = prompt.selected.saturating_sub(1);
                 self.world.picker = Some(prompt);
@@ -86,14 +97,22 @@ impl Chat {
             return Some(Action::Continue);
         }
         match key {
-            Some("escape") => self.say("login cancelled".to_string()),
+            Some("escape") => self.end_login_with("login cancelled"),
             Some("enter") => {
                 let typed = std::mem::take(&mut prompt.input);
                 if typed.is_empty() {
                     self.say("nothing was entered".to_string());
-                } else if let Some(complete) = self.world.options.complete_login.clone() {
-                    let next = complete(&prompt.provider, &typed);
-                    self.apply_login_next(next);
+                } else {
+                    // Gh #398 gap 2: the answered step joins the trail *before*
+                    // the next step arrives, because applying the next step is
+                    // what used to clear it. Recorded outside the `complete_login`
+                    // branch too: a host that installs no seam still had its step
+                    // answered, and the trail is the interface's own record.
+                    crate::state::record_login_answer(&mut self.world, &prompt, &typed);
+                    if let Some(complete) = self.world.options.complete_login.clone() {
+                        let next = complete(&prompt.provider, &typed);
+                        self.apply_login_next(next);
+                    }
                 }
             }
             Some("backspace") => {

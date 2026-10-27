@@ -4,8 +4,8 @@
 use std::path::PathBuf;
 
 use crate::state::{
-    BugReview, DialogModal, GrantPrompt, PermissionModal, PickerPrompt, SecretPrompt, SwitchPrompt,
-    UiOptions,
+    BugReview, DialogModal, GrantPrompt, LoginHistoryEntry, PermissionModal, PickerPrompt,
+    SecretPrompt, SwitchPrompt, UiOptions,
 };
 /// The ui-world state: the options, the open modals, and the small flags
 /// the interface tracks across keys. No buffer, no transcript, no editing.
@@ -48,6 +48,20 @@ pub struct UiState {
     /// **transient** - it reuses the toast window so the two copy notices
     /// fade on the same clock instead of inventing a second timer.
     pub url_copied_at: Option<std::time::Instant>,
+    /// The steps of a multi-step login that have already finished, oldest
+    /// first (gh #398 gap 2).
+    ///
+    /// A step that completes becomes **history** and the next prompt appears
+    /// beneath it, so the modal reads as a transcript of the flow. Before this,
+    /// each step cleared the previous one and a failure left the user without
+    /// the URL they were told to visit or the code they were told to paste - the
+    /// one thing that makes a failure debuggable is being able to point at the
+    /// step that failed.
+    ///
+    /// One list rather than one field per kind, because every value a step
+    /// collects is the same shape once it is behind you (a prompt and what was
+    /// typed), and a step kind added later costs nothing here.
+    pub login_history: Vec<LoginHistoryEntry>,
     /// Ctrl+C seen once on an idle prompt.
     pub ctrl_c_armed: bool,
     /// The open stepped settings wizard, if any (gh #397): a related group
@@ -90,6 +104,7 @@ impl UiState {
             login_waiting: None,
             auth_url: None,
             url_copied_at: None,
+            login_history: Vec::new(),
             ctrl_c_armed: false,
             wizard: None,
             panel_open: false,
