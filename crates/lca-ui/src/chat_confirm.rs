@@ -15,10 +15,10 @@ impl Chat {
                     || "nothing was changed".to_string(),
                     |confirm| confirm(&prompt.provider, &prompt.host),
                 );
-                self.say(crate::state::sanitize_block(&message));
+                self.end_login_with(&crate::state::sanitize_block(&message));
             }
             Some("n" | "N" | "escape") => {
-                self.say(format!("kept {} without the ad hoc grant", prompt.host));
+                self.end_login_with(&format!("kept {} without the ad hoc grant", prompt.host));
             }
             _ => self.world.grant = Some(prompt),
         }

@@ -890,14 +890,31 @@ impl Chat {
     /// reader who pressed the key sees it worked where they were looking.
     fn login_body(&self, label: &str) -> Vec<String> {
         let Some(url) = self.world.auth_url.as_deref() else {
-            return vec![label.to_string(), String::new(), "esc cancels".to_string()];
+            let current = vec![label.to_string(), String::new(), "esc cancels".to_string()];
+            return self.with_trail(current);
         };
-        vec![
+        let current = vec![
             label.to_string(),
             String::new(),
             self.auth_url_hint(url),
             "esc cancels".to_string(),
-        ]
+        ];
+        self.with_trail(current)
+    }
+
+    /// Put the finished steps above `current`, keeping the current step visible
+    /// (gh #398 gap 2).
+    ///
+    /// The windowing is [`crate::login_trail::fit_body`]'s, so the trail is
+    /// measured wrapped and trimmed from its **oldest** end - the newest steps are
+    /// the ones a failure is read against, and the live prompt is never trimmed
+    /// at all.
+    fn with_trail(&self, current: Vec<String>) -> Vec<String> {
+        let trail = crate::login_trail::trail_rows(&self.world.login_history, &self.theme);
+        if trail.is_empty() {
+            return current;
+        }
+        crate::login_trail::fit_body(trail, current, self.world.size.0, self.world.size.1)
     }
 
     /// The row under the sign-in URL: the copy confirmation when fresh, else
@@ -971,6 +988,12 @@ impl Chat {
                 .saturating_sub(rows)
                 .min(total.saturating_sub(rows));
             let end = (start + rows).min(total);
+            // The trail is not merged into a picker's body: `picker_overlay`
+            // windows `body.len() - 2` rows as *items*, so prepending history
+            // would make finished steps scrollable as choices. In every flow that
+            // reaches this picker it is the first step, so the trail is empty.
+            // shortcut: a provider that re-offers the picker mid-flow loses the
+            // trail above it; merge through a header row if that ever happens.
             let mut body = vec!["Sign in with:".to_string(), String::new()];
             for (index, option) in picker.options.iter().enumerate().take(end).skip(start) {
                 let cur = if index == picker.selected { '>' } else { ' ' };
@@ -995,13 +1018,18 @@ impl Chat {
                 Some(2 + picker.selected.saturating_sub(start)),
             );
         } else if let Some(grant) = &self.world.grant {
-            let body = vec![
+            let current = vec![
                 grant.prompt.clone(),
                 String::new(),
                 format!("  connect to {}", grant.host),
                 String::new(),
                 "Allow [y] / Deny [n]".to_string(),
             ];
+            // Gh #398 gap 2: the consent is a *step of the flow*, not a separate
+            // screen - it names the host the flow just collected, so the trail
+            // above it is what makes the host checkable against what the user
+            // typed.
+            let body = self.with_trail(current);
             overlay_box(
                 viewport,
                 width,
@@ -1053,13 +1081,15 @@ impl Chat {
             } else {
                 secret.input.clone()
             };
-            let body = vec![
+            let current = vec![
                 secret.label.clone(),
                 String::new(),
                 format!("  {shown}"),
                 String::new(),
                 "Enter stores it; Esc cancels.".to_string(),
             ];
+            // Gh #398 gap 2: the steps that already happened stay above this one.
+            let body = self.with_trail(current);
             overlay_box(
                 viewport,
                 width,

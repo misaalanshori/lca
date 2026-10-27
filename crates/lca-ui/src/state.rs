@@ -175,6 +175,31 @@ pub struct SecretPrompt {
     pub masked: bool,
 }
 
+/// A finished login step, kept so the flow reads as a transcript (gh #398
+/// gap 2).
+///
+/// [`Self::Answer`] is the only variant that can carry something the user typed,
+/// and its value is already redacted where the step declared itself a secret -
+/// `login_step`'s recorder is the sole construction path, so a secret cannot
+/// reach the screen by being appended.
+pub enum LoginHistoryEntry {
+    /// A step that showed something and was not answered: the sign-in URL's
+    /// page, the device code, a `waiting…` line the provider has moved past.
+    Message(String),
+    /// A step the user answered. `value` is what to show - the typed text, or
+    /// asterisks when [`SecretPrompt::masked`] was set.
+    Answer {
+        /// The question this answered.
+        prompt: String,
+        /// What to show as the user's input.
+        value: String,
+        /// The answer in the clear, kept only for a step that was **not**
+        /// masked. A masked step stores `None`, so the secret does not survive
+        /// anywhere in the interface once the field is gone.
+        plain: Option<String>,
+    },
+}
+
 /// The open list picker (the `/login` flow).
 pub struct PickerPrompt {
     /// The choices, in order.
@@ -293,7 +318,7 @@ pub fn display_path(path: &str) -> String {
 
 // The login-step application (and the sign-in-URL capture that goes with it)
 // lives in `login_step.rs` after the ceiling split; the public path is unchanged.
-pub use crate::login_step::apply_login_next;
+pub use crate::login_step::{apply_login_next, end_login, record_login_answer, take_login_trail};
 
 /// A streamed `!`/`!!` shell event (R4).
 #[derive(Debug, Clone)]

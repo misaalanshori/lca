@@ -16,7 +16,16 @@ here? Install first ([installation](installation.md)), then come back.
 3. If the endpoint is not covered by the extension's manifest, a
    consent prompt names the exact host and asks once; allowing it
    persists an ad hoc grant for the project.
-4. `/model` filters the live model list from that endpoint; pick one.
+4. **A multi-step login keeps its trail.** Each finished step stays on
+   the modal above the next one, and a value you typed is shown as
+   input (`> value`) rather than as prose — so if a step fails you can
+   still read the URL you were told to visit and the code you were
+   told to paste. A step the flow collects **as a secret** (the API
+   key) is shown as asterisks and is never stored in the clear, so it
+   cannot reach the scrollback or the transcript. When the flow ends —
+   success, failure, or `Esc` — the trail moves into the transcript,
+   where scrolling cannot lose it.
+5. `/model` filters the live model list from that endpoint; pick one.
    `Ctrl+P` cycles enabled models (`Ctrl+Shift+P` or `Alt+P` cycles
    back), `Ctrl+S` saves the highlighted one as the default every new
    session starts on.
