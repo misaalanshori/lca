@@ -75,6 +75,11 @@ pub struct Chat {
     pub editor: Editor,
     /// The footer data (cwd, session).
     pub footer: Footer,
+    /// The document the last `viewport` composed (gh #374 gap 1): written there,
+    /// taken by [`Chat::take_document`]. One `sections` walk serves both the
+    /// frame and the fullscreen exit dump; see `take_document` for why it is not
+    /// simply recomposed.
+    pub(crate) document: std::cell::RefCell<Vec<String>>,
     /// The keybinding registry: app actions are looked up here.
     ///
     /// **Not `pub`, and that is the fix for gh #332.** It used to be `pub`, so an
@@ -466,6 +471,7 @@ impl Chat {
             model_refresh: None,
             hyperlinks: lca_tui::engine::terminal::supports_hyperlinks(),
             startup_header,
+            document: std::cell::RefCell::new(Vec::new()),
         };
         chat.transcript.set_thinking_visibility(thinking_visibility);
         // gh #12: the host's collected pre-parse transforms ride the
@@ -653,27 +659,6 @@ impl Chat {
     /// scrollable, and permanent — never in editor chrome.
     pub fn say(&mut self, text: impl Into<String>) {
         self.transcript.push_notice(text);
-    }
-
-    /// Float it top-right (gh #239): a transient confirmation or
-    /// host diagnostic, fading after [`TOAST_SECS`] seconds. Newest
-    /// last; past [`TOAST_MAX`] the oldest drops.
-    pub fn toast(&mut self, text: impl Into<String>) {
-        self.toasts.push(Toast {
-            text: text.into(),
-            until: std::time::Instant::now() + std::time::Duration::from_secs(TOAST_SECS),
-        });
-        while self.toasts.len() > TOAST_MAX {
-            self.toasts.remove(0);
-        }
-    }
-
-    /// Drop faded toasts. Returns `true` when the frame changed.
-    pub fn expire_toasts(&mut self) -> bool {
-        let now = std::time::Instant::now();
-        let before = self.toasts.len();
-        self.toasts.retain(|toast| toast.until > now);
-        self.toasts.len() != before
     }
 
     /// The latest transcript notice (gh #239: command results land

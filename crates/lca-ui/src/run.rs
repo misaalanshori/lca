@@ -19,13 +19,13 @@ use lca_tui::engine::terminal::{InputHandler, ResizeHandler, Terminal};
 
 use crate::chat::Chat;
 
-use crate::chat_mouse::{PickerHit, ScrollbarHit};
+use crate::chat_mouse::PickerHit;
 use crate::chat_poll::{poll_login, poll_pending_models, tick_permission};
 use crate::chat_render::ClickOutcome;
+use crate::run_mouse::handle_mouse_event;
 use crate::state::{
     Action, DialogExchange, PermissionModal, PromptRequest, TurnChannels, TurnRunner, UiOptions,
 };
-use lca_tui::engine::core::{MouseButton, MouseEvent};
 
 /// The active screen renderer.
 pub(crate) enum Screen {
@@ -38,7 +38,7 @@ pub(crate) enum Screen {
 use crate::copy_ladder::{CopyReport, copy_through_ladder};
 
 impl Screen {
-    fn is_fullscreen(&self) -> bool {
+    pub(crate) fn is_fullscreen(&self) -> bool {
         matches!(self, Screen::Alt(_))
     }
 
@@ -61,22 +61,29 @@ impl Screen {
         }
     }
 
-    fn scroll(&self) -> u16 {
+    pub(crate) fn scroll(&self) -> u16 {
         match self {
             Screen::Alt(r) => r.scroll,
             Screen::Main(_) => 0,
         }
     }
 
+    /// Paint the frame. `document` is the whole session as rows - the alt screen
+    /// keeps it for the exit handoff (gh #374 gap 1); the main screen ignores it,
+    /// because its append contract already wrote every row as it went.
     fn render(
         &mut self,
         term: &mut dyn Terminal,
         lines: Vec<String>,
+        document: Vec<String>,
         width: u16,
         height: u16,
     ) -> Option<(u16, u16)> {
         match self {
-            Screen::Alt(r) => r.render_lines(term, lines, width, height),
+            Screen::Alt(r) => {
+                r.set_document(document);
+                r.render_lines(term, lines, width, height)
+            }
             Screen::Main(r) => r.render(term, lines, width, height),
         }
     }
@@ -88,7 +95,7 @@ impl Screen {
         }
     }
 
-    fn copy_on_select(&self) -> bool {
+    pub(crate) fn copy_on_select(&self) -> bool {
         matches!(self, Screen::Alt(r) if r.copy_on_select)
     }
 
@@ -121,20 +128,20 @@ impl Screen {
         }
     }
 
-    fn set_scrollbar(&mut self, scrollbar: Option<(u16, u16)>) {
+    pub(crate) fn set_scrollbar(&mut self, scrollbar: Option<(u16, u16)>) {
         if let Screen::Alt(r) = self {
             r.set_scrollbar(scrollbar);
         }
     }
 
-    fn set_scroll(&mut self, scroll: u16) {
+    pub(crate) fn set_scroll(&mut self, scroll: u16) {
         if let Screen::Alt(r) = self {
             r.scroll = scroll;
         }
     }
 
     /// Mirror the scrollbar hover flag into the renderer (gh #164).
-    fn set_scrollbar_hover(&mut self, hover: bool) {
+    pub(crate) fn set_scrollbar_hover(&mut self, hover: bool) {
         if let Screen::Alt(r) = self {
             r.set_scrollbar_hover(hover);
         }
@@ -142,27 +149,27 @@ impl Screen {
 
     /// Begin a scrollbar drag: the renderer drops selection so the
     /// gesture scrolls instead (gh #164).
-    fn begin_scrollbar_drag(&mut self) {
+    pub(crate) fn begin_scrollbar_drag(&mut self) {
         if let Screen::Alt(r) = self {
             r.begin_scrollbar_drag();
         }
     }
 
     /// End a scrollbar drag (gh #164).
-    fn end_scrollbar_drag(&mut self) {
+    pub(crate) fn end_scrollbar_drag(&mut self) {
         if let Screen::Alt(r) = self {
             r.end_scrollbar_drag();
         }
     }
 
     /// Drop any selection (gh #167).
-    fn clear_selection(&mut self) {
+    pub(crate) fn clear_selection(&mut self) {
         if let Screen::Alt(r) = self {
             r.clear_selection();
         }
     }
 
-    fn tick_auto_scroll(&mut self) -> bool {
+    pub(crate) fn tick_auto_scroll(&mut self) -> bool {
         match self {
             Screen::Alt(r) => r.tick_auto_scroll(),
             Screen::Main(_) => false,
@@ -218,189 +225,9 @@ fn link_notice(url: &str, outcome: Option<Result<(), String>>) -> String {
 }
 
 /// Handle one raw input event (R16): capability replies, mouse, and keys.
-/// Route one normalized mouse event (gh #164, the keystone dispatch):
-/// the scrollbar owns its column (drag scrolls, steppers keep their
-/// clicks), everything else falls through to the renderer's selection
-/// and the click paths below. Returns whether the gesture is consumed.
-/// Wheels never land here - the wheel arm in [`handle_input`] owns them.
-/// Route one normalized mouse event with a picker open (gh #167):
-/// items highlight and confirm, chrome eats the gesture, the backdrop
-/// dismisses and falls through (the picker is gone, so the transcript
-/// is clickable again). Returns whether the gesture is consumed.
-fn handle_picker_mouse(event: MouseEvent, chat: &mut Chat, screen: &mut Screen) -> bool {
-    let (width, height) = chat.world.size;
-    match event {
-        MouseEvent::Down {
-            col,
-            row,
-            button: MouseButton::Left,
-            ..
-        } => {
-            // Gh #210: a press dismisses any tooltip outright.
-            chat.dismiss_tooltip();
-            // The composer's Up-side path (gh #165) owns editor rows:
-            // the Down falls through so the click can still focus.
-            if let Some((top, len)) = chat.editor_rect(width, height)
-                && row >= top
-                && row < top.saturating_add(len)
-            {
-                return false;
-            }
-            match chat.picker_hit(col, row, width, height) {
-                Some(PickerHit::Item(item)) => {
-                    chat.hover_picker_item(item);
-                    chat.picker_press = Some(item);
-                    screen.clear_selection();
-                    true
-                }
-                Some(PickerHit::Chrome) => {
-                    screen.clear_selection();
-                    true
-                }
-                _ => {
-                    let _ = chat.handle_picker_key("", Some("escape"));
-                    chat.picker_press = None;
-                    false
-                }
-            }
-        }
-        MouseEvent::Move {
-            col,
-            row,
-            button: None,
-            ..
-        } => {
-            if let Some(PickerHit::Item(item)) = chat.picker_hit(col, row, width, height) {
-                chat.hover_picker_item(item);
-            }
-            // Gh #210: arm the tooltip clock (picker rows are unlabeled,
-            // so this only ever rearms over plain cells).
-            chat.note_hover(col, row, width, height, screen.scroll());
-            // The autocomplete popup highlights under hover (gh #167).
-            if let Some((top, len)) = chat.popup_rect(width, height)
-                && row >= top
-                && row < top.saturating_add(len)
-                && let Some((start, _)) = chat.editor.popup_window()
-            {
-                chat.editor
-                    .select_suggestion(start.saturating_add((row - top) as usize));
-            }
-            false
-        }
-        MouseEvent::Move {
-            button: Some(_), ..
-        } => chat.picker_press.is_some(),
-        MouseEvent::Up { col, row, .. } => match chat.picker_press.take() {
-            Some(pressed) => {
-                match chat.picker_hit(col, row, width, height) {
-                    Some(PickerHit::Item(hit)) if hit == pressed => chat.confirm_picker_item(),
-                    Some(PickerHit::Item(other)) => chat.hover_picker_item(other),
-                    _ => {}
-                }
-                true
-            }
-            None => false,
-        },
-        _ => false,
-    }
-}
-
-fn handle_mouse_event(event: MouseEvent, chat: &mut Chat, screen: &mut Screen) -> bool {
-    if !chat.screen_mode {
-        return false;
-    }
-    // Pi stops scrollbar hover while an overlay owns the viewport.
-    if chat.picker_open() {
-        chat.scrollbar_hover = false;
-        screen.set_scrollbar_hover(false);
-        chat.drawer_hover = false;
-        return handle_picker_mouse(event, chat, screen);
-    }
-    if chat.world.modal_active() {
-        chat.scrollbar_hover = false;
-        screen.set_scrollbar_hover(false);
-        chat.drawer_hover = false;
-        return false;
-    }
-    let (width, height) = chat.world.size;
-    // gh #209: the tab bar owns row 0 (its gestures never reach
-    // the scrollbar or the transcript behind it).
-    if chat.handle_tab_mouse(&event) {
-        return true;
-    }
-    match event {
-        MouseEvent::Down {
-            col,
-            row,
-            button: MouseButton::Left,
-            ..
-        } => {
-            // Gh #210: a press dismisses any tooltip outright.
-            chat.dismiss_tooltip();
-            if chat.scrollbar_hit(col, row, width, height, screen.scroll()) != ScrollbarHit::Track {
-                return false;
-            }
-            // Pi's grab: on the thumb the pointer keeps its offset, off
-            // it the thumb centers under the pointer.
-            let grab = chat
-                .scrollbar_for_frame(width, height, screen.scroll())
-                .map(|geometry| {
-                    if row >= geometry.thumb_top
-                        && row < geometry.thumb_top.saturating_add(geometry.thumb_height)
-                    {
-                        row.saturating_sub(geometry.thumb_top)
-                    } else {
-                        geometry.thumb_height / 2
-                    }
-                })
-                .unwrap_or(0);
-            chat.scroll_drag = Some(grab);
-            screen.begin_scrollbar_drag();
-            true
-        }
-        MouseEvent::Move {
-            col,
-            row,
-            button: None,
-            ..
-        } => {
-            chat.refresh_scrollbar_hover(col, row, width, height, screen.scroll());
-            screen.set_scrollbar_hover(chat.scrollbar_hover);
-            // Gh #207: the drawer tab lifts under hover.
-            chat.refresh_drawer_hover(col, row, width, height);
-            // Gh #210: arm the tooltip clock.
-            chat.note_hover(col, row, width, height, screen.scroll());
-            false
-        }
-        MouseEvent::Move {
-            row,
-            button: Some(_),
-            ..
-        } => {
-            let Some(grab) = chat.scroll_drag else {
-                return false;
-            };
-            if let Some(scroll) =
-                chat.scrollbar_drag_scroll(width, height, screen.scroll(), row, grab)
-            {
-                screen.set_scroll(scroll);
-            }
-            true
-        }
-        MouseEvent::Up { col, row, .. } => {
-            chat.refresh_scrollbar_hover(col, row, width, height, screen.scroll());
-            screen.set_scrollbar_hover(chat.scrollbar_hover);
-            if chat.scroll_drag.take().is_some() {
-                screen.end_scrollbar_drag();
-                // A drag release never copies: selection never started.
-                return true;
-            }
-            false
-        }
-        _ => false,
-    }
-}
-
+///
+/// The pointer half lives in [`run_mouse`] (split out for the 1,200-line
+/// ceiling); this function is the keyboard half plus the dispatch into it.
 #[allow(clippy::too_many_arguments)]
 fn handle_input(
     data: &str,
@@ -913,7 +740,13 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
                     .map(|geometry| (geometry.column, geometry.rows)),
             );
             let viewport = chat.viewport(width, height, screen.scroll());
-            screen.render(&mut terminal, viewport, width, height);
+            // Gh #374 gap 1: the alt screen also receives the **document** -
+            // everything above the `height`-row window - so its exit hands back the
+            // whole session, not the visible slice. It rides out of the `viewport`
+            // call above rather than being recomposed; the scrollback renderer
+            // ignores it (its append contract already wrote every row).
+            let document = chat.take_document();
+            screen.render(&mut terminal, viewport, document, width, height);
             // gh #209: mirror the live scroll for per-tab restores.
             chat.last_scroll = screen.scroll();
             dirty = false;

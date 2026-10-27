@@ -15,10 +15,77 @@
 //! scroll-to-end indicator. The transcript-preservation handoff on exit is
 //! kept.
 
-use super::core::extract_cursor_position;
+use super::core::{CURSOR_MARKER, SEGMENT_RESET, extract_cursor_position};
 use super::selection::{Granularity, Selection, SelectionPoint};
 use super::terminal::Terminal;
-use super::text::{strip_terminal_sequences, visible_width};
+use super::text::visible_width;
+
+/// Strip only LCA's **own** in-band markers, keeping every colour (gh #374 gap 1).
+///
+/// pi's `afterTerminalStop` removes exactly `OSC133_ZONE_PREFIX` and
+/// `CURSOR_MARKER` before writing the document back to the scrollback:
+///
+/// ```text
+/// line.replace(OSC133_ZONE_PREFIX, "")
+///     .replaceAll(CURSOR_MARKER, "")   // tui-alt-screen.ts:409-413
+/// ```
+///
+/// The reason each is stripped is that each is a *marker*, not a style - text
+/// the renderer put in the stream to address a cell, which would show up as
+/// garbage in the scrollback. The reason nothing else is stripped is that the
+/// scrollback is the durable record of the session, and a transcript that comes
+/// back uncoloured has lost information the user can still see on screen.
+///
+/// # Why not narrow [`strip_terminal_sequences`]
+///
+/// That function is the right instrument for its other dozen callers - comparing
+/// two rows, measuring visible width, resolving a click's column, rendering the
+/// plain fallback - and every one of them wants the *absence* of escape bytes,
+/// not their preservation. Narrowing it in place would silently change all of
+/// them (a width measurement that kept SGR would be wrong; a hit-test that kept
+/// a hyperlink would be wrong); making it configurable would put a flag on a
+/// function whose whole point is that it always does one thing. A separate
+/// helper with one caller says exactly what it is for.
+///
+/// LCA emits the pi-compatible `CURSOR_MARKER`; `OSC 133` zone prefixes are not
+/// emitted yet (the glossary records that the port does not print them), so the
+/// strip covers both by contract - the day a zone prefix appears, it is already
+/// handled.
+fn strip_own_markers(line: &str) -> String {
+    if !line.contains('\x1b') {
+        return line.to_string();
+    }
+    let without_marker = line.replace(CURSOR_MARKER, "");
+    strip_osc133_prefix(&without_marker)
+}
+
+/// Drop a leading run of `OSC 133 ; A|B|C` zone prefixes (pi's
+/// `OSC133_ZONE_PREFIX = /^(?:\x1b\]133;[ABC](?:\x07|\x1b\\))+/`).
+///
+/// Anchored to the start and only those three letters, mirroring the regex:
+/// a zone marker addresses the *row*, so a later one is part of the text and
+/// stays.
+fn strip_osc133_prefix(line: &str) -> String {
+    let mut rest = line;
+    loop {
+        let Some(after) = rest.strip_prefix("\x1b]133;") else {
+            return rest.to_string();
+        };
+        let mut chars = after.chars();
+        if !matches!(chars.next(), Some('A' | 'B' | 'C')) {
+            return rest.to_string();
+        }
+        let terminator = chars.as_str();
+        let consumed = if terminator.starts_with('\x07') {
+            1
+        } else if terminator.starts_with("\x1b\\") {
+            2
+        } else {
+            return rest.to_string();
+        };
+        rest = &terminator[consumed..];
+    }
+}
 
 /// A parsed SGR mouse event (`ESC [ < b ; x ; y M|m`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -208,6 +275,14 @@ pub struct AltScreenRenderer {
     /// belong to the drag, never to text selection. The grab math lives
     /// with the geometry in the interface; the renderer only suppresses.
     scrollbar_drag: bool,
+    /// The whole transcript this session has, as of the last frame (gh #374
+    /// gap 1): what [`leave`](Self::leave) hands back to the scrollback.
+    ///
+    /// Not the rendered frame - that is `previous`, and it holds exactly
+    /// `height` rows. The host owns the document (it is the thing that can
+    /// compose the transcript above the viewport), so it hands it over every
+    /// frame and the renderer keeps the latest one for the exit.
+    document: Vec<String>,
 }
 
 impl Default for AltScreenRenderer {
@@ -240,6 +315,7 @@ impl AltScreenRenderer {
             clicked_link: None,
             scrollbar_hover: false,
             scrollbar_drag: false,
+            document: Vec::new(),
         }
     }
 
@@ -251,25 +327,95 @@ impl AltScreenRenderer {
         term.write(&out);
     }
 
+    /// Record the whole transcript this session has (gh #374 gap 1): the
+    /// document, not the visible window.
+    ///
+    /// The host calls this every frame with what it composed before it cut a
+    /// viewport out of it. The renderer keeps it only to hand back on exit: an
+    /// alt screen that dumps its visible window loses everything the user
+    /// scrolled past, which on a 200-line session in a 24-row pane is 176 lines
+    /// of history (gh #374 gap 1's loss (a), and the bigger of the two).
+    ///
+    /// Not the rendered frame: `previous` is the frame, resized to `height`.
+    pub fn set_document(&mut self, document: Vec<String>) {
+        self.document = document;
+    }
+
+    /// The document as recorded for the exit dump (gh #374 gap 1). Exposed so
+    /// a row can assert what the handoff *will* write without going through
+    /// `leave`'s byte stream.
+    pub fn document(&self) -> &[String] {
+        &self.document
+    }
+
     /// Leave the alt screen, restoring main-screen scrollback with the final
     /// document so the transcript survives.
+    ///
+    /// # What leaves, and how (gh #374 gap 1)
+    ///
+    /// pi's `afterTerminalStop` renders the whole document, strips only its own
+    /// in-band markers, and writes it inside one synchronized block. LCA did the
+    /// opposite of all three: it wrote `self.previous` (exactly `height` rows, so
+    /// a 200-line session kept 24) and ran `strip_terminal_sequences` over every
+    /// row, which removed every syntax highlight, diff, markdown and theme colour
+    /// along with the markers.
+    ///
+    /// The dump is therefore the [document](Self::set_document), narrowed by
+    /// [`strip_own_markers`] - never by `strip_terminal_sequences`, which is the
+    /// right instrument for every other caller (comparisons, hit-tests, plain
+    /// rendering) and the wrong one here.
+    ///
+    /// Order matters. `?2026h` opens a synchronized block so the terminal applies
+    /// the whole write at once instead of reflowing per line; autowrap goes off
+    /// (`?7l`) so a row wider than the pane cannot wrap into two; each row is
+    /// `\r\x1b[2K` + text, which is pi's shape and what makes a 200-row write look
+    /// atomic rather than like several redraws.
+    ///
+    /// `preserve_screen` keeps the bare exit: a handoff mid-session (`$EDITOR`,
+    /// an interactive `!` command) must not dump the transcript, because the
+    /// session resumes on the alt screen afterwards and the dump would be a
+    /// duplicate.
     pub fn leave(&mut self, term: &mut dyn Terminal, preserve_screen: bool) {
         let mut out = String::from(MOUSE_DISABLE);
-        if !preserve_screen {
-            // Re-render the final document into the main screen.
+        if preserve_screen {
             out.push_str("\x1b[?1049l");
-            for (i, line) in self.previous.iter().enumerate() {
+        } else {
+            let rows = if self.document.is_empty() {
+                &self.previous[..]
+            } else {
+                &self.document[..]
+            };
+            out.push_str("\x1b[?2026h\x1b[?1049l\x1b[?7l");
+            for (i, line) in rows.iter().enumerate() {
                 if i > 0 {
                     out.push_str("\r\n");
                 }
-                out.push_str(&strip_terminal_sequences(line));
+                out.push_str("\r\x1b[2K");
+                let row = strip_own_markers(line);
+                // A row that left a colour, background or hyperlink open gets a
+                // reset, or it bleeds into the shell prompt below the dump. Only
+                // such a row: an unstyled row needs nothing, and this keeps the
+                // exit's final bytes exactly as gh #33 pinned them (see below).
+                let styled = row.contains('\x1b');
+                out.push_str(&row);
+                if styled {
+                    out.push_str(SEGMENT_RESET);
+                }
             }
+            // Close the synchronized block, then park the cursor.
+            //
             // gh #33: `?1049l` restores the cursor to its pre-alt position
-            // (commonly row 1 col 1), so the dump needs a final newline of
-            // its own or the returning shell prompt lands on top of it.
-            out.push_str("\r\n");
-        } else {
-            out.push_str("\x1b[?1049l");
+            // (commonly row 1 col 1), so the dump needs a final newline of its own
+            // or the returning shell prompt lands on top of it. The park is
+            // `\r\n` + autowrap back on + caret shown, and it is the **last thing
+            // written** - which is why the block closes before it rather than after
+            // (pi ends `...\r\n?25h?2026l`; LCA's released gh #33 contract ends
+            // `...\r\n?7h?25h`, and the newer of the two does not get to move the
+            // older). Nothing may move the cursor after the park.
+            out.push_str("\x1b[?2026l\r\n\x1b[?7h\x1b[?25h");
+            term.write(&out);
+            self.first_render = true;
+            return;
         }
         out.push_str("\x1b[?7h\x1b[?25h");
         term.write(&out);
@@ -973,3 +1119,8 @@ mod wheel_tests {
         assert_eq!(renderer.wheel_step(-1, true, 2100), 10, "auto Alt ×5");
     }
 }
+
+// Gh #374 gap 1's exit-handoff rows, split out for the 1,200-line ceiling.
+#[cfg(test)]
+#[path = "alt_screen/exit_handoff_tests.rs"]
+mod exit_handoff_tests;

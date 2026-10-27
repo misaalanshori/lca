@@ -198,7 +198,13 @@ fn a_mouse_selection_still_copies_on_release_through_the_ladder() {
     let (input_tx, _input_rx) = std::sync::mpsc::channel();
     let (resize_tx, _resize_rx) = std::sync::mpsc::channel();
     // A frame with text first, so the selection has rows to read.
-    screen.render(&mut term, vec!["hello world".to_string()], 80, 24);
+    screen.render(
+        &mut term,
+        vec!["hello world".to_string()],
+        Vec::new(),
+        80,
+        24,
+    );
     let mut drive = |data: &str| {
         handle_input(
             data,
@@ -290,6 +296,7 @@ fn screen_leave_parks_the_cursor_in_main_screen_mode() {
     screen.render(
         &mut term,
         vec!["transcript".into(), "footer".into()],
+        Vec::new(),
         80,
         24,
     );
@@ -311,7 +318,7 @@ fn screen_leave_parks_the_cursor_in_main_screen_mode() {
 fn a_preserving_leave_in_main_screen_mode_writes_nothing() {
     let mut term = FakeTerminal::new(80, 24);
     let mut screen = Screen::Main(MainScreenRenderer::new());
-    screen.render(&mut term, vec!["transcript".into()], 80, 24);
+    screen.render(&mut term, vec!["transcript".into()], Vec::new(), 80, 24);
     let _ = term.take_output();
 
     screen.leave(&mut term, true);
@@ -1178,3 +1185,7 @@ fn both_hints_share_the_same_command_string() {
         "so does the exit hint: {on_exit}"
     );
 }
+
+/// Gh #374 gap 1's document rows, split out for the 1,200-line ceiling.
+#[path = "run_tests_374.rs"]
+mod document_handoff;

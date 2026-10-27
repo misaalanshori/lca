@@ -526,6 +526,11 @@ impl Chat {
     /// Main-screen mode is untouched: the whole document, composed
     /// bottom-anchored (FR-UI-24 - its append contract is the other
     /// renderer's point).
+    ///
+    /// Fullscreen mode also records the document it cut the window from, for the
+    /// exit handoff (gh #374 gap 1); [`Self::take_document`] is how the host gets
+    /// it. One composition serves both, so the frame and the dump cannot disagree
+    /// and neither is rendered twice.
     pub fn viewport(&self, width: u16, height: u16, scroll: u16) -> Vec<String> {
         if !self.screen_mode {
             let mut lines = self.render(width);
@@ -533,12 +538,34 @@ impl Chat {
             self.paint_toasts_at_bottom(&mut lines, width, height);
             return lines;
         }
-        if !self.screen_mode {
-            let mut lines = self.render(width);
-            self.compose_overlays_bottom_anchored(&mut lines, width, height);
-            return lines;
-        }
         let (transcript, dock) = self.sections(width);
+        // Gh #374 gap 1: record the whole document on the way past, so the alt
+        // screen's exit hands back everything the user could scroll through -
+        // without a second `sections` walk (which measured 9.2 ms per frame on a
+        // 300-entry transcript). What is recorded is the transcript's every row,
+        // then the dock: no scrollbar (the scrollback has the terminal's own, and
+        // an app-painted one would leave a column of the preserved transcript
+        // unselectable), no tab bar (it names a screen the scrollback does not
+        // have), no overlays, toasts or tooltip (transient screen state must not
+        // become permanent history), and no trailing air.
+        let document = {
+            let mut document = transcript.clone();
+            document.extend(dock.iter().cloned());
+            // No trailing blank rows: the dock ends with air that spaces the
+            // frame's bottom edge, and in a scrollback it would push the returning
+            // shell prompt a line or two below the transcript for no reason. The
+            // trim is on the document only - the frame keeps its padding, because
+            // there it holds the dock against the bottom.
+            while document
+                .last()
+                .is_some_and(|row| lca_tui::engine::text::visible_width(row) == 0)
+            {
+                document.pop();
+            }
+            document
+        };
+        *self.document.borrow_mut() = document;
+
         // gh #209: the tab bar owns row 0; the transcript window shrinks past it.
         // Gh #331: the shrinkage is `transcript_window`'s job now, so the frame and
         // the hit-test cannot compute two different heights.
@@ -661,6 +688,19 @@ impl Chat {
         // Gh #210: the tooltip rides over everything, last.
         self.paint_tooltip(&mut lines);
         lines
+    }
+
+    /// Take the document the last [`viewport`](Self::viewport) composed (gh #374
+    /// gap 1): the rows the fullscreen exit must hand back to the scrollback.
+    /// Empty before the first frame.
+    ///
+    /// Taken rather than borrowed because the host moves it straight into the
+    /// renderer. Taken rather than recomposed because a second `sections` walk
+    /// measured **9.2 ms per frame** on a 300-entry transcript at 100 columns -
+    /// more than half a 60 Hz frame budget, spent redoing what the frame call had
+    /// just done.
+    pub fn take_document(&self) -> Vec<String> {
+        std::mem::take(&mut self.document.borrow_mut())
     }
 
     /// Float the toast stack top-right (gh #239): one accent line
