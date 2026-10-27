@@ -6,6 +6,18 @@ Dates are UTC.
 
 ## [Unreleased]
 
+### Fixed
+- **A multi-step login keeps its trail instead of clobbering it** (gh #398 gap 2).
+  Every step used to clear the one before it, so by the time a login failed the URL
+  you had been told to visit and the code you had been told to paste were gone —
+  exactly what you need to work out which step went wrong. Each finished step now
+  stays on the modal above the next one, a value you typed renders as input
+  (`> value`) rather than as prose, and the whole trail moves into the transcript
+  when the flow ends, so scrolling cannot lose it. A step collected as a secret is
+  shown as asterisks and is never stored in the clear; the flow also windows its
+  trail from the newest end, so a long history can never push the live prompt out
+  of view.
+
 ### Changed
 - **The built-in `dark` and `light` palettes are calibrated, not hand-picked** (gh #387
   gap 3). Every accent — success, error, warning, accent and the accent border — now sits

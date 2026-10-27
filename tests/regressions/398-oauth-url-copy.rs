@@ -294,3 +294,113 @@ fn the_copy_path_never_logs_the_url() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Gh #398 gap 2: a multi-step login keeps its trail.
+// ---------------------------------------------------------------------------
+//
+// # The defect
+//
+// Each login step used to **clear** the previous one (`login_step.rs`: "One step
+// owns the screen at a time: entering one clears the others"). In a URL -> code
+// -> workspace flow that meant that by the time a login failed, the URL the user
+// had been told to visit and the code they had been told to paste were both
+// gone - which is precisely the information needed to work out which step went
+// wrong. pi keeps the trail (`showPrompt` appends; `replaceInputWithSubmittedText`
+// swaps the answered input for a static `> value` line).
+//
+// # The rule, and where it lives
+//
+// 1. A completed step becomes **history** and the next prompt appears beneath it,
+//    so the modal reads as a transcript of the flow.
+// 2. A submitted value is displayed as **input** (`> value`), not as prose, so a
+//    reader can tell what they typed from what the provider said.
+// 3. **A secret typed into a step must not become history in the clear.** This is
+//    the risk the fix introduces, so the masked row is written first in
+//    `crates/lca-ui/src/chat_login_trail_tests.rs` - and the *decision* lives in
+//    one place: `login_step.rs`'s `record_login_answer` records asterisks and
+//    stores `None` as the plain text, so the secret is **absent from the entry**
+//    rather than redacted at paint time.
+// 4. The trail survives a failure.
+// 5. The newest prompt stays visible.
+// 6. The consent/countdown surface is untouched.
+//
+// The behaviour rows are beside the code (`chat_login_trail_tests.rs`), because
+// they need the private `chat()` fixture. This file guards the properties a
+// behaviour row cannot see: that the trail is produced at the one seam all steps
+// pass through, and that the masking decision is the *storage* rule rather than a
+// render-time one.
+
+/// **A step cannot be cleared without being recorded.** The single place a step
+/// enters the interface promotes the step it replaces, so no future call site can
+/// clear a step and forget the trail.
+#[test]
+fn every_step_enters_through_the_one_seam_that_records_it() {
+    let source = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/crates/lca-ui/src/login_step.rs"
+    ))
+    .expect("the login step module is readable");
+    let body = source
+        .split("pub fn apply_login_next")
+        .nth(1)
+        .expect("apply_login_next exists");
+    let promotion = body
+        .find("promote_pending_step(state);")
+        .expect("a step is promoted");
+    let first_arm = body.find("match next {").expect("the step match");
+    assert!(
+        promotion < first_arm,
+        "the replaced step is recorded *before* the new one is applied, so a \
+         step cannot clear another without becoming history"
+    );
+}
+
+/// **A secret never becomes history.** The decision is a storage rule: the answer
+/// is recorded as asterisks with no plain-text copy, so no later renderer, log,
+/// or scrollback change can leak a value that was never stored. A render-time
+/// redaction would be one `if` away from leaking.
+#[test]
+fn a_masked_answer_stores_asterisks_and_no_plain_text() {
+    let source = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/crates/lca-ui/src/login_step.rs"
+    ))
+    .expect("the login step module is readable");
+    let recorder = source
+        .split("pub fn record_login_answer")
+        .nth(1)
+        .expect("record_login_answer exists");
+    let masked = recorder
+        .find("\"*\".repeat(")
+        .expect("a masked answer is asterisks");
+    let plain = recorder
+        .find("plain: (!prompt.masked).then(")
+        .expect("the plain text is stored only when unmasked");
+    assert!(
+        masked < plain,
+        "the masked branch decides the stored value, not the painter"
+    );
+}
+
+/// The trail renders through the same overlay layout as the modal, so a
+/// wrap-width disagreement cannot put the live prompt under the fold as an
+/// overflow rather than as a failing row.
+#[test]
+fn the_trail_measures_with_the_painters_own_layout() {
+    let source = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/crates/lca-ui/src/login_trail.rs"
+    ))
+    .expect("the trail module is readable");
+    assert!(
+        source.contains("resolve_overlay_layout"),
+        "the trail derives its budget from the layout the painter resolves, not \
+         from a second estimate of the same quantity"
+    );
+    assert!(
+        source.contains("wrap_text_with_ansi(&linkify_urls("),
+        "and measures rows wrapped, because a sign-in URL is three or four \
+         painted rows"
+    );
+}

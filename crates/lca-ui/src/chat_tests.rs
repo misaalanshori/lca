@@ -1038,6 +1038,10 @@ mod padding_tests;
 #[path = "chat_auth_url_tests.rs"]
 mod auth_url_tests;
 
+// Gh #398 gap 2: a multi-step login keeps its trail (and a secret stays masked).
+#[path = "chat_login_trail_tests.rs"]
+mod login_trail_tests;
+
 #[path = "chat_bug_tests.rs"]
 mod bug_tests;
 

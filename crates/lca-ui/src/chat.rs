@@ -24,7 +24,10 @@ use crate::chat_pickers::{
 use crate::footer::Footer;
 
 use crate::separator::Separator;
-use crate::state::{Action, LoginNext, TurnStatusLine, UiOptions, UiState};
+use crate::state::{Action, TurnStatusLine, UiOptions, UiState};
+// The tests reach `LoginNext` through this module's former import.
+#[cfg(test)]
+use crate::state::LoginNext;
 use crate::theme::Theme;
 use crate::transcript::Transcript;
 
@@ -1065,16 +1068,6 @@ impl Chat {
             return Action::Continue;
         }
         Action::Continue
-    }
-
-    /// Apply the CLI's next login step (the host's [`LoginNext`]).
-    pub fn apply_login_next(&mut self, next: LoginNext) {
-        // gh #233: every login/logout step can change credentials, so
-        // what providers offer may have changed with it.
-        self.invalidate_models();
-        if let Some(message) = crate::state::apply_login_next(&mut self.world, next) {
-            self.say(message);
-        }
     }
 
     /// Handle a submitted editor buffer.
