@@ -569,13 +569,22 @@ fn every_keyboard_owning_surface_keeps_the_marker_count_at_one() {
 }
 
 // Verifies: gh #371 bug 3 - a keyboard-owning surface with **no text field**
-// anchors to nothing rather than to the composer behind it.
+// keeps the composer's marker, and that is a recorded deviation.
 //
-// The composer is the inactive field in that frame, so leaving its marker
-// would put the candidate window at the bottom of the screen while the user
-// answers a `[y/n]` - the exact mis-anchor the bug is about.
+// The brief's rule is "the caret belongs to whoever owns the keyboard", and the
+// strict reading of it for a `[y/n]` confirm is *no* marker. This cycle ships the
+// other answer, for a measured reason: the engine has no markerless-frame
+// contract. `MainScreenRenderer::position_hardware_cursor` hides the cursor and
+// returns **without recording** when a frame carries no marker, so the next
+// frame diffs from a screen row the terminal is not on - a live `/settings`
+// close printed the selector's border over the startup header, and the
+// `settings_changes_a_setting_and_config_toml_carries_it` row went red. The
+// repair belongs in `crates/lca-tui/src/engine/main_screen.rs`, outside this
+// cycle's file boundary; until it lands, a frame always carries exactly one
+// marker. An IME popup in the wrong place is a wrong position, not a corrupted
+// screen, so this is the lesser fault - and it is stated, not hidden.
 #[test]
-fn a_fieldless_surface_leaves_the_frame_without_a_marker() {
+fn a_fieldless_surface_keeps_the_composers_marker_by_design() {
     let mut chat = colored_chat();
     let (respond, _rx) = std::sync::mpsc::sync_channel(1);
     chat.world.dialog = Some(DialogModal {
@@ -594,27 +603,33 @@ fn a_fieldless_surface_leaves_the_frame_without_a_marker() {
     let frame = paint(&chat);
     assert_eq!(
         markers(&frame).0,
-        0,
-        "no field is on screen, so no marker is:\n{}",
+        1,
+        "exactly one marker, on the composer:\n{}",
         plain(&chat).join("\n")
+    );
+    assert_eq!(
+        chat.keyboard_owner(),
+        Focus::Composer,
+        "a fieldless surface answered `Composer` on purpose"
     );
 }
 
 // Verifies: gh #371 bug 3 - `/settings` with an empty query paints no search
-// row, so it does not claim the caret either.
+// row, so the field that already exists keeps the caret rather than a row that
+// is not on screen.
 #[test]
-fn an_empty_settings_query_claims_no_caret() {
+fn an_empty_settings_query_falls_back_to_the_composer() {
     let chat = settings_chat();
     assert_eq!(
         chat.keyboard_owner(),
-        Focus::Surface,
-        "the surface owns the keyboard and paints no field"
+        Focus::Composer,
+        "the search row is not on screen, so nothing painted claims the caret"
     );
     let frame = paint(&chat);
     assert_eq!(
         markers(&frame).0,
-        0,
-        "so the frame carries no marker:\n{}",
+        1,
+        "and the frame still carries exactly one marker:\n{}",
         plain(&chat).join("\n")
     );
 }

@@ -89,6 +89,25 @@ States are emitted on transition only, never per frame, and a repeated frame wri
 
 `OSC 9;4;3` is re-emitted once a second while the indicator is active. Terminal emulators put a watchdog on the sequence (~10–15 s) so a crashed CLI does not spin a taskbar forever; a single write at turn start therefore lost the indicator on any turn longer than that, which is most of them. The refresh comes from the interface's existing 50 ms tick — no new thread — and stops with the turn: once the indicator is off nothing is written again, because an idle interface never repaints. `set_progress(false)` and `stop()` write the `OSC 9;4;0` clear immediately.
 
+## The caret and IME input
+
+The caret is painted into the row rather than left to the terminal (ADR-0037),
+and a zero-width marker beside it tells the engine where the insertion point
+is. That marker is what a CJK or emoji input method uses to place its candidate
+window, and **exactly one is live per frame: it belongs to the field that owns
+the keyboard.**
+
+With a picker, search or modal open - `/model`, `/resume`, the `/extensions`
+filter, `/settings` search and inline edit, `/tree` bookmark editing, the masked
+`/login` field, `/mcp` sign-in, a host dialog's input or select, or the `Ctrl+R`
+transcript search - the candidate window follows *that* field, not the
+composer. A surface that takes keys but has no text field (a `[y/n]` confirm, a
+permission prompt) leaves the composer's marker where it is: the renderer has no
+markerless-frame contract yet, so a frame without one desynchronises the
+main-screen cursor row rather than merely misplacing the window. On the plain
+theme the marker is the hardware cursor's only anchor, because there no caret is
+painted (FR-UI-5).
+
 ## `@` file completion
 
 Typing `@` opens a fuzzy file list for the workspace; the text after it is the

@@ -75,11 +75,6 @@ pub(crate) enum Focus {
     Composer,
     /// A surface with a text field is open, and *that* field emits.
     Field(Field),
-    /// A surface owns the keyboard and paints no text field: no marker at all.
-    ///
-    /// pi's behaviour for a focused component that emits none - anchoring to
-    /// nothing beats anchoring to a field the user is not typing into.
-    Surface,
 }
 
 impl Chat {
@@ -92,14 +87,19 @@ impl Chat {
     /// modal, and the transcript search readout (dock chrome, drawn under both)
     /// ranks below them.
     pub(crate) fn keyboard_owner(&self) -> Focus {
-        // A picker or modal is open: either its field takes the caret or the
-        // surface keeps it to itself. Asking "is a picker open" *before*
-        // "does it have a field" is what keeps the two answers from drifting.
+        // A picker or modal is open: its field takes the caret. A surface with
+        // no field (a `[y/n]` confirm, a permission prompt) answers `Composer`,
+        // deliberately - the engine has no markerless-frame contract, and a
+        // frame without a marker desynchronises `hardware_cursor_row` (see the
+        // module doc). Anchoring an IME popup at an inactive composer is the
+        // lesser fault of the two: it is in the wrong place, not a corrupted
+        // screen. `MainScreenRenderer`'s no-marker arm is the real fix and lives
+        // in a file this cycle does not own.
         if self.picker_open() {
-            return self.picker_field().map_or(Focus::Surface, Focus::Field);
+            return self.picker_field().map_or(Focus::Composer, Focus::Field);
         }
         if self.world.modal_active() || self.world.dialog.is_some() || self.world.wizard.is_some() {
-            return self.modal_field().map_or(Focus::Surface, Focus::Field);
+            return self.modal_field().map_or(Focus::Composer, Focus::Field);
         }
         // The search readout is dock chrome, so it is last: an overlay covers it.
         if self.search.is_some() {

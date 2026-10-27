@@ -418,8 +418,8 @@ mod reload_rebinds_editor;
 // rendering desynchronised permanently; and the painted caret closed reverse video with
 // a full `\x1b[0m`, stripping the style of everything after it. Behaviour rows live in
 // `main_screen.rs` and `widgets/editor.rs`; this file guards the two shapes that would
-// let either come back. Bugs 3 (overlay marker ownership) and 4 (`show_hardware_cursor`)
-// stay open on the issue.
+// let either come back. Bug 3 (overlay marker ownership) landed on top and added three
+// shape guards here; bug 4 (`show_hardware_cursor`) stays open on the issue.
 #[path = "371-caret-row-and-sgr-close.rs"]
 mod caret_row_and_sgr_close;
 
