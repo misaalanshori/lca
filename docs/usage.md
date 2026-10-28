@@ -212,6 +212,11 @@ does - as long as you have not started typing a search. Once the filter has text
 space is part of your search and lands in it instead (gh #386 gap 3). A key that
 works and is named nowhere is a key nobody presses, so the list's own hint says so.
 
+The highlighted setting's description is shown **in full** below the list, wrapped
+across as many lines as it needs - the row itself only has room for a column. It
+follows the cursor. On a terminal too short for those extra rows the description goes
+back to a single truncated line on the hint, so the list never loses a row to it.
+
 ### Bookmarks and book copies
 
 - `/label [message-index] <name>` — bookmark a message; with no index,

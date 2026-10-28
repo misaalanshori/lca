@@ -21,6 +21,11 @@ Dates are UTC.
 - **`Space` in `/settings` both toggles and types** (gh #386 gap 3). With no search
   typed it changes the highlighted setting, as `Enter` does; once the filter has
   text, a space lands in the filter instead. Neither job had to be given up.
+- **The highlighted setting's description is shown whole** (gh #386 gap 3). The row
+  carries a description column, so the sentence on it was always cut short; it now
+  wraps below the list, and follows the cursor as you move. On a terminal too short
+  for the extra rows it falls back to the old one-line hint rather than squeezing the
+  list.
 - **A list no longer scrolls itself under a still mouse** (gh #386 gap 2).
   Moving the pointer over a picker moved the highlight, and every picker's window is
   centered on its highlight — so a *stationary* cursor sitting over `/model`
