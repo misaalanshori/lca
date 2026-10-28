@@ -688,3 +688,83 @@ fn the_space_arm_is_guarded_by_the_predicate_not_a_literal() {
         "and the rule itself is not restated at the call site:\n{arm}"
     );
 }
+
+// ============================================================================
+// gh #386 gap 3, footer half - the description below the list.
+//
+// The behavioural rows live in `lca-ui`'s `chat::tests::settings_footer_tests`. This
+// file pins the two decisions a green suite could otherwise lose: that a footer is
+// **surplus height or nothing** (never paid for out of the list), and that yielding
+// means **demoting** the description to the hint line rather than dropping it.
+// ============================================================================
+
+// Verifies: gh #386 gap 3 - the footer's fit is decided by the box's **own layout
+// rule**, not by a second copy of "how tall may this box be". A re-derived grant is
+// how the painter and the mouse hit test drift apart, which gh #167's helper exists to
+// prevent.
+#[test]
+fn the_footer_asks_the_layout_rule_whether_it_fits() {
+    let source = plain_source("crates/lca-ui/src/chat_settings_footer.rs");
+    let body = function_body(&source, "pub(crate) fn picker_footer_fits(");
+    assert!(
+        body.contains("resolve_overlay_layout"),
+        "the fit is the layout rule's answer:\n{body}"
+    );
+    assert!(
+        !body.contains("max_height.resolve") && !body.contains("height - "),
+        "and not a second derivation of the grant:\n{body}"
+    );
+    assert!(
+        body.contains("resolved.height >= requested"),
+        "the test is 'did it get the height it asked for':\n{body}"
+    );
+}
+
+// Verifies: gh #386 gap 3 with gh #235 - a footer that does not fit **demotes** the
+// description onto the hint line. Dropping it instead is what the first version did,
+// and a live row (`e2e_polish::settings_selector_shows_labels_and_help`) caught it: on
+// a tall `/settings` the help vanished from the screen.
+#[test]
+fn a_footer_that_does_not_fit_demotes_to_the_hint() {
+    let source = plain_source("crates/lca-ui/src/chat_settings_footer.rs");
+    let body = function_body(&source, "pub(crate) fn settings_footer_and_hint(");
+    // The *assignment* is what matters: a call whose result is thrown away is exactly
+    // the mutation that kept the name and dropped the behaviour.
+    assert!(
+        body.contains("let hint = settings_hint_with_description(picker, term_width);"),
+        "the non-fitting branch demotes the description into the hint it returns:\n{body}"
+    );
+    assert!(
+        body.contains("(Vec::new(), hint)"),
+        "and returns that hint rather than the bare one:\n{body}"
+    );
+    // And the two forms are exclusive: one function returns both, so they cannot both
+    // come back "yes" and paint the sentence twice.
+    assert!(
+        body.contains("if fits {"),
+        "the form is chosen once, by one predicate:\n{body}"
+    );
+}
+
+// Verifies: gh #386 gap 3 - the footer is inserted in **one** place, above the pinned
+// hint. The caller used to append its own copy while the painter inserted another,
+// which painted the description twice and pushed the hint out of the box.
+#[test]
+fn the_footer_is_inserted_once_and_above_the_hint() {
+    let source = plain_source("crates/lca-ui/src/chat_overlays.rs");
+    let body = function_body(&source, "fn picker_overlay_with_footer(");
+    assert!(
+        !body.contains("extend_from_slice(footer)"),
+        "the caller does not pre-insert the footer:\n{body}"
+    );
+    assert!(
+        body.contains("footer,"),
+        "it hands the footer to the painter:\n{body}"
+    );
+    let painter = plain_source("crates/lca-ui/src/render.rs");
+    let splice = function_body(&painter, "pub fn overlay_box_picker(");
+    assert!(
+        splice.contains("saturating_sub(2)"),
+        "the painter splices before the two trailing hint rows:\n{splice}"
+    );
+}
