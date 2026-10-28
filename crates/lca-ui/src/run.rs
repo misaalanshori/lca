@@ -90,7 +90,23 @@ impl Screen {
 
     fn handle_mouse(&mut self, data: &str) -> bool {
         match self {
-            Screen::Alt(r) => r.handle_input(data),
+            Screen::Alt(r) => {
+                r.set_right_click_paste_allowed(
+                    lca_tui::engine::alt_screen::right_click_paste_allowed(
+                        cfg!(windows),
+                        std::env::var("TERM_PROGRAM").ok().as_deref(),
+                    ),
+                );
+                r.handle_input(data)
+            }
+            Screen::Main(_) => false,
+        }
+    }
+
+    /// Take a right-button paste request (gh #374 gap 4).
+    pub(crate) fn take_right_click_paste(&mut self) -> bool {
+        match self {
+            Screen::Alt(r) => r.take_right_click_paste(),
             Screen::Main(_) => false,
         }
     }
@@ -341,6 +357,13 @@ fn handle_input(
             }
         }
         screen.handle_mouse(data);
+        // Gh #374 gap 4: a right-button press on a Windows-shaped terminal is a
+        // paste, read through the one clipboard path (#406) and reported honestly
+        // when it finds nothing to paste.
+        if screen.take_right_click_paste() {
+            input_helpers::paste_from_clipboard(chat);
+            return InputResult::Continue;
+        }
         // gh #11: a completed single click hit-tests the transcript
         // before selection claims it. A toggled run drops the row's link
         // with it (the click chose the run, not the link); anything
@@ -429,12 +452,21 @@ fn handle_input(
             if from_wait || from_mcp {
                 chat.note_url_copied(report != CopyReport::Failed);
             }
-            chat.toast(match report {
+            // Gh #374 gap 4: the dwell follows the report, so a success fades
+            // sooner than a caveat or a failure. An unverified copy is not a
+            // success - it takes the error window because its caveat has to be
+            // read.
+            let notice = match report {
                 CopyReport::Native if from_wait || from_mcp => {
                     "\u{2713} Copied sign-in URL to clipboard".to_string()
                 }
-                report => report.notice(),
-            });
+                ref report => report.notice(),
+            };
+            if report.is_error() {
+                chat.toast_error(notice);
+            } else {
+                chat.toast_success(notice);
+            }
         }
     }
     // Gh #35 + gh #375 gap 4: the fullscreen viewport's own scroll keys.

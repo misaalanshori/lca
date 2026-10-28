@@ -63,8 +63,16 @@ pub struct Toast {
     pub until: std::time::Instant,
 }
 
-/// How long a toast floats (gh #239, pi's transient-note shape).
+/// How long a toast floats: the **caveat/failure** window (gh #239, gh #374 gap 4).
+///
+/// pi gives its copy failures 5000 ms (`COPY_ERROR_FLASH_DURATION_MS`) against a
+/// 1000 ms success default, because an error is a claim the reader acts on. A
+/// success uses [`TOAST_SUCCESS_SECS`] instead.
 pub const TOAST_SECS: u64 = 5;
+
+/// How long a **success** toast floats (gh #374 gap 4): shorter, because a success
+/// flash that overstays is noise while a caveat has to be read.
+pub const TOAST_SUCCESS_SECS: u64 = 2;
 
 /// How many toasts stack (older ones drop — a flood of confirmations
 /// is one line, not a wall).

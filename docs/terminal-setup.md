@@ -36,6 +36,31 @@ back past it again restores exactly what dragging straight there would have
 given. A triple-click behaves the same way by whole lines. Double-clicking and
 then dragging *towards* the far side is unchanged.
 
+**A copy says what actually happened** (gh #374 gap 4). There are three
+confirmations, and only one of them claims success:
+
+| what happened | what it says |
+|---|---|
+| a clipboard tool confirmed the write | `✓ copied to clipboard` |
+| only `OSC 52` could run, and the terminal may ignore it | `? copy sent as OSC 52 - the terminal may have ignored it` |
+| no clipboard was reachable at all | `✗ could not copy: no clipboard here (try /fullscreen)` |
+
+The middle row is the one that matters: `OSC 52` is a request to the terminal, and
+some terminals (`macOS` `Terminal.app`, `tmux` with `set-clipboard off`) accept it
+silently and do nothing. A finished copy and a silently dropped one used to look
+the same; they no longer do. The two caveat-and-failure notices also stay on
+screen longer than the success, because they are what you have to read. Nothing
+here depends on colour alone - each row carries its own mark and its own words.
+
+**Right-click pastes in fullscreen on Windows** (gh #374 gap 4). Windows Terminal
+and `conhost` users expect a right-click to paste, and in fullscreen LCA used to
+ignore it (worse, it started a selection). It now pastes the clipboard into the
+composer, and says `✓ pasted from the clipboard` - or `✗ nothing to paste: the
+clipboard is empty or unreadable` when there is nothing there. Two exclusions: it
+is Windows only (macOS and Linux terminals give the right button other meanings),
+and it is off inside VS Code's integrated terminal, which has its own right-click
+behaviour that LCA must not shadow.
+
 **Exiting fullscreen hands the whole session back to the terminal**
 (gh #374 gap 1). Quitting while in fullscreen (`/exit`, `Ctrl+D`)
 writes every row the session has — not just the ones on screen — into

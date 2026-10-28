@@ -202,6 +202,16 @@ impl Ui {
     }
 }
 
+/// The `read_clipboard` hook (gh #374 gap 4): a right-button paste reads the
+/// clipboard through **this** path - the same bounded `arboard` call `/paste`
+/// uses - so LCA keeps one clipboard mechanism and one timeout.
+///
+/// Free-standing rather than a method on `Ui` because the hook holds
+/// `Arc<dyn Fn>`, which cannot borrow the interface it belongs to.
+pub(crate) fn read_clipboard_hook() -> lca_ui::state::ClipboardReader {
+    Arc::new(|| with_clipboard_timeout(|cb| cb.get_text().ok()).filter(|text| !text.is_empty()))
+}
+
 /// The notice `/paste` shows when the clipboard holds nothing it can stage.
 ///
 /// One sentence covers "no display", "holds only text", and "did not answer":

@@ -18,6 +18,20 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **A copy now says what actually happened** (gh #374 gap 4). Three distinguishable
+  confirmations instead of one ambiguous one: `✓ copied to clipboard` only when a
+  clipboard tool verified the write; `? copy sent as OSC 52 - the terminal may have
+  ignored it` when only the escape could run; `✗ could not copy: no clipboard here
+  (try /fullscreen)` when nothing could. The old text for the middle case opened
+  with "copied", so a terminal that accepted `OSC 52` and did nothing (macOS
+  `Terminal.app`, tmux with `set-clipboard off`) looked exactly like a success. The
+  caveat and the failure also stay on screen longer than the success, because they
+  are what you have to read.
+- **Right-click pastes in fullscreen on Windows** (gh #374 gap 4). A right-button
+  press used to start a text selection; on Windows Terminal and `conhost` it now
+  pastes the clipboard into the composer, and says so - or says there was nothing to
+  paste. Windows only, and never inside VS Code's integrated terminal, which owns
+  that gesture itself.
 - **Dragging backwards keeps the word you double-clicked** (gh #374 gap 3).
   Double-click a word and drag left, or up to a previous line, and the word
   vanished: `Selection::update` adjusted only the focus column against the

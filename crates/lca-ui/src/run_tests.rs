@@ -96,50 +96,6 @@ pub(crate) fn chat() -> Chat {
     Chat::new(options(), Arc::new(KeybindingsManager::new()))
 }
 
-// Verifies: gh #9 / R6 - the copy ladder writes the text through the
-// host's verified native clipboard when it has one, falls back to
-// OSC 52 when the screen can send it, and says which step ran; with
-// neither available it says the copy did not happen instead of
-// pretending.
-#[test]
-fn the_copy_ladder_writes_the_text_and_says_which_step_ran() {
-    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
-    let hook: crate::state::ClipboardWriter = {
-        let seen = seen.clone();
-        Arc::new(move |text: &str| {
-            seen.lock().unwrap().push(text.to_string());
-            true
-        })
-    };
-    let report = copy_through_ladder("hello world", Some(&hook), None);
-    assert_eq!(report, super::CopyReport::Native);
-    assert_eq!(report.notice(), "copied to clipboard");
-    assert_eq!(
-        *seen.lock().unwrap(),
-        vec!["hello world".to_string()],
-        "the text reaches the clipboard verbatim"
-    );
-
-    let mut sent = Vec::new();
-    let report = copy_through_ladder(
-        "osc",
-        None,
-        Some(&mut |text: &str| sent.push(text.to_string())),
-    );
-    let notice = report.notice();
-    assert_eq!(sent, vec!["osc"], "OSC 52 carries the same text");
-    assert!(
-        notice.contains("nothing was copied"),
-        "the unverified notice is honest: {notice}"
-    );
-
-    let notice = copy_through_ladder("nowhere", None, None).notice();
-    assert!(
-        notice.starts_with("could not copy"),
-        "no step ran, so no claim: {notice}"
-    );
-}
-
 // Verifies: gh #9 (pi 1.0.0's `app.message.copy`) - with nothing
 // selected, Ctrl+X copies the last assistant message through that
 // ladder: this host has no native clipboard tool, so OSC 52 reaches
@@ -178,8 +134,8 @@ fn ctrl_x_copies_the_last_assistant_message_through_the_ladder() {
     );
     assert_eq!(
         chat.toasts.last().map(|toast| toast.text.as_str()),
-        Some("copied (if your terminal blocked the clipboard, nothing was copied)"),
-        "the honest unverified notice"
+        Some("? copy sent as OSC 52 - the terminal may have ignored it"),
+        "the honest unverified notice (gh #374 gap 4)"
     );
     // The same press armed the external-editor chord.
     assert_eq!(chat.handle_key("\x05"), Action::ExternalEditor);
@@ -229,8 +185,8 @@ fn a_mouse_selection_still_copies_on_release_through_the_ladder() {
     );
     assert_eq!(
         chat.toasts.last().map(|toast| toast.text.as_str()),
-        Some("copied (if your terminal blocked the clipboard, nothing was copied)"),
-        "the same notice the mouse path always gave"
+        Some("? copy sent as OSC 52 - the terminal may have ignored it"),
+        "the same notice the mouse path always gave (gh #374 gap 4)"
     );
     // The key path did not also fire: one press, one copy.
     assert!(!out.contains("Y29weSBtZQ=="), "nothing else was copied");
@@ -1193,3 +1149,7 @@ mod document_handoff;
 /// Gh #374 gap 2's focus rows, likewise.
 #[path = "run_focus_tests.rs"]
 mod focus_reports;
+
+/// Gh #374 gap 4's copy-notice rows, plus the ladder row they share.
+#[path = "run_copy_notice_tests.rs"]
+mod copy_notice;

@@ -22,11 +22,40 @@ pub(super) enum CopyReport {
 }
 
 impl CopyReport {
+    /// Whether this report is a success, a caveat, or a failure, for the caller
+    /// that has to pick a dwell time (gh #374 gap 4).
+    ///
+    /// Only [`CopyReport::Native`] is a success. [`CopyReport::Osc52`] is **not**:
+    /// the write went out and the terminal may have ignored it, so treating it as
+    /// a success is the exact lie this gap fixes.
+    pub(super) fn is_error(&self) -> bool {
+        !matches!(self, CopyReport::Native)
+    }
+
+    /// What the interface shows (gh #374 gap 4).
+    ///
+    /// Three distinguishable forms, and the wording is load-bearing:
+    ///
+    /// - [`CopyReport::Native`] - `✓ copied to clipboard`. A verified write, so
+    ///   the tick is earned and the sentence is short.
+    /// - [`CopyReport::Osc52`] - `? copy sent as OSC 52 - the terminal may have
+    ///   ignored it`. **Not** a success claim: the tick is withheld and the
+    ///   caveat is stated. This used to read "copied (if your terminal blocked the
+    ///   clipboard, nothing was copied)", which opens with "copied" - a skimming
+    ///   reader was told it worked when the terminal may have done nothing. pi's
+    ///   bare-OSC-52 path flashes `Copied!` (`tui-alt-screen.ts:1484`), which is
+    ///   that same lie; LCA does not copy it.
+    /// - [`CopyReport::Failed`] - `✗ could not copy: no clipboard here (try
+    ///   /fullscreen)`. Nothing happened, and the row names the action that can
+    ///   fix it (OSC 52 needs the alt screen).
+    ///
+    /// Each form is distinct even with every non-ASCII symbol stripped, so a
+    /// reader with no glyphs still gets three different sentences (NFR-28).
     pub(super) fn notice(&self) -> String {
         match self {
-            CopyReport::Native => "copied to clipboard".to_string(),
+            CopyReport::Native => "\u{2713} copied to clipboard".to_string(),
             CopyReport::Osc52 => {
-                "copied (if your terminal blocked the clipboard, nothing was copied)".to_string()
+                "? copy sent as OSC 52 - the terminal may have ignored it".to_string()
             }
             CopyReport::Failed => {
                 // Gh #406: the wording named a *missing tool*, which was the old
@@ -35,7 +64,7 @@ impl CopyReport {
                 // it - no display (SSH, a container) or a stuck selection owner -
                 // and the fix is still to use the alt screen, where OSC 52 can
                 // reach the terminal.
-                "could not copy: no clipboard here (try /fullscreen)".to_string()
+                "\u{2717} could not copy: no clipboard here (try /fullscreen)".to_string()
             }
         }
     }

@@ -20,6 +20,11 @@ use super::selection::{Granularity, Selection, SelectionPoint};
 use super::terminal::Terminal;
 use super::text::visible_width;
 
+pub use right_click::right_click_paste_allowed;
+mod copy_out;
+mod right_click;
+pub use copy_out::CopyOutcome;
+
 /// Strip only LCA's **own** in-band markers, keeping every colour (gh #374 gap 1).
 ///
 /// pi's `afterTerminalStop` removes exactly `OSC133_ZONE_PREFIX` and
@@ -233,15 +238,6 @@ impl Default for WheelAccel {
     }
 }
 
-/// How a copy completed, for honest reporting.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CopyOutcome {
-    /// A verified native clipboard accepted the text.
-    Verified,
-    /// Only an unverifiable OSC 52 write was possible.
-    Unverified,
-}
-
 /// The fullscreen renderer.
 pub struct AltScreenRenderer {
     previous: Vec<String>,
@@ -284,6 +280,9 @@ pub struct AltScreenRenderer {
     clicked_cell: Option<(u16, u16)>,
     /// The OSC-8 URL a completed click landed on, for the loop to open.
     clicked_link: Option<String>,
+    /// Right-button paste state (gh #374 gap 4): `(requested, allowed)`, both
+    /// owned and documented by [`self::right_click`].
+    pub(super) right_click: (bool, bool),
     /// Whether the pointer hovers the scrollbar (gh #164); an overlay covering the
     /// viewport clears it (pi's `stopScrollbarHover`).
     scrollbar_hover: bool,
@@ -329,6 +328,7 @@ impl AltScreenRenderer {
             press_cell: None,
             clicked_cell: None,
             clicked_link: None,
+            right_click: (false, false),
             scrollbar_hover: false,
             scrollbar_drag: false,
             document: Vec::new(),
@@ -735,6 +735,12 @@ impl AltScreenRenderer {
             return false;
         }
         if mouse.press {
+            // Gh #374 gap 4: a right-button press is a paste request, never a
+            // selection - routing it here (before the selection arm) is the fix for
+            // a right-click starting a char-granularity drag.
+            if let Some(consumed) = self.right_click_press(button) {
+                return consumed;
+            }
             // Track double/triple click within 500 ms on the same cell.
             let now = std::time::Instant::now();
             self.click_count = match self.last_click {
@@ -825,45 +831,10 @@ impl AltScreenRenderer {
         self.selection.active_text(&self.previous)
     }
 
-    /// Render an OSC 52 copy. Returns whether the write was verifiable
-    /// (never, without an injected native clipboard — the honest answer).
-    pub fn copy_osc52(&self, term: &mut dyn Terminal, text: &str) -> CopyOutcome {
-        let encoded = base64_encode(text.as_bytes());
-        term.write(&format!("\x1b]52;c;{encoded}\x07"));
-        CopyOutcome::Unverified
-    }
-
     /// Whether a line is entirely blank.
     pub fn is_blank(line: &str) -> bool {
         visible_width(line) == 0
     }
-}
-
-// The engine has no base64 dependency; a tiny local encoder keeps OSC 52
-// self-contained.
-#[allow(clippy::needless_range_loop)]
-fn base64_encode(bytes: &[u8]) -> String {
-    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let b0 = chunk[0] as u32;
-        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
-        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
-        let n = (b0 << 16) | (b1 << 8) | b2;
-        out.push(TABLE[((n >> 18) & 63) as usize] as char);
-        out.push(TABLE[((n >> 12) & 63) as usize] as char);
-        if chunk.len() > 1 {
-            out.push(TABLE[((n >> 6) & 63) as usize] as char);
-        } else {
-            out.push('=');
-        }
-        if chunk.len() > 2 {
-            out.push(TABLE[(n & 63) as usize] as char);
-        } else {
-            out.push('=');
-        }
-    }
-    out
 }
 
 #[cfg(test)]
@@ -1013,13 +984,6 @@ mod tests {
             press: true,
         });
         assert_eq!(r.scroll, 0);
-    }
-
-    #[test]
-    fn base64_encodes_osc52_payloads() {
-        assert_eq!(base64_encode(b"hello"), "aGVsbG8=");
-        assert_eq!(base64_encode(b"a"), "YQ==");
-        assert_eq!(base64_encode(b""), "");
     }
 
     // Verifies: R6 - a click on an OSC-8 link yields its URL.
@@ -1198,3 +1162,6 @@ mod exit_handoff_tests;
 #[cfg(test)]
 #[path = "alt_screen/focus_tests.rs"]
 mod focus_tests;
+#[cfg(test)]
+#[path = "alt_screen/right_click_tests.rs"]
+mod right_click_tests;

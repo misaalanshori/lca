@@ -444,3 +444,163 @@ fn line_granularity_derives_its_range_from_the_target_line() {
         "and it uses the target's width, not the anchor's column: {update}"
     );
 }
+
+// ============================================================================
+// gh #374 gap 4 - report what actually happened.
+//
+// The behavioural rows live beside the code (`lca-ui`'s
+// `run::tests::copy_notice` for the three feedback forms and the paste path, and
+// `alt_screen::right_click_tests` for the renderer's half). This file is the
+// NFR-24 named guard, so it pins the two seams that a passing suite could not
+// otherwise protect: the unverified arm's wording, and the VS Code exclusion.
+// ============================================================================
+
+// Verifies: gh #374 gap 4 - **the unverified copy does not claim success.**
+//
+// The defect this gap exists for was entirely in the string: `copy_osc52` had
+// always returned `Unverified` and the code called that "the honest answer", but
+// the text opened with "copied", so a skimming reader was told it worked. A
+// behavioural row asserts the three forms; this one asserts the *shape* of the
+// unverified arm specifically, so the "copied (if your terminal blocked…)" wording
+// cannot come back.
+#[test]
+fn the_unverified_copy_does_not_open_by_claiming_success() {
+    let source = production_source("crates/lca-ui/src/copy_ladder.rs");
+    let notice = function_body(&source, "pub(super) fn notice(&self)");
+    assert!(
+        !notice.contains("copied (if your terminal blocked"),
+        "the old wording opened with \"copied\" - that was the lie: {notice}"
+    );
+    // The three arms, each with its own mark, so they differ by text as well as by
+    // colour (NFR-28).
+    for mark in ["u{2713}", "?", "u{2717}"] {
+        assert!(
+            notice.contains(mark),
+            "the arm carrying {mark:?} is present: {notice}"
+        );
+    }
+    assert!(
+        notice.contains("OSC 52") && notice.contains("may have ignored"),
+        "the unverified arm names the mechanism and the doubt: {notice}"
+    );
+    // And the dwell decision reads the report rather than a constant: only
+    // `Native` is a success.
+    let is_error = function_body(&source, "pub(super) fn is_error(&self)");
+    assert!(
+        is_error.contains("!matches!(self, CopyReport::Native)"),
+        "only a verified write is a success, so an unverified one takes the long \
+         window: {is_error}"
+    );
+}
+
+// Verifies: gh #374 gap 4 - the two dwell windows exist and one is shorter.
+//
+// A single global duration cannot express "successes fade sooner", and that
+// asymmetry is the whole reason a reader notices the difference.
+#[test]
+fn the_two_toast_windows_are_declared_and_ordered() {
+    // The full source, not `production_source`: `chat.rs` opens with a
+    // `#[cfg(test)]` import block near the top, so truncating there would hide the
+    // constants below it.
+    let source = read("crates/lca-ui/src/chat.rs");
+    let long = source
+        .lines()
+        .find(|line| line.contains("pub const TOAST_SECS"))
+        .unwrap_or_else(|| panic!("TOAST_SECS exists"));
+    let short = source
+        .lines()
+        .find(|line| line.contains("pub const TOAST_SUCCESS_SECS"))
+        .unwrap_or_else(|| panic!("TOAST_SUCCESS_SECS exists: {source}"));
+    let value = |line: &str| -> u64 {
+        line.split('=')
+            .nth(1)
+            .and_then(|rest| rest.trim().trim_end_matches(';').parse().ok())
+            .unwrap_or_else(|| panic!("a literal duration in {line:?}"))
+    };
+    assert!(
+        value(short) < value(long),
+        "a success fades sooner than a caveat: {short:?} vs {long:?}"
+    );
+}
+
+// Verifies: gh #374 gap 4 - **`TERM_PROGRAM=vscode` is excluded from right-click
+// paste.**
+//
+// This is the exclusion that prevents a regression: VS Code's integrated terminal
+// has its own right-click behaviour, and shadowing it would break the editor the
+// terminal is running inside. pi gates on the same value
+// (`tui-alt-screen.ts:1022`).
+#[test]
+fn the_right_click_gate_excludes_vscode_and_non_windows() {
+    let source = production_source("crates/lca-tui/src/engine/alt_screen/right_click.rs");
+    let gate = function_body(&source, "pub fn right_click_paste_allowed(");
+    assert!(
+        gate.contains("vscode"),
+        "the VS Code exclusion is named: {gate}"
+    );
+    assert!(
+        gate.contains("eq_ignore_ascii_case"),
+        "and compared case-insensitively, as pi does, or the environment's \
+         spelling bypasses it: {gate}"
+    );
+    assert!(
+        gate.contains("if !is_windows"),
+        "and the feature is Windows-only: {gate}"
+    );
+    // The parameter, not `cfg!(windows)`: a guard nothing can exercise on Linux is
+    // a guard that rots.
+    assert!(
+        gate.contains("is_windows: bool") && gate.contains("term_program: Option<&str>"),
+        "the decision is a pure function of its two inputs, so both branches are \
+         testable on any platform: {gate}"
+    );
+
+    // The intent never becomes a selection: the right press is handled before the
+    // selection arm.
+    let alt = production_source("crates/lca-tui/src/engine/alt_screen.rs");
+    let input = function_body(&alt, "pub fn handle_mouse(");
+    let right = input
+        .find("right_click_press")
+        .unwrap_or_else(|| panic!("the right-click arm is present: {input}"));
+    let select = input
+        .find(".start(point, granularity")
+        .unwrap_or_else(|| panic!("the selection arm is present: {input}"));
+    assert!(
+        right < select,
+        "the right-button arm sits before the selection arm - before this gap a \
+         right press reached it and started a drag"
+    );
+}
+
+// Verifies: gh #374 gap 4 - the host reads the clipboard through the **one**
+// path, not a second mechanism.
+//
+// A right-button paste that grew its own `arboard` call would duplicate gh #406's
+// bounded read, and the two would drift on the timeout that keeps a hung X11 owner
+// from freezing the interface.
+#[test]
+fn the_right_click_paste_uses_the_one_clipboard_path() {
+    let hooks = production_source("crates/lca-cli/src/tui/hooks.rs");
+    assert!(
+        hooks.contains("read_clipboard: Some(super::attach::read_clipboard_hook())"),
+        "the host fills the reader from `attach.rs`, where `/paste` already reads: \
+         {hooks}"
+    );
+    let attach = production_source("crates/lca-cli/src/tui/attach.rs");
+    let hook = function_body(&attach, "pub(crate) fn read_clipboard_hook()");
+    assert!(
+        hook.contains("with_clipboard_timeout"),
+        "and that path keeps gh #406's bound: {hook}"
+    );
+    // The interface must not grow its own clipboard: the hook is the only seam.
+    let helpers = production_source("crates/lca-ui/src/run_input_helpers.rs");
+    let paste = function_body(&helpers, "pub(crate) fn paste_from_clipboard(");
+    assert!(
+        paste.contains("read_clipboard"),
+        "the interface asks the hook rather than reading the platform: {paste}"
+    );
+    assert!(
+        !paste.contains("arboard"),
+        "the engine and the interface never link a clipboard: {paste}"
+    );
+}
