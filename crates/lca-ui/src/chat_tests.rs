@@ -1056,6 +1056,9 @@ mod mcp_tests;
 mod picker_scroll_tests;
 #[path = "chat_settings_filter_tests.rs"]
 mod settings_filter_tests;
+// Gh #386 gap 3: the `/settings` description footer.
+#[path = "chat_settings_footer_tests.rs"]
+mod settings_footer_tests;
 // Gh #397: the `/settings` project-override row.
 #[path = "chat_project_override_tests.rs"]
 mod project_override_tests;

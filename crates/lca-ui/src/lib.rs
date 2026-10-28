@@ -39,6 +39,7 @@ mod chat_queue;
 mod chat_render;
 mod chat_search;
 mod chat_setting_cycle;
+mod chat_settings_footer;
 pub mod chat_shell;
 mod chat_tabs;
 mod chat_toasts;

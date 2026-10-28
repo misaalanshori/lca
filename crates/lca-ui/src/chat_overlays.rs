@@ -48,6 +48,8 @@ const HINT_SETTINGS_SEARCH: &str =
     "↑↓ move · enter/space/←→ change · tab project · q/esc close · type to search";
 const HINT_LOGIN: &str = "↑↓ move · enter choose · esc cancel";
 
+pub(crate) use crate::chat_settings_footer::settings_footer_and_hint;
+
 /// The sensitive filename in a permission modal's action text, if the
 /// modal asks for a sensitive read (gh #215): the action text is the
 /// permission action's own display (`read <path>`), so the `read `
@@ -87,6 +89,47 @@ impl Chat {
         theme: &crate::theme::Theme,
         selected: Option<usize>,
     ) {
+        self.picker_overlay_with_footer(
+            viewport,
+            width,
+            height,
+            title,
+            body,
+            &[],
+            hint,
+            theme,
+            selected,
+        )
+    }
+
+    /// [`Self::picker_overlay`] with **footer lines** between the items and the hint
+    /// (gh #386 gap 3).
+    ///
+    /// A footer is information the list cannot show: a settings row's full
+    /// description has nowhere to go on the row, which carries a description
+    /// *column* under truncation (gh #386 gap 1). So the sentence that got cut goes
+    /// here, where it has the whole box width to wrap in.
+    ///
+    /// The rows are **pinned furniture**, not items: `pinned_tail` tells the painter
+    /// how many trailing body rows never scroll, and the item budget excludes them -
+    /// the difference between a footer taking room from the *box* and from the *list*.
+    #[allow(clippy::too_many_arguments)]
+    fn picker_overlay_with_footer(
+        &self,
+        viewport: &mut [String],
+        width: u16,
+        height: u16,
+        title: &str,
+        body: &[String],
+        footer: &[String],
+        hint: &str,
+        theme: &crate::theme::Theme,
+        selected: Option<usize>,
+    ) {
+        // The painter inserts the footer itself (it has to decide, against the box's
+        // own layout, whether there is room for it), so the body handed over carries
+        // only the items *and* the two pinned hint rows. Passing the footer here as
+        // well painted it twice - the caller's copy plus the painter's.
         let mut body = body.to_vec();
         body.push(String::new());
         body.push(hint.to_string());
@@ -97,7 +140,7 @@ impl Chat {
         let prev = self.picker_window.get();
         let keep = (prev.1 != usize::MAX).then_some((prev.0, prev.1));
         let window: (usize, usize, u16) = overlay_box_picker(
-            viewport, width, height, title, &body, theme, selected, above, keep,
+            viewport, width, height, title, &body, theme, selected, above, keep, footer,
         );
         // The mouse hit test reads back exactly what this frame drew.
         self.picker_window.set(window);
@@ -586,30 +629,26 @@ impl Chat {
                     ));
                 }
             }
-            // gh #235: the highlighted row's description rides the
-            // pinned hint (outside the items, so the row map holds).
-            let hint = if picker.editing.is_some() {
-                HINT_SETTINGS_EDIT.to_string()
-            } else if let Some(row) = picker.selected_row() {
-                let cap = (width as usize)
-                    .saturating_sub(HINT_SETTINGS_SEARCH.len() + 12)
-                    .max(20);
-                let desc =
-                    lca_tui::engine::text::truncate_to_width(&row.description, cap, "…", false);
-                if desc.is_empty() {
-                    HINT_SETTINGS_SEARCH.to_string()
-                } else {
-                    format!("{} · {desc}", HINT_SETTINGS_SEARCH)
-                }
-            } else {
-                HINT_SETTINGS_SEARCH.to_string()
-            };
-            self.picker_overlay(
+            // Gh #386 gap 3: the description gets a **wrapped footer** when the box has
+            // room, and goes back on the hint line in its old truncated form when it
+            // does not - falling back rather than dropping keeps gh #235's "the help is
+            // on screen" true on a tall list, which a live row caught.
+            let (footer, hint) = settings_footer_and_hint(
+                picker,
+                width,
+                height,
+                body.len(),
+                self.composer_height(width),
+                HINT_SETTINGS_EDIT,
+                HINT_SETTINGS_SEARCH,
+            );
+            self.picker_overlay_with_footer(
                 viewport,
                 width,
                 height,
                 "settings",
                 &body,
+                &footer,
                 &hint,
                 &self.theme,
                 Some(selected_body),

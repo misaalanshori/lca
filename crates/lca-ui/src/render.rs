@@ -136,8 +136,26 @@ pub fn overlay_box_picker(
     selected: Option<usize>,
     above_rows: usize,
     keep: Option<(usize, usize)>,
+    footer: &[String],
 ) -> (usize, usize, u16) {
     let options = picker_overlay_options(height, above_rows);
+    // Gh #386 gap 3: whether there is room for a footer is decided **before** the
+    // painter, by [`picker_footer_fits`], because only the caller can choose what to
+    // put on the hint line instead. So the footer arriving here is one that already
+    // fits, and `footer_rows` is simply it.
+    let footer_rows = footer;
+    let mut body: std::borrow::Cow<'_, [String]> = std::borrow::Cow::Borrowed(body);
+    if !footer_rows.is_empty() {
+        let mut extended = body.into_owned();
+        // The footer brings its own separator (its first row), so the hint's blank
+        // is replaced rather than doubled.
+        let tail_start = extended.len().saturating_sub(2);
+        let mut rebuilt: Vec<String> = extended.drain(..tail_start).collect();
+        rebuilt.extend_from_slice(footer_rows);
+        rebuilt.extend(extended);
+        body = std::borrow::Cow::Owned(rebuilt);
+    }
+    let body = body.as_ref();
     // The granted height bounds the window: two frame rows plus the
     // two pinned hint rows, at least one item row visible.
     let content_height = u16::try_from(body.len())
@@ -145,7 +163,17 @@ pub fn overlay_box_picker(
         .saturating_add(2);
     let rect = resolve_overlay_layout(&options, width, height, content_height);
     let inner = (rect.width as usize).saturating_sub(4);
-    let items_len = body.len().saturating_sub(2);
+    // The last `2 + footer` rows are painter furniture (the hint and the footer) and
+    // never scroll, so the item count stops before them.
+    //
+    // The `4` is the two frame rows plus the two hint rows. A footer adds to the
+    // box's height by exactly as many rows as it adds here, and the surplus gate
+    // above only lets it in when that height was free - so the two cancel and the
+    // item budget needs no footer term. Adding one would be a second copy of a
+    // subtraction the gate already made, which is how a budget drifts from its
+    // reason.
+    let pinned_tail = 2usize.saturating_add(footer_rows.len());
+    let items_len = body.len().saturating_sub(pinned_tail);
     let max_items = (rect.height as usize).saturating_sub(4).max(1);
     let (mut start, mut end) = picker_window(items_len, selected, max_items);
     // gh #230: a selection inside the painted window keeps it. The
@@ -224,9 +252,9 @@ pub fn overlay_box_picker(
             end = last + 1;
         }
     }
-    // The hint rows never scroll: items, then the pinned tail.
+    // The pinned tail never scrolls: items, then the pinned rows.
     let mut windowed: Vec<(usize, String)> = visible;
-    for (offset, line) in body.iter().enumerate().skip(items_len).take(2) {
+    for (offset, line) in body.iter().enumerate().skip(items_len) {
         windowed.push((offset, line.clone()));
     }
     let title = if start > 0 {
@@ -606,6 +634,7 @@ mod picker_window_tests {
             Some(25),
             3,
             None,
+            &[],
         );
         assert!(
             start > 0 && end < 50,
@@ -635,6 +664,7 @@ mod picker_window_tests {
             Some(0),
             3,
             None,
+            &[],
         );
         let text = stripped(&base).join("\n");
         assert!(!text.contains("▲"), "nothing above: {text}");
@@ -652,6 +682,7 @@ mod picker_window_tests {
             Some(49),
             3,
             None,
+            &[],
         );
         let text = stripped(&base).join("\n");
         assert!(text.contains("▲"), "plenty above");
@@ -674,6 +705,7 @@ mod picker_window_tests {
             Some(1),
             3,
             None,
+            &[],
         );
         assert_eq!((start, end), (0, 3));
         let text = stripped(&base).join("\n");
