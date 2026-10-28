@@ -1048,6 +1048,8 @@ mod bug_tests;
 #[path = "chat_persona_tests.rs"]
 mod persona_tests;
 
+#[path = "chat_picker_hover_tests.rs"]
+mod chat_picker_hover_tests;
 #[path = "chat_mcp_tests.rs"]
 mod mcp_tests;
 #[path = "chat_picker_scroll_tests.rs"]

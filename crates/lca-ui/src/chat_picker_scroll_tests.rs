@@ -161,16 +161,23 @@ fn hover_inside_the_window_highlights_without_scrolling() {
     let (start, end, _) = chat.picker_window.get();
     assert!(start > 0, "the window rolled: ({start}, {end})");
     let selected_before = chat.model_picker.as_ref().expect("open").selected;
-    // Hover the first visible row: selection follows, window holds.
-    chat.hover_picker_item(start);
-    let picker = chat.model_picker.as_ref().expect("open");
-    assert_eq!(picker.selected, start, "the highlight follows");
-    // One frame with the hovered selection: the window must hold.
+    // Gh #386 gap 2 (sanctioned change): this row used to hover and assert "the
+    // highlight follows". Hover no longer selects - so the row now pins the
+    // *stronger* property it was reaching for: neither a hover nor a press may
+    // re-scroll the window. A press previews the row without moving the window
+    // (the window is `selected - max/2`, clamped, and `start` is already the
+    // window's first row).
+    chat.picker_hover(start);
+    let after_hover = chat.model_picker.as_ref().expect("open").selected;
+    assert_eq!(
+        after_hover, selected_before,
+        "a move does not change the selection at all"
+    );
     let _ = chat.viewport(w, h, 0);
     assert_eq!(
         chat.picker_window.get(),
         (start, end, chat.picker_window.get().2),
-        "hover never rescrolls"
+        "and the window holds, because nothing moved"
     );
     assert_ne!(selected_before, start, "the key walk moved first");
 }

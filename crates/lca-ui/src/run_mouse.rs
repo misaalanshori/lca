@@ -11,7 +11,7 @@
 //! means, and these functions are the part that decides it for the pointer.
 
 use crate::chat::Chat;
-use crate::chat_mouse::{PickerHit, ScrollbarHit};
+use crate::chat_mouse::{PickerHit, ReleaseOutcome, ScrollbarHit};
 use crate::run::Screen;
 use lca_tui::engine::core::{MouseButton, MouseEvent};
 
@@ -45,12 +45,15 @@ pub(crate) fn handle_picker_mouse(event: MouseEvent, chat: &mut Chat, screen: &m
             }
             match chat.picker_hit(col, row, width, height) {
                 Some(PickerHit::Item(item)) => {
-                    chat.hover_picker_item(item);
-                    chat.picker_press = Some(item);
+                    // Gh #386 gap 2: the press arm previews and remembers.
+                    chat.picker_press(item);
                     screen.clear_selection();
                     true
                 }
                 Some(PickerHit::Chrome) => {
+                    // Chrome owns the gesture (a release on it aborts) but
+                    // previews nothing.
+                    chat.picker_press_item(None);
                     screen.clear_selection();
                     true
                 }
@@ -67,37 +70,41 @@ pub(crate) fn handle_picker_mouse(event: MouseEvent, chat: &mut Chat, screen: &m
             button: None,
             ..
         } => {
-            if let Some(PickerHit::Item(item)) = chat.picker_hit(col, row, width, height) {
-                chat.hover_picker_item(item);
+            // Gh #386 gap 2: a **move** must not change the picker's selection.
+            // The rolling window is `selected - max_visible/2`, so writing it here
+            // re-centered the window under a stationary cursor and the list scrolled
+            // itself. The table's hover arm is a no-op; calling it keeps every input
+            // kind going through one place.
+            if let Some(PickerHit::Item(_)) = chat.picker_hit(col, row, width, height) {
+                chat.picker_hover(0);
             }
             // Gh #210: arm the tooltip clock (picker rows are unlabeled,
             // so this only ever rearms over plain cells).
             chat.note_hover(col, row, width, height, screen.scroll());
-            // The autocomplete popup highlights under hover (gh #167).
-            if let Some((top, len)) = chat.popup_rect(width, height)
-                && row >= top
-                && row < top.saturating_add(len)
-                && let Some((start, _)) = chat.editor.popup_window()
-            {
-                chat.editor
-                    .select_suggestion(start.saturating_add((row - top) as usize));
-            }
+            // Gh #386 gap 2: the autocomplete popup is the other centered list, and
+            // it had the same defect - `select_suggestion` writes the index the popup
+            // window centers on. Hover no longer touches it; a click still does
+            // (`chat_render.rs`'s `SuggestionAccepted` path).
             false
         }
         MouseEvent::Move {
             button: Some(_), ..
         } => chat.picker_press.is_some(),
-        MouseEvent::Up { col, row, .. } => match chat.picker_press.take() {
-            Some(pressed) => {
-                match chat.picker_hit(col, row, width, height) {
-                    Some(PickerHit::Item(hit)) if hit == pressed => chat.confirm_picker_item(),
-                    Some(PickerHit::Item(other)) => chat.hover_picker_item(other),
-                    _ => {}
-                }
-                true
+        MouseEvent::Up { col, row, .. } => {
+            if chat.picker_press.is_none() {
+                return false;
             }
-            None => false,
-        },
+            // Gh #386 gap 2: the release arm. Same item confirms; anywhere else
+            // aborts **and restores** the selection the press replaced.
+            let hit = match chat.picker_hit(col, row, width, height) {
+                Some(PickerHit::Item(item)) => Some(item),
+                _ => None,
+            };
+            if chat.picker_release_item(hit) == ReleaseOutcome::Confirm {
+                chat.confirm_picker_item();
+            }
+            true
+        }
         _ => false,
     }
 }
@@ -197,3 +204,7 @@ pub(crate) fn handle_mouse_event(event: MouseEvent, chat: &mut Chat, screen: &mu
         _ => false,
     }
 }
+
+#[cfg(test)]
+#[path = "run_mouse_tests.rs"]
+mod mouse_dispatch;

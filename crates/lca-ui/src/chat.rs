@@ -199,10 +199,11 @@ pub struct Chat {
     /// The floating toast stack (gh #239): transient confirmations and
     /// host diagnostics, newest last, fading on `tick`.
     pub toasts: Vec<Toast>,
-    /// An in-progress picker press (gh #167, pi's `mousePressedIndex`):
-    /// a release on the same item confirms it, anywhere else just moves
-    /// the highlight. `None` means no press owns the gesture.
-    pub(crate) picker_press: Option<usize>,
+    /// An in-progress picker press (gh #167): the pressed item **and the selection
+    /// it replaced**. The second half is gh #386 gap 2 - a press previews, so a
+    /// release elsewhere has to put the selection back, or the next `Enter` would
+    /// confirm the preview's row. `None` means no press owns the gesture.
+    pub(crate) picker_press: Option<(Option<usize>, usize)>,
     /// The painted picker window (gh #226): the `(start, end)` item
     /// range plus the content height the last frame's rolling viewport
     /// showed. The mouse hit test reads it back, so clicks land on what

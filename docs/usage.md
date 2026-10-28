@@ -200,6 +200,13 @@ everyday set:
 
 Skills and extensions add their own `/`-commands to the same menu.
 
+**In any of these lists, the keyboard picks and the pointer clicks** (gh #386 gap
+2). Moving the mouse over a row does nothing - it does not move the highlight - so
+a list you are reading stays still under a resting pointer. Pressing a row previews
+it, releasing on that same row confirms it, and releasing anywhere else puts the
+selection back where you left it. Scrolling moves one row per notch, so a trackpad
+flick does not run away with the list.
+
 ### Bookmarks and book copies
 
 - `/label [message-index] <name>` — bookmark a message; with no index,

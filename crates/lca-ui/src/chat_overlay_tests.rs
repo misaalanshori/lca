@@ -1011,11 +1011,14 @@ fn model_picker_hover_highlights_and_click_confirms() {
         Some(PickerHit::Item(1)),
         "the second row maps to the second model"
     );
-    chat.hover_picker_item(1);
+    // Gh #386 gap 2 (sanctioned change): this used to assert "hover highlights".
+    // Hover no longer selects - a **press** does, which is what a click's first
+    // half is. The row's property is unchanged: clicking a row selects it.
+    chat.picker_press(1);
     assert_eq!(
         chat.model_picker.as_ref().unwrap().selected,
         1,
-        "hover highlights"
+        "the press previews the clicked row"
     );
     chat.confirm_picker_item();
     assert!(chat.model_picker.is_none(), "click confirms and closes");
@@ -1117,7 +1120,8 @@ fn tree_rows_map_one_to_one_with_branches() {
             Some(PickerHit::Item(item)),
             "body row {item} maps to branch {item}"
         );
-        chat.hover_picker_item(item);
+        // Gh #386 gap 2 (sanctioned): a press previews, a move does not.
+        chat.picker_press(item);
         assert_eq!(chat.tree_picker.as_ref().unwrap().selected, item);
     }
 }

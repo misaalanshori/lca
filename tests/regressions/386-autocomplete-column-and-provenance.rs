@@ -28,6 +28,7 @@ use lca_tui::widgets::editor::popup_layout::{
     MAX_PRIMARY_COLUMN_WIDTH, MIN_DESCRIPTION_WIDTH, MIN_PRIMARY_COLUMN_WIDTH,
     MIN_TWO_COLUMN_WIDTH, PRIMARY_COLUMN_GAP,
 };
+use std::path::PathBuf;
 
 /// A row with the given label and description, built in.
 fn row(label: &str, description: Option<&str>) -> AutocompleteItem {
@@ -374,4 +375,224 @@ fn a_command_row_carries_its_slash_command_origin() {
         .find(|item| item.label == "/help")
         .expect("the built-in row is offered");
     assert_eq!(help.origin, Origin::Builtin);
+}
+
+// ============================================================================
+// gh #386 gap 2 - a stationary mouse must not make a centered picker scroll.
+//
+// The behavioural rows live beside the code: `lca-ui`'s
+// `chat::tests::chat_picker_hover_tests` for the input-kind table, and
+// `run_mouse::mouse_dispatch` for the same table through the real pointer
+// dispatch. This file is the NFR-24 named guard, so it pins the two seams a green
+// suite could otherwise lose: that the window is derived (not stored), and that
+// hover is a deliberate no-op in the one place all ten pickers share.
+// ============================================================================
+
+/// The body of one function, found by brace matching from its signature.
+///
+/// Brace matching rather than "up to the next `\n    }\n`": these methods contain
+/// nested blocks, and a shallow scan stops inside the signature itself when it spans
+/// lines - which is how the first version of these rows failed.
+fn function_body<'a>(source: &'a str, signature: &str) -> &'a str {
+    let start = source
+        .find(signature)
+        .unwrap_or_else(|| panic!("{signature} exists"));
+    let bytes = source.as_bytes();
+    let mut depth = 0usize;
+    let mut seen = false;
+    let mut i = start;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'{' => {
+                depth += 1;
+                seen = true;
+            }
+            b'}' => {
+                depth -= 1;
+                if seen && depth == 0 {
+                    return &source[start..=i];
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    &source[start..]
+}
+
+/// A source file with every escape a test could hide behind removed.
+fn plain_source(rel: &str) -> String {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel);
+    std::fs::read_to_string(&path).unwrap_or_else(|err| panic!("read {path:?}: {err}"))
+}
+
+// Verifies: gh #386 gap 2 - the picker window is **derived from `selected`**, never
+// stored, so the only way it can move is for `selected` to move.
+//
+// This is why the fix is "stop writing `selected` on move" rather than "suppress the
+// re-center": the two are the same fact. A stored offset would make the
+// freeze-the-window alternative conceivable, and that alternative is the worse bug
+// (a static list with a silently moving selection).
+#[test]
+fn the_picker_window_is_derived_from_the_selection() {
+    let source = plain_source("crates/lca-ui/src/render.rs");
+    let body = function_body(&source, "pub fn picker_window(");
+    // The point is the dependency on `selected`, not the line breaks: the
+    // expression wraps, so match the arithmetic rather than a whole line.
+    assert!(
+        body.contains("saturating_sub(half)"),
+        "the start is computed from `selected`, the way pi's getVisibleRange is: {body}"
+    );
+    assert!(
+        body.contains("let selected ="),
+        "from the caller's `selected` argument: {body}"
+    );
+    assert!(
+        !body.contains("self."),
+        "and it holds no state of its own - it is a pure function: {body}"
+    );
+}
+
+// Verifies: gh #386 gap 2 - **hover is a no-op**, and that is written down where the
+// next reader will find it.
+//
+// The bug's whole mechanism was `hover_picker_item` writing `selected`. Restoring a
+// single `self.<picker>.selected = ...` inside the hover arm brings it straight back,
+// so this row names the arm and asserts it assigns nothing.
+#[test]
+fn the_hover_arm_assigns_no_selection() {
+    let source = plain_source("crates/lca-ui/src/chat_mouse.rs");
+    let body = function_body(&source, "pub fn picker_hover(");
+    assert!(
+        !body.contains(".selected ="),
+        "the hover arm writes no selection: {body}"
+    );
+    assert!(
+        !body.contains("select_picker_item"),
+        "and does not delegate to the writer: {body}"
+    );
+    // The reason lives in the doc comment *above* the signature, so that is what
+    // has to be read - a body-only slice cannot see it.
+    let sig = source
+        .find("pub fn picker_hover(")
+        .expect("picker_hover exists");
+    let doc_start = source[..sig]
+        .rfind("    /// A mouse **move** over a picker")
+        .unwrap_or_else(|| panic!("the hover arm is documented"));
+    let doc = &source[doc_start..sig];
+    assert!(
+        doc.contains("Hover must not change selection") || doc.contains("does nothing"),
+        "with the rule and its consequence stated, so the next reader does not \
+         restore the write: {doc}"
+    );
+    assert!(
+        doc.contains("centered"),
+        "and why a move caused a scroll - the window centers on the selection: {doc}"
+    );
+}
+
+// Verifies: gh #386 gap 2 - the **dispatch** sends a move to the no-op arm, not to
+// the writer.
+//
+// `run_mouse.rs` had no test at all before this cycle, and it is where the bug's
+// first half lived: a `PickerHit::Item` on `MouseEvent::Move` called
+// `hover_picker_item`, which wrote `selected`. A row inside `Chat` cannot see that
+// call site.
+#[test]
+fn the_pointer_dispatch_does_not_select_on_a_move() {
+    let source = plain_source("crates/lca-ui/src/run_mouse.rs");
+    // The move arm is a `match` arm, so the pattern's own braces would be matched
+    // first; anchor on the arm's `=> {` and brace-match from there.
+    let arm = source
+        .find("MouseEvent::Move {")
+        .expect("the move arm exists");
+    let arrow = source[arm..]
+        .find("=> {")
+        .map_or_else(|| panic!("the arm has a block"), |at| arm + at + 3);
+    let body = function_body(&source[arrow..], "{");
+    assert!(
+        !body.contains("select_picker_item"),
+        "the move arm never writes the picker's selection: {body}"
+    );
+    assert!(
+        !body.contains(".selected ="),
+        "nor any picker field directly: {body}"
+    );
+    assert!(
+        body.contains("picker_hover"),
+        "it goes through the table's hover arm, so the routing stays one place: {body}"
+    );
+    let _ = &body;
+    // And the popup, which is the same centered-list shape. Comments are stripped
+    // first: the arm *explains* the old call, and a naive `contains` would match the
+    // explanation instead of the code.
+    let code: String = body
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !code.contains("select_suggestion"),
+        "and a move over the autocomplete popup does not move the offer either: {code}"
+    );
+}
+
+// Verifies: gh #386 gap 2 - **press remembers the selection it replaced**, and the
+// release restores it.
+//
+// The abort-restores half is the piece people forget, so it is pinned structurally as
+// well as behaviourally: the press writes a pair, and the abort calls the writer with
+// the remembered half.
+#[test]
+fn a_press_remembers_what_it_replaced_and_an_abort_puts_it_back() {
+    let source = plain_source("crates/lca-ui/src/chat_mouse.rs");
+    let press = function_body(&source, "pub fn picker_press_item(");
+    assert!(
+        press.contains("picker_selected()"),
+        "the press reads the current selection before it moves it: {press}"
+    );
+    assert!(
+        press.contains("self.picker_press = Some((item, prior))"),
+        "and stores it beside the pressed item: {press}"
+    );
+
+    let release = function_body(&source, "pub fn picker_release_item(");
+    assert!(
+        release.contains("self.select_picker_item(prior)"),
+        "the abort writes the remembered selection back: {release}"
+    );
+    assert!(
+        release.contains("ReleaseOutcome::Confirm"),
+        "and only a same-item release confirms: {release}"
+    );
+}
+
+// Verifies: gh #386 gap 2 - the wheel is **one item per event**, so the transcript's
+// acceleration is not applied here.
+//
+// `WheelAccel` is the right instrument for rows; a picker moves by items, and pi's
+// wheel path is a single clamped step. The seam that could reintroduce acceleration
+// is the `step` helper, so the row asserts it adds `delta` unchanged.
+#[test]
+fn the_picker_wheel_adds_one_delta_per_event() {
+    let source = plain_source("crates/lca-ui/src/chat_mouse.rs");
+    let body = function_body(&source, "pub fn wheel_picker(");
+    assert!(
+        body.contains("selected as i64 + delta as i64"),
+        "one event moves one item - no multiplier, no accelerator: {body}"
+    );
+    assert!(
+        !body.contains("WheelAccel") && !body.contains("wheel_step"),
+        "and the transcript's velocity curve is not applied to a picker: {body}"
+    );
+    // The caller clamps the event to ±1, which is the other half of "one per event".
+    let run = plain_source("crates/lca-ui/src/run.rs");
+    let call = run
+        .find("chat.wheel_picker(")
+        .expect("the dispatch calls the wheel arm");
+    let line = &run[call..run[call..].find(';').map_or(call + 40, |at| call + at)];
+    assert!(
+        line.contains("clamp(-1, 1)"),
+        "the dispatch passes the event's sign, clamped to one: {line}"
+    );
 }

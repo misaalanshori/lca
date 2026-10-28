@@ -497,6 +497,22 @@ pub enum PickerHit {
     Backdrop,
 }
 
+/// What a picker release decided (gh #386 gap 2).
+///
+/// The abort carries the value it restored so a caller (and a row) can assert the
+/// restore happened without reading the picker's field - the restored value is the
+/// `selected` the frame now paints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReleaseOutcome {
+    /// The release landed on the pressed item: confirm it.
+    Confirm,
+    /// The release landed elsewhere: the selection was put back to `restore`.
+    Abort {
+        /// The selection the press replaced, now restored.
+        restore: usize,
+    },
+}
+
 impl Chat {
     /// The open picker's painted box and per-body-row item map (gh
     /// #167): `Some(index)` rows highlight and confirm, `None` rows are
@@ -611,9 +627,119 @@ impl Chat {
         }
     }
 
-    /// Highlight one item row (gh #167, pi's press-to-highlight): the
-    /// theme picker live-previews like its keyboard path does.
-    pub fn hover_picker_item(&mut self, item: usize) {
+    /// A mouse **move** over a picker (gh #386 gap 2): does nothing.
+    ///
+    /// pi's rule, verbatim from `select-list.ts::handleMouse`:
+    ///
+    /// ```text
+    /// // Hover must not change selection: the visible range is centered on it.
+    /// ```
+    ///
+    /// This is a deliberate no-op and it is the whole fix. The rolling window is
+    /// `selected - max_visible/2` (`render.rs::picker_window`), so writing
+    /// `selected` on a move re-centered the window under a stationary cursor: the
+    /// row beneath the pointer changed, that produced another move, and the list
+    /// walked itself to the end. Merely resting the pointer over `/model` was
+    /// enough.
+    ///
+    /// **Keeping the write and freezing the window is not a fix**, it is a worse
+    /// bug: the highlight would sit still while `selected` silently moved, so the
+    /// next `Enter` would confirm a row the user never pointed at. Move must not
+    /// touch `selected` at all.
+    ///
+    /// `item` is accepted so the signature matches the other three arms of the
+    /// table - every input kind takes the item it landed on, and one of them
+    /// deliberately ignores it.
+    pub fn picker_hover(&mut self, item: usize) {
+        let _ = item;
+    }
+
+    /// The **press** arm of the table (gh #386 gap 2): previews the pressed item
+    /// and remembers what it replaced.
+    ///
+    /// pi's `mousePressedIndex` arm: pressing selects immediately, so the user sees
+    /// what a release would confirm. `picker_press` records the pair, which is what
+    /// makes the preview reversible. `None` is a press on chrome - it previews
+    /// nothing but still owns the gesture, so a release on it aborts like any other.
+    ///
+    /// The remembered value is the second half of the tuple and the reason a
+    /// drag-off can restore: [`Self::picker_release_item`] puts it back.
+    pub fn picker_press_item(&mut self, item: Option<usize>) {
+        let prior = self.picker_selected();
+        self.picker_press = Some((item, prior));
+        if let Some(item) = item {
+            self.select_picker_item(item);
+        }
+    }
+
+    /// [`Self::picker_press_item`] for an item that is definitely a row.
+    pub fn picker_press(&mut self, item: usize) {
+        self.picker_press_item(Some(item));
+    }
+
+    /// The release half of the table (gh #386 gap 2): **confirm** if it landed on
+    /// the pressed item, otherwise **abort and restore** the selection the press
+    /// replaced.
+    ///
+    /// This is the piece that gets forgotten, and it is why the press remembers the
+    /// prior value. A drag-off that left the preview standing would mean the next
+    /// `Enter` confirmed a row nobody chose.
+    pub fn picker_release(&mut self, item: usize) -> ReleaseOutcome {
+        self.picker_release_item(Some(item))
+    }
+
+    /// [`Self::picker_release`] for a cell that may be chrome or the backdrop.
+    pub fn picker_release_item(&mut self, item: Option<usize>) -> ReleaseOutcome {
+        let Some((pressed, prior)) = self.picker_press.take() else {
+            // No press owns this release (an orphan event): nothing to confirm and
+            // nothing to restore.
+            return ReleaseOutcome::Abort {
+                restore: self.picker_selected(),
+            };
+        };
+        if item.is_some() && item == pressed {
+            return ReleaseOutcome::Confirm;
+        }
+        // Abort: put the selection back where the user left it.
+        self.select_picker_item(prior);
+        ReleaseOutcome::Abort { restore: prior }
+    }
+
+    /// The open picker's `selected`, or `0` when none is open.
+    fn picker_selected(&self) -> usize {
+        if let Some(picker) = &self.tree_picker {
+            picker.selected
+        } else if let Some(picker) = &self.resume_picker {
+            picker.selected
+        } else if let Some(picker) = &self.fork_picker {
+            picker.selected
+        } else if let Some(picker) = &self.scoped_models_picker {
+            picker.selected
+        } else if let Some(picker) = &self.grants_picker {
+            picker.selected
+        } else if let Some(picker) = &self.theme_picker {
+            picker.selected
+        } else if let Some(picker) = &self.trust_picker {
+            picker.selected
+        } else if let Some(picker) = &self.thinking_picker {
+            picker.selected
+        } else if let Some(picker) = &self.settings_picker {
+            picker.selected
+        } else if let Some(picker) = &self.model_picker {
+            picker.selected
+        } else {
+            0
+        }
+    }
+
+    /// Write one item into the open picker's `selected` (gh #386 gap 2): the one
+    /// place the press and the abort both go through, so a preview and a restore
+    /// cannot disagree about clamping or about the theme's live preview.
+    ///
+    /// The per-picker `else if` chain is the reason all ten pickers inherit the
+    /// table: none of them owns mouse code, they differ only in which field this
+    /// writes.
+    pub fn select_picker_item(&mut self, item: usize) {
         if let Some(picker) = self.tree_picker.as_mut() {
             picker.selected = item.min(picker.visible_len().saturating_sub(1));
         } else if let Some(picker) = self.resume_picker.as_mut() {
@@ -641,10 +767,18 @@ impl Chat {
         }
     }
 
-    /// Roll the wheel over the open picker (gh #226, pi's
-    /// select-list wheel): one row per tick, the rolling window
-    /// following `selected` on the next frame. Silent when no picker
-    /// is open.
+    /// The **wheel** arm of the picker input table (gh #226, gh #386 gap 2): one
+    /// item per physical event, the rolling window following `selected` on the next
+    /// frame. Silent when no picker is open.
+    ///
+    /// `delta` is the event's sign, and the caller clamps it to ±1: a picker moves
+    /// by *items*, not by a continuum of rows, so the transcript's [`WheelAccel`]
+    /// must not be applied here. A trackpad momentum burst then walks the list one
+    /// row per event instead of flying through it.
+    ///
+    /// It also **clamps rather than wraps** - `Math.max(0, Math.min(len - 1,
+    /// selected + delta))` in pi - even though pi's keyboard wraps. The two input
+    /// kinds differ on purpose.
     pub fn wheel_picker(&mut self, delta: i8) {
         fn step(selected: usize, max: usize, delta: i8) -> usize {
             (selected as i64 + delta as i64).clamp(0, max as i64) as usize

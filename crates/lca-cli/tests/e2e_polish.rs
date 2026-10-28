@@ -54,11 +54,19 @@ fn ctrl_c_clears_text_then_exits() {
     wait_for_pane_end(&session, std::time::Duration::from_secs(15));
 }
 
-// Verifies: gh #230 - hovering settings rows highlights in place:
-// the `>` cursor follows the pointer with no scroll indicators.
+// Verifies: gh #230 - a **pointer gesture** on a settings row highlights it in
+// place: the `>` cursor follows the pointer with no scroll indicators.
+//
+// SANCTIONED CHANGE (gh #386 gap 2, which names this row): the gesture is a
+// **press**, not a hover. gh #230's property is that a pointer gesture selects the
+// row under it *without scrolling the list*, and that is unchanged - but hover no
+// longer selects at all, because a move re-centered the list under a stationary
+// cursor and walked it to the end (the gap 2 bug). A press is what previews now, so
+// that is what this row drives. The pointer is released off the row afterwards, so
+// the abort restores the selection rather than confirming it.
 #[cfg(unix)]
 #[test]
-fn hover_highlights_settings_without_scrolling() {
+fn a_press_highlights_settings_without_scrolling() {
     if !tmux_available() {
         eprintln!("skip: tmux is not installed (real-terminal rows are Unix-only)");
         return;
@@ -88,9 +96,10 @@ fn hover_highlights_settings_without_scrolling() {
             .is_some_and(|line| !line.contains("> Display mode")),
         "the cursor starts elsewhere:\n{pane}"
     );
-    // SGR-1006 hover (motion, no button). Content-driven: the
-    // highlight lands when the cursor row moves, never on a sleep.
-    session.send_literal(&format!("\x1b[<35;{};{}M", col + 1, row + 1));
+    // SGR-1006 **press** (button 0, `M`), which is the gesture that previews a row
+    // since gh #386 gap 2. The move that used to do this is asserted to be inert by
+    // `a_hover_does_not_highlight_a_settings_row` below.
+    session.send_literal(&format!("\x1b[<0;{};{}M", col + 1, row + 1));
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let pane = loop {
         let pane = session.capture();
@@ -110,11 +119,92 @@ fn hover_highlights_settings_without_scrolling() {
         "the highlight follows the pointer:\n{pane}"
     );
     assert!(!pane.contains('▲'), "nothing scrolled:\n{pane}");
+    // Release off the row: an abort, not a confirmation (gh #386 gap 2), so the
+    // picker stays open for the Escape below.
+    session.send_literal("\x1b[<0;1;1m");
+    session.wait_until_painted(std::time::Duration::from_secs(10));
     session.send(&["Escape"]);
     session.wait_until_painted(std::time::Duration::from_secs(10));
     session.send(&["/exit", "Enter"]);
     // No turns ran, so no log exists for a session-end marker (gh
     // #122): the dead pane is the receipt.
+    wait_for_pane_end(&session, std::time::Duration::from_secs(15));
+}
+
+// Verifies: gh #386 gap 2 - **a hover does not highlight a settings row, and does
+// not scroll the list.**
+//
+// This is the live half of the reported bug: with the selector open and the pointer
+// parked over a row (motion events, no button), the `>` cursor must not arrive and
+// no scroll indicator may appear. Before the fix the move wrote `selected`, the
+// centered window followed, and the row under the pointer changed - so a resting
+// mouse walked a tall list to its end.
+#[cfg(unix)]
+#[test]
+fn a_hover_does_not_highlight_a_settings_row() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal rows are Unix-only)");
+        return;
+    }
+    let sandbox = sandbox("polish-hover-inert");
+    let session = Tmux::new("polish-hover-inert");
+    session.spawn(&sandbox, None, false, &[], &[]);
+    session.wait_for("[session in", std::time::Duration::from_secs(30));
+
+    session.send(&["/fullscreen", "Enter"]);
+    session.send(&["/settings", "Enter"]);
+    session.wait_for("Editor padding", std::time::Duration::from_secs(15));
+    let pane = session.capture();
+    let (col, row) = pane
+        .lines()
+        .enumerate()
+        .find_map(|(row, line)| {
+            line.find("Display mode")
+                .map(|col| (col as u16, row as u16))
+        })
+        .expect("a visible settings row");
+    let before = pane.clone();
+    assert!(
+        pane.lines()
+            .find(|line| line.contains("Display mode"))
+            .is_some_and(|line| !line.contains("> Display mode")),
+        "the cursor starts elsewhere:\n{pane}"
+    );
+
+    // Motion with no button: the gesture that used to select. Send it several times,
+    // because the bug was a feedback loop - one move was enough to start it.
+    for _ in 0..4 {
+        session.send_literal(&format!("\x1b[<35;{};{}M", col + 1, row + 1));
+    }
+    session.wait_until_painted(std::time::Duration::from_secs(10));
+    let after = session.capture();
+    assert!(
+        after
+            .lines()
+            .find(|line| line.contains("Display mode"))
+            .is_some_and(|line| !line.contains("> Display mode")),
+        "a hover selects nothing (gh #386 gap 2):\n{after}"
+    );
+    // The scroll *indicators* are the box's own furniture and may legitimately be
+    // present on a tall list, so "no indicator anywhere" was the wrong assertion -
+    // it failed on that furniture. What must not change is the frame itself: a move
+    // that changed the look at all would be the bug wearing a different hat, so the
+    // whole frame is compared below.
+    // The frame is otherwise unchanged.
+    let strip = |text: &str| -> Vec<String> {
+        text.lines()
+            .map(|line| line.trim_end().to_string())
+            .collect()
+    };
+    assert_eq!(
+        strip(&before),
+        strip(&after),
+        "the frame is identical after four hover events"
+    );
+
+    session.send(&["Escape"]);
+    session.wait_until_painted(std::time::Duration::from_secs(10));
+    session.send(&["/exit", "Enter"]);
     wait_for_pane_end(&session, std::time::Duration::from_secs(15));
 }
 

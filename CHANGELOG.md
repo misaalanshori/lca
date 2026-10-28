@@ -18,6 +18,15 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **A list no longer scrolls itself under a still mouse** (gh #386 gap 2).
+  Moving the pointer over a picker moved the highlight, and every picker's window is
+  centered on its highlight — so a *stationary* cursor sitting over `/model`
+  re-centered the list, which changed the row under the pointer, which moved the
+  highlight again. The list walked itself to the end without the mouse moving.
+  Hovering now selects nothing (pi's rule); a **press** previews a row, a release on
+  that same row confirms it, and a release anywhere else puts the selection back
+  where you left it. The wheel moves one row per notch with no acceleration, and the
+  same fix covers the autocomplete popup, whose window is centered the same way.
 - **A copy now says what actually happened** (gh #374 gap 4). Three distinguishable
   confirmations instead of one ambiguous one: `✓ copied to clipboard` only when a
   clipboard tool verified the write; `? copy sent as OSC 52 - the terminal may have
