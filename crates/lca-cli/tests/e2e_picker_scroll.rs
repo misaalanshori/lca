@@ -60,8 +60,11 @@ fn a_tall_settings_selector_rolls_with_frame_and_selection_on_screen() {
         "more above after stepping down:\n{pane}"
     );
     assert!(pane.contains("▼"), "more below still:\n{pane}");
+    // Gh #386 gap 3 named `Space` in this hint, so the fixed string this row read
+    // changed with it. The property is unchanged - the pinned hint row survives the
+    // scroll - so the row now matches the substring the two spellings share.
     assert!(
-        pane.contains("enter/←→ change"),
+        pane.contains("enter/space/←→ change") && pane.contains("q/esc close"),
         "the hint row stays:\n{pane}"
     );
     let history_after = session.capture_with_history().lines().count();
