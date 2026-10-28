@@ -772,7 +772,7 @@ impl Chat {
     /// frame. Silent when no picker is open.
     ///
     /// `delta` is the event's sign, and the caller clamps it to ±1: a picker moves
-    /// by *items*, not by a continuum of rows, so the transcript's [`WheelAccel`]
+    /// by *items*, not by a continuum of rows, so the transcript's `WheelAccel`
     /// must not be applied here. A trackpad momentum burst then walks the list one
     /// row per event instead of flying through it.
     ///
