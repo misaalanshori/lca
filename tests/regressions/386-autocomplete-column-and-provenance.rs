@@ -596,3 +596,95 @@ fn the_picker_wheel_adds_one_delta_per_event() {
         "the dispatch passes the event's sign, clamped to one: {line}"
     );
 }
+
+// ============================================================================
+// gh #386 gap 3 - `Space` cannot both toggle and type in `/settings`.
+//
+// The behavioural rows live beside the code
+// (`lca-ui`'s `chat::tests::settings_filter_tests`). This file pins the two seams a
+// green suite could otherwise lose: that the precedence is **one predicate** rather
+// than a special case at the call site, and that `Space` and `Enter` route into the
+// **same** activate helper - which is what keeps them from drifting apart one
+// special case at a time.
+// ============================================================================
+
+// Verifies: gh #386 gap 3 - the rule is one predicate, `!search_enabled ||
+// query.is_empty()` (pi's `data === " " && (!searchEnabled || value empty)`), and it
+// reads the query rather than a count of keystrokes or a "has the user typed yet"
+// flag. A flag would answer the same today and drift the moment a query is set by
+// other means (a paste, `Esc`-clearing).
+#[test]
+fn the_space_precedence_is_one_predicate_over_the_query() {
+    let source = plain_source("crates/lca-ui/src/chat_pickers.rs");
+    let body = function_body(&source, "pub fn space_activates(");
+    assert!(
+        body.contains("!search_enabled || query.is_empty()"),
+        "the precedence is pi's rule, verbatim:\n{body}"
+    );
+    assert!(
+        !body.contains("typed") && !body.contains("dirty"),
+        "and it is not a 'has the user typed yet' flag:\n{body}"
+    );
+}
+
+// Verifies: gh #386 gap 3 - `Space` and `Enter` activate through the **same**
+// helper. The failure this prevents is concrete: the first draft of the `Space` arm
+// copied the `enter` arm's body, which is exactly how the two keys would have
+// diverged the next time a row shape was added.
+#[test]
+fn space_and_enter_share_one_activate_helper() {
+    let source = plain_source("crates/lca-ui/src/chat_keys.rs");
+    let space = function_body(
+        &source,
+        "Some(\"space\") if picker.space_activates_row() =>",
+    );
+    let enter = function_body(
+        &source,
+        "Some(\"enter\") | Some(\"right\") | Some(\"left\") =>",
+    );
+    for (name, arm) in [("space", space), ("enter/left/right", enter)] {
+        assert!(
+            arm.contains("activate_setting_row"),
+            "the {name} arm routes through the shared activate helper:\n{arm}"
+        );
+    }
+    // And the helper is the only place that decides what activating means.
+    let helper = function_body(&source, "fn activate_setting_row(");
+    for shape in [
+        "open_theme_picker",
+        "open_thinking_wizard",
+        "cycle_setting",
+        "editing =",
+    ] {
+        assert!(
+            helper.contains(shape),
+            "the activate helper owns {shape}:\n{helper}"
+        );
+    }
+    assert!(
+        !space.contains("cycle_setting"),
+        "the Space arm adds no behaviour of its own:\n{space}"
+    );
+}
+
+// Verifies: gh #386 gap 3 - the arm is **guarded by the predicate**, so the arm's
+// position relative to the printable-keystroke fallback is what makes a filtered
+// `Space` type. Delete the guard and the arm swallows every space; move it below the
+// fallback and it never runs. Both are pinned by the behavioural rows; this one pins
+// that the guard is the predicate and not a literal.
+#[test]
+fn the_space_arm_is_guarded_by_the_predicate_not_a_literal() {
+    let source = plain_source("crates/lca-ui/src/chat_keys.rs");
+    assert!(
+        source.contains("Some(\"space\") if picker.space_activates_row() =>"),
+        "the arm's guard is the picker's predicate"
+    );
+    let arm = function_body(
+        &source,
+        "Some(\"space\") if picker.space_activates_row() =>",
+    );
+    assert!(
+        !arm.contains("query.is_empty()"),
+        "and the rule itself is not restated at the call site:\n{arm}"
+    );
+}

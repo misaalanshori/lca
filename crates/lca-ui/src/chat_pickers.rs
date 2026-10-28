@@ -440,6 +440,13 @@ pub struct SettingsPicker {
 }
 
 impl SettingsPicker {
+    /// This build's answer to pi's `SettingsListOptions::enableSearch`. pi's own
+    /// `/settings` passes `{ enableSearch: true }` (`settings-selector.ts:985`), and
+    /// so does LCA's list - the type-to-search line has been part of it since gh
+    /// #272. Named rather than written as a bare `true` at the call site so the
+    /// `Space` precedence reads as a rule with a switch rather than as a constant.
+    pub const SEARCH_ENABLED: bool = true;
+
     /// The row indices the query admits, in display order. An empty query
     /// admits everything, so the unfiltered list is the same code path.
     pub fn visible(&self) -> Vec<usize> {
@@ -470,6 +477,31 @@ impl SettingsPicker {
     pub fn clamp_selection(&mut self) {
         let len = self.visible().len();
         self.selected = self.selected.min(len.saturating_sub(1));
+    }
+
+    /// Whether a `Space` keystroke **activates** the highlighted row rather than
+    /// being typed into the search box (gh #386 gap 3).
+    ///
+    /// pi's rule, verbatim from `settings-list.ts::handleInput`:
+    ///
+    /// ```text
+    /// (data === " " && (!this.searchEnabled || this.searchInput?.getValue().length === 0))
+    /// ```
+    ///
+    /// The whole rule is a **precedence**: `Space` toggles only when there is
+    /// nothing to type into. A space is part of a search term once a search term
+    /// exists; before that it has no term to belong to, so the row's value is what
+    /// the reader meant.
+    pub fn space_activates(query: &str, search_enabled: bool) -> bool {
+        !search_enabled || query.is_empty()
+    }
+
+    /// Whether a `Space` keystroke activates the highlighted row, for this picker.
+    ///
+    /// The call site's form of [`Self::space_activates`]: the rule is written once,
+    /// above.
+    pub fn space_activates_row(&self) -> bool {
+        Self::space_activates(&self.query, Self::SEARCH_ENABLED)
     }
 }
 

@@ -263,3 +263,209 @@ fn an_empty_result_says_no_matching_settings() {
         "the empty state is named:\n{text}"
     );
 }
+
+// Verifies: gh #386 gap 3 - the `Space` precedence. The rule is **one predicate**
+// (`SettingsPicker::space_activates`), not three special cases: `Space` activates
+// only when there is nothing to type into. Three cases are pinned below, plus the
+// two arm-shape rows that keep `Space` and `Enter` from drifting apart.
+
+/// The row list a `SettingsPicker` hook would hand back, so a cycle's re-read shows
+/// the value it just wrote instead of an empty list.
+fn rows_after_cycle(value: &str, source: &str) -> Vec<crate::state::SettingRow> {
+    use crate::state::SettingRow;
+    vec![
+        SettingRow {
+            section: "Display".to_string(),
+            key: "ui.color".to_string(),
+            label: "Color".to_string(),
+            description: "SGR color output: auto or never".to_string(),
+            value: value.to_string(),
+            source: source.to_string(),
+            masked: false,
+            values: vec!["auto".to_string(), "never".to_string()],
+            project: None,
+        },
+        SettingRow {
+            section: "Display".to_string(),
+            key: "ui.fullscreen".to_string(),
+            label: "Display mode".to_string(),
+            description: "Terminal scrollback or app-owned fullscreen".to_string(),
+            value: "fullscreen".to_string(),
+            source: "ui.json".to_string(),
+            masked: false,
+            values: vec!["scrollback".to_string(), "fullscreen".to_string()],
+            project: None,
+        },
+    ]
+}
+
+/// A chat whose `/settings` list persists through a hook, so a cycle's re-read
+/// reports the value the write produced - the loop the real host closes.
+fn cycling_row_chat() -> Chat {
+    use std::sync::{Arc, Mutex};
+    let written: Arc<Mutex<String>> = Arc::new(Mutex::new("auto".to_string()));
+    let sink = written.clone();
+    let mut chat = chat();
+    chat.screen_mode = true;
+    chat.world.options.hooks.persist_setting =
+        Some(Arc::new(move |key: &str, value: Option<String>| {
+            if key == "ui.color"
+                && let Some(value) = value
+            {
+                *sink.lock().unwrap_or_else(|p| p.into_inner()) = value;
+            }
+        }));
+    let read = written.clone();
+    chat.world.options.hooks.settings_rows = Some(Arc::new(move || {
+        let value = read.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        rows_after_cycle(&value, "project file")
+    }));
+    chat.settings_picker = Some(crate::chat_pickers::SettingsPicker {
+        rows: rows_after_cycle("auto", "default"),
+        selected: 0,
+        editing: None,
+        query: String::new(),
+        remembered: std::collections::BTreeMap::new(),
+    });
+    chat
+}
+
+// Verifies: gh #386 gap 3 case one - with an empty filter there is nothing to type
+// into, so `Space` activates and the row's value becomes the next stop. Asserted on
+// the *painted row*: the reader's evidence is the list, not a field.
+#[test]
+fn space_with_an_empty_filter_cycles_the_highlighted_row() {
+    let mut chat = cycling_row_chat();
+    let before = paint(&chat);
+    assert!(
+        before.contains("Color = auto"),
+        "the row starts on auto:\n{before}"
+    );
+
+    let _ = chat.handle_picker_key(" ", Some("space"));
+
+    let after = paint(&chat);
+    assert!(
+        after.contains("Color = never"),
+        "Space activated the row:\n{after}"
+    );
+    assert!(
+        after.contains("Display mode = fullscreen"),
+        "and only the highlighted one moved:\n{after}"
+    );
+    assert_eq!(
+        chat.settings_picker.as_ref().map(|p| p.query.as_str()),
+        Some(""),
+        "nothing was typed into the filter"
+    );
+}
+
+// Verifies: gh #386 gap 3 case two - once a query exists a space belongs to it, so
+// `Space` types. The row that proves the *routing* is the space appearing in the
+// search line: "the value did not change" alone would also pass if the key were
+// swallowed entirely.
+#[test]
+fn space_with_a_filter_types_a_space_into_the_search() {
+    let mut chat = cycling_row_chat();
+    type_text(&mut chat, "display");
+    let before = paint(&chat);
+    assert!(
+        before.contains("search: display"),
+        "the filter was typed:\n{before}"
+    );
+
+    let _ = chat.handle_picker_key(" ", Some("space"));
+
+    let after = paint(&chat);
+    assert!(
+        after.contains("search: display "),
+        "the space landed in the filter:\n{after}"
+    );
+    assert_eq!(
+        chat.settings_picker.as_ref().map(|p| p.query.as_str()),
+        Some("display "),
+        "the query holds the space"
+    );
+    assert!(
+        after.contains("Display mode = fullscreen"),
+        "and the row's value is untouched:\n{after}"
+    );
+}
+
+// Verifies: gh #386 gap 3 case three - with the search disabled there is never
+// anything to type into, so `Space` always activates. The disabled half is
+// unreachable through the picker (LCA's list always searches, as pi's own
+// `/settings` does), so it is driven through the predicate that carries the rule -
+// the same reason `right_click_paste_allowed` takes `is_windows` (gh #374 gap 4): a
+// guard whose branch no test can reach rots.
+#[test]
+fn with_search_disabled_space_always_activates() {
+    use crate::chat_pickers::SettingsPicker;
+    assert!(
+        SettingsPicker::space_activates("", false),
+        "no search, empty filter: activates"
+    );
+    assert!(
+        SettingsPicker::space_activates("display ", false),
+        "no search, text in the filter: still activates - there is no search to type into"
+    );
+    assert!(
+        SettingsPicker::space_activates("", true),
+        "search enabled, empty filter: activates"
+    );
+    assert!(
+        !SettingsPicker::space_activates("display", true),
+        "search enabled, filter non-empty: types"
+    );
+    // `black_box` so the const read is not a constant-folded assertion: this row
+    // exists to fail if the list ever ships non-searching, which a literal would
+    // silently pass.
+    assert!(
+        std::hint::black_box(SettingsPicker::SEARCH_ENABLED),
+        "this build's list is pi's searching list"
+    );
+}
+
+// Verifies: gh #386 gap 3 - `Space` is a **second key for the activate arm**, not a
+// third behaviour: on a row with no cycle values it opens the inline editor and
+// starts the buffer at the stored value, exactly as `Enter` does. Two keys, one
+// behaviour, so they cannot drift.
+#[test]
+fn space_opens_the_same_inline_editor_enter_does() {
+    let with_space = {
+        let mut chat = chat_with(&[("ui.autocomplete_max_visible", "Completion rows", "Rows")]);
+        let _ = chat.handle_picker_key(" ", Some("space"));
+        chat.settings_picker
+            .as_ref()
+            .and_then(|p| p.editing.clone())
+    };
+    let with_enter = {
+        let mut chat = chat_with(&[("ui.autocomplete_max_visible", "Completion rows", "Rows")]);
+        let _ = chat.handle_picker_key("", Some("enter"));
+        chat.settings_picker
+            .as_ref()
+            .and_then(|p| p.editing.clone())
+    };
+    assert_eq!(with_space, Some("v".to_string()), "Space opens the buffer");
+    assert_eq!(
+        with_space, with_enter,
+        "and opens exactly the buffer Enter opens"
+    );
+}
+
+// Verifies: gh #386 gap 3 and pi's `activateItem` - a sub-picker row reached with
+// `Space` opens its picker and the settings list **steps aside** rather than
+// closing, so the list is back when the picker closes (pi's submenu shape).
+#[test]
+fn space_on_a_sub_picker_row_opens_that_picker_and_keeps_the_list() {
+    let mut chat = chat_with(&[("ui.theme", "Theme", "The color palette")]);
+    let _ = chat.handle_picker_key(" ", Some("space"));
+    assert!(
+        chat.theme_picker.is_some(),
+        "the row's picker opened through the activate arm"
+    );
+    assert!(
+        chat.settings_picker.is_some(),
+        "and the settings list stepped aside instead of closing"
+    );
+}

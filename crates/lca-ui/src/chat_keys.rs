@@ -234,6 +234,40 @@ impl Chat {
         }
     }
 
+    /// Activate the `/settings` row under the cursor (gh #174, gh #386 gap 3).
+    ///
+    /// The **one** activate behaviour: `Enter`, `Right`/`Left` and gh #386 gap 3's
+    /// `Space` all route here, in pi's `settings-list.ts::activateItem` order. Three
+    /// row shapes: a sub-picker row (`ui.theme`, `thinking`) **steps aside** rather
+    /// than closing the list; a row with no cycle values opens its **inline editor**
+    /// (gh #174) at the stored value; anything else **cycles** in `forward`'s
+    /// direction. Returning the picker on every path is what makes "step aside"
+    /// work - the caller stores it, so no arm can silently close the list.
+    fn activate_setting_row(
+        &mut self,
+        mut picker: crate::chat_pickers::SettingsPicker,
+        forward: bool,
+    ) -> crate::chat_pickers::SettingsPicker {
+        // Cloned out so the borrow ends: two arms call back into `self` mutably.
+        let row = picker.selected_row().cloned();
+        match row.as_ref().map(|row| row.key.as_str()) {
+            Some("ui.theme") => self.open_theme_picker(),
+            // Gh #397: the **stepped wizard** (model, then its level), not the flat
+            // level picker - a step two that depends on step one, with nothing
+            // written until both are confirmed.
+            Some("thinking") => self.open_thinking_wizard(),
+            _ => {
+                if row.as_ref().is_some_and(|row| row.values.is_empty()) {
+                    picker.editing = Some(row.map(|row| row.value).unwrap_or_default());
+                } else {
+                    let notice = self.cycle_setting(&mut picker, forward);
+                    self.say(crate::state::sanitize_block(&notice));
+                }
+            }
+        }
+        picker
+    }
+
     /// picker is open, so the editor path runs).
     pub(super) fn handle_picker_key(&mut self, data: &str, key: Option<&str>) -> Option<Action> {
         // The `/tree` navigator owns the keyboard while open (FR-UI-16,
@@ -736,6 +770,21 @@ impl Chat {
                     picker.clamp_selection();
                     self.settings_picker = Some(picker);
                 }
+                // Gh #386 gap 3: `Space` has two jobs in this list and pi's rule is
+                // the **precedence** between them, not a special case for one of
+                // them - see `SettingsPicker::space_activates`, which is the whole
+                // rule. With an empty filter there is nothing to type into, so
+                // `Space` activates the row; once a query exists a space belongs to
+                // it. Without the search the rule is always "activate", which the
+                // predicate answers on its own rather than this arm special-casing.
+                //
+                // It routes into the same helper the `enter` arm calls, because
+                // activating a row *is* that arm: `Space` is a second key for it, not
+                // a third behaviour, so the two keys cannot drift apart.
+                Some("space") if picker.space_activates_row() => {
+                    picker = self.activate_setting_row(picker, true);
+                    self.settings_picker = Some(picker);
+                }
                 // Gh #397: `Tab` cycles the **project override**, the
                 // three-state control (`inherit → on → off → inherit`) that a
                 // session cycle cannot express. A separate key on purpose: the
@@ -754,44 +803,8 @@ impl Chat {
                 }
                 Some("enter") | Some("right") | Some("left") => {
                     let forward = key != Some("left");
-                    // The key is cloned out before the match so the row
-                    // borrow ends: one arm re-borrows the picker mutably.
-                    let row = picker.selected_row().cloned();
-                    match row.as_ref().map(|row| row.key.as_str()) {
-                        // A sub-picker row steps aside: the sub-picker's
-                        // own key arm sits above this one, so the selector
-                        // stays open underneath and is back on screen the
-                        // moment it closes (pi's submenu shape - the list
-                        // is never lost).
-                        Some("ui.theme") => {
-                            self.open_theme_picker();
-                            self.settings_picker = Some(picker);
-                        }
-                        Some("thinking") => {
-                            // Gh #397: the thinking row opens the **stepped
-                            // wizard** - the model, then its thinking level -
-                            // rather than the flat level picker. This is the
-                            // issue's own example of a group a flat list cannot
-                            // express, and it is why the wizard exists at all: a
-                            // step two that depends on step one, with nothing
-                            // written until both are confirmed.
-                            self.open_thinking_wizard();
-                            self.settings_picker = Some(picker);
-                        }
-                        _ => {
-                            // A row with no cycle values and no sub-picker
-                            // edits inline (gh #174): the buffer starts
-                            // as the stored value.
-                            if row.as_ref().is_some_and(|row| row.values.is_empty()) {
-                                picker.editing = Some(row.map(|row| row.value).unwrap_or_default());
-                                self.settings_picker = Some(picker);
-                            } else {
-                                let notice = self.cycle_setting(&mut picker, forward);
-                                self.say(crate::state::sanitize_block(&notice));
-                                self.settings_picker = Some(picker);
-                            }
-                        }
-                    }
+                    picker = self.activate_setting_row(picker, forward);
+                    self.settings_picker = Some(picker);
                 }
                 _ => {
                     // A printable keystroke is a search term, not a dead

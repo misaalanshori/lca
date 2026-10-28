@@ -39,9 +39,13 @@ const HINT_TREE: &str =
 const HINT_GRANTS: &str = "↑↓ move · enter revoke · esc close";
 const HINT_THEME: &str = "↑↓ preview · enter apply · esc restore";
 const HINT_SETTINGS_EDIT: &str = "type the value · enter apply · esc cancel";
-/// Pi's `/settings` hint verbatim: the list filters as you type.
+/// Pi's `/settings` hint: the list filters as you type.
+///
+/// Gh #386 gap 3 named `Space` alongside `enter`: pi's own hint reads "Enter/Space
+/// to change" (`settings-list.ts::addHintLine`), and the key was documented nowhere
+/// before this cycle. A key that works but is not named is a key nobody presses.
 const HINT_SETTINGS_SEARCH: &str =
-    "↑↓ move · enter/←→ change · tab project · q/esc close · type to search";
+    "↑↓ move · enter/space/←→ change · tab project · q/esc close · type to search";
 const HINT_LOGIN: &str = "↑↓ move · enter choose · esc cancel";
 
 /// The sensitive filename in a permission modal's action text, if the

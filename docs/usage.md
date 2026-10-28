@@ -207,6 +207,11 @@ it, releasing on that same row confirms it, and releasing anywhere else puts the
 selection back where you left it. Scrolling moves one row per notch, so a trackpad
 flick does not run away with the list.
 
+**In `/settings`, `Space` changes the highlighted setting** - the same thing `Enter`
+does - as long as you have not started typing a search. Once the filter has text, a
+space is part of your search and lands in it instead (gh #386 gap 3). A key that
+works and is named nowhere is a key nobody presses, so the list's own hint says so.
+
 ### Bookmarks and book copies
 
 - `/label [message-index] <name>` — bookmark a message; with no index,
