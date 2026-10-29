@@ -18,6 +18,12 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **Switching tabs no longer leaves a dialog pinned over the new tab** (gh #333).
+  `/extensions`, the extension manager, `/mcp`, an install confirmation and the
+  login/permission prompts belong to the tab that opened them, so a switch closes
+  them; the draft and scroll position still come back when you return. The list of
+  surfaces is no longer maintained by hand — a new overlay fails a named test rather
+  than leaking onto the next tab.
 - **A skill file with no header no longer loses its first lines** (gh #304). If a
   `SKILL.md` opened with a sentence containing a colon — `Note: this repo needs Rust
   1.85.` — that sentence was read as an unknown header field and dropped, so the part

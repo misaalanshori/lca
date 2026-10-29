@@ -159,6 +159,13 @@ keeps its own session, its own draft, and its own place in the scroll.
 cycle, and `Ctrl+W` closes one (the session stays on disk; only the
 unsent draft goes).
 
+**An open panel or dialog belongs to the tab you opened it in.** Switching
+away closes it — `/extensions`, the install prompt, `/mcp`, `/settings`, `/model`,
+a permission question — so the tab you arrive at shows its own transcript
+rather than the previous tab's dialog floating over it. Your draft and your
+scroll position come back when you return; the dialog does not, because it was
+answered by leaving. `/reload` is not a switch and closes nothing.
+
 **A tab switch does not stop a running turn.** Start a long
 `cargo test`, switch to another tab, and keep working: the first tab
 keeps streaming, its item in the tab bar pulses `◌`, and when it

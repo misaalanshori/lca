@@ -30,3 +30,6 @@ mod mcp_oauth_untrusted_metadata;
 // Gh #304: a headerless `SKILL.md` lost its opening instruction lines.
 #[path = "304-skill-headerless-body-loss.rs"]
 mod skill_headerless_body_loss;
+// Gh #333: a tab switch must not leave an overlay pinned over the next tab.
+#[path = "333-overlays-close-on-tab-switch.rs"]
+mod overlays_close_on_tab_switch;

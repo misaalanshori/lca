@@ -55,6 +55,7 @@ mod login_step;
 mod login_trail;
 pub mod logo;
 mod mcp_types;
+pub mod overlay_registry;
 pub mod render;
 pub mod resume;
 pub mod resume_command;

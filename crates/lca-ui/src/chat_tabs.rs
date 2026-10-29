@@ -408,20 +408,14 @@ impl Chat {
         }
     }
 
-    /// Close every picker and the search (gh #209): transient UI
-    /// belongs to the tab left behind.
+    /// Close every transient overlay (gh #209, gh #333): transient UI belongs to the
+    /// tab left behind.
+    ///
+    /// The list lives in [`crate::overlay_registry`] and this function is generated
+    /// from it, so it cannot hold a stale copy. See that module for why a
+    /// hand-maintained list was the defect and what the guard checks.
     fn close_pickers(&mut self) {
-        self.model_picker = None;
-        self.tree_picker = None;
-        self.resume_picker = None;
-        self.fork_picker = None;
-        self.scoped_models_picker = None;
-        self.grants_picker = None;
-        self.trust_picker = None;
-        self.settings_picker = None;
-        self.thinking_picker = None;
-        self.theme_picker = None;
-        self.search = None;
+        crate::overlay_registry::close_tab_overlays(self);
     }
 
     /// Build the widget from the tabs (gh #209): titles, the dirty

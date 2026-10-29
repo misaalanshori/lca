@@ -1170,3 +1170,6 @@ mod focus_tests;
 // the config path.
 #[path = "chat_hardware_cursor_tests.rs"]
 mod hardware_cursor_tests;
+// Gh #333: a tab switch closes every transient overlay.
+#[path = "overlay_registry_tests.rs"]
+mod overlay_close_tests;
