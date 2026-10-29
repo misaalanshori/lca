@@ -286,6 +286,15 @@ pub const STATE_VALUE_MAX_BYTES: u64 = 4 * 1024 * 1024;
 /// Per-namespace cap for the whole `state` bag.
 pub const STATE_TOTAL_MAX_BYTES: u64 = 16 * 1024 * 1024;
 
+/// The most hosts one OAuth flow may hold at once (gh #290 design point 5).
+///
+/// A metadata document is attacker-influenced input, so an unbounded host list
+/// would let "grant the IdP" become "grant whatever the server listed". The
+/// number lives here because this is the layer that enforces it;
+/// `lca-mcp::oauth::MAX_FLOW_HOSTS` is the documented mirror a caller reads, and
+/// a row pins the two equal so neither can drift alone.
+pub const MAX_OAUTH_FLOW_HOSTS: usize = 8;
+
 /// The engine: one per loaded extension.
 pub struct Capabilities {
     name: String,

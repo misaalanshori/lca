@@ -19,6 +19,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 
+use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 
@@ -510,5 +511,285 @@ fn an_oauth_flow_host_does_not_survive_into_tool_traffic() {
     assert!(
         !grants_text.contains(second_host()),
         "the flow host was never persisted: {grants_text}"
+    );
+}
+
+// ============================================================================
+// gh #290 (finishing #418 Phase D's discovery work): the untrusted-metadata
+// rules that were still missing, and the stale-challenge lifecycle.
+//
+// Every fixture in this file uses **loopback** hosts, which is exactly why
+// these rows are the ones a green suite was missing: `http://127.0.0.2:PORT`
+// is legal for a *local* IdP (RFC 8252, and how `discover`'s own origin
+// fallback reaches one) while being an attack when a **remote** server's
+// metadata names it. The distinction is "is the MCP server itself loopback",
+// not "is the endpoint loopback".
+// ============================================================================
+
+// Verifies: gh #290 design point 6 - a **remote** server's metadata naming a
+// loopback authorization server is refused. A loopback entry there is a request
+// to reach the user's own machine, which `net-local` exists to gate; a sign-in
+// must not grant it silently.
+//
+// The MCP server's own host is `127.0.0.1` here and the IdP is `127.0.0.2`:
+// both loopback, so a rule phrased "refuse a loopback endpoint" would break
+// every local-IdP flow. The rule is `is_loopback(mcp server url)`.
+#[test]
+fn a_remote_servers_metadata_may_not_name_a_loopback_authorization_server() {
+    let idp = idp_host(None);
+    // A remote-shaped MCP server: its URL says example.invalid (never
+    // resolved - the refusal must come from validation, not a connection
+    // failure), and the 401 it returns points at the loopback IdP.
+    let remote = "https://mcp.example.invalid/mcp";
+    let (caps, _root) = engine("loop-remote", &[]);
+    let server = server_config(remote, Some(OAuthConfig::default()));
+    // Seed the challenge directly: probing a non-resolving host would fail
+    // before the 401, and the row is about discovery, not transport.
+    TokenStore::new(caps.clone(), &server)
+        .set_pending_challenge(&{
+            let mut challenge = BTreeMap::new();
+            challenge.insert(
+                "resource_metadata".to_string(),
+                format!("{}/.well-known/oauth-protected-resource", idp.base),
+            );
+            challenge
+        })
+        .expect("seed the challenge");
+    let err = lca_mcp::sign_in(caps.clone(), &server)
+        .expect_err("a loopback IdP named by a remote server is refused");
+    assert!(
+        err.contains("loopback") || err.contains("local"),
+        "the refusal says what it refused: {err}"
+    );
+    assert!(
+        idp.paths().is_empty(),
+        "nothing was fetched from the loopback host: {:?}",
+        idp.paths()
+    );
+}
+
+// Verifies: gh #290 design point 6, the other side - a **loopback** MCP server
+// may still name a loopback authorization server, because that is the local
+// IdP case `discover`'s origin fallback serves and RFC 8252 blesses. This row
+// exists so the refusal above cannot be "fixed" by banning loopback broadly.
+#[test]
+fn a_loopback_servers_metadata_may_name_a_loopback_authorization_server() {
+    let idp = idp_host(None);
+    let mcp = mcp_host(&idp.base);
+    let (caps, _root) = engine("loop-local", &["127.0.0.1"]);
+    let server = server_config(&format!("{}/mcp", mcp.base), Some(OAuthConfig::default()));
+    lca_mcp::remote::remember_unauthorized(&caps, &server, &format!("{}/mcp", mcp.base))
+        .expect("the 401 was captured");
+    answer_callback(caps.clone());
+    let outcome = lca_mcp::sign_in(caps.clone(), &server);
+    assert!(
+        outcome.is_ok(),
+        "a local IdP is still reachable from a local server: {outcome:?}"
+    );
+}
+
+// Verifies: gh #290 design point 5 - a metadata document naming a **wildcard**
+// authorization server is refused. `parse_net_pattern` would happily build
+// `*.example.com`, and a flow-scoped grant on it would let one sign-in reach
+// every subdomain of an attacker's choosing.
+#[test]
+fn a_metadata_document_naming_a_wildcard_authorization_server_is_refused() {
+    let idp = idp_host(Some("https://*.example.com"));
+    let mcp = mcp_host(&idp.base);
+    let (caps, _root) = engine("wild", &["127.0.0.1"]);
+    let server = server_config(&format!("{}/mcp", mcp.base), Some(OAuthConfig::default()));
+    lca_mcp::remote::remember_unauthorized(&caps, &server, &format!("{}/mcp", mcp.base))
+        .expect("the 401 was captured");
+    let err = lca_mcp::sign_in(caps.clone(), &server)
+        .expect_err("a wildcard authorization server is refused");
+    // The refusal must be the **validation**, not a later denial. Without this
+    // distinction the row passed while its own guard was removed: a wildcard
+    // matches no granted pattern either, so "the sign-in failed and the message
+    // mentions the URL" is satisfied by the permission error the rule exists to
+    // prevent. `wildcard` appears only in the validation message.
+    assert!(
+        err.contains("wildcard") && err.contains("*.example.com"),
+        "the refusal is the wildcard rule, not a downstream denial: {err}"
+    );
+    assert!(
+        !err.contains("permission") && !err.contains("granted pattern"),
+        "no request was attempted against the wildcard: {err}"
+    );
+}
+
+// Verifies: gh #290 design point 5 - the number of hosts one sign-in may admit
+// is **bounded**. A metadata document is attacker-influenced input; without a
+// bound it can name a thousand authorization servers and the flow would admit
+// every one of them for the duration.
+#[test]
+fn one_sign_in_admits_at_most_the_declared_number_of_hosts() {
+    // The bound is a fact of the implementation, stated here so a later change
+    // has to change this number deliberately.
+    assert_eq!(
+        lca_mcp::oauth::MAX_FLOW_HOSTS,
+        lca_tools::MAX_OAUTH_FLOW_HOSTS,
+        "the documented bound and the enforcing one are one number"
+    );
+    assert_eq!(
+        lca_mcp::oauth::MAX_FLOW_HOSTS,
+        8,
+        "the flow host bound is part of this contract"
+    );
+    let (caps, _root) = engine("bound", &[]);
+    let many: Vec<String> = (0..50)
+        .map(|index| format!("h{index}.example.com:443"))
+        .collect();
+    let err = caps
+        .oauth_flow_attach(many)
+        .expect_err("50 hosts exceed the bound");
+    let text = err.to_string();
+    assert!(text.contains("8"), "the refusal states the bound: {text}");
+    assert!(
+        caps.oauth_flow_hosts().is_empty(),
+        "and nothing was admitted by the failed call: {:?}",
+        caps.oauth_flow_hosts()
+    );
+}
+
+// ============================================================================
+// gh #290 - the persisted challenge needs a **lifecycle**.
+//
+// `remember_step_up` writes a challenge and `sign_in` reads it. The question the
+// issue does not ask, and the one that turns this fix into a security finding if
+// it is skipped, is: *when is it cleared?* A `resource_metadata` remembered for
+// server A must never steer a sign-in for server B (a different scoped server
+// sharing the process), and a challenge from an **earlier** attempt at the same
+// server must not steer a later one - the server is telling you where to go
+// *now*, and a stale pointer that still resolves could send the credential
+// somewhere the server has since stopped naming.
+// ============================================================================
+
+/// A token-store key is `mcp-oauth:<name>:<url>`, so the pending challenge is
+/// keyed by the same pair: two servers cannot share one, even in one process.
+/// This row is the cheap half of the lifecycle - the store's own namespacing.
+#[test]
+fn two_servers_never_share_one_pending_challenge() {
+    let (caps, _root) = engine("lifecycle-ns", &["127.0.0.1"]);
+    let a = server_config("http://127.0.0.1:1111/mcp", Some(OAuthConfig::default()));
+    let b = server_config("http://127.0.0.1:2222/mcp", Some(OAuthConfig::default()));
+    let store_a = TokenStore::new(caps.clone(), &a);
+    let store_b = TokenStore::new(caps.clone(), &b);
+    let mut challenge = BTreeMap::new();
+    challenge.insert(
+        "resource_metadata".to_string(),
+        "https://a.invalid/meta".to_string(),
+    );
+    store_a.set_pending_challenge(&challenge).expect("write");
+    assert!(
+        store_b.pending_challenge().expect("read").is_none(),
+        "server B's store sees nothing of A's challenge"
+    );
+}
+
+/// The lifecycle rule: a sign-in **consumes** the challenge it used, so the same
+/// remembered pointer cannot steer a second attempt. Without this, a server that
+/// stops advertising `resource_metadata` (or points it elsewhere) would keep
+/// being discovered through the old pointer for as long as the store lives -
+/// and the pointer is attacker-influenced, so "remember it forever" is a
+/// standing instruction from whoever sent the first 401.
+///
+/// Consuming rather than clearing-on-success: a *failed* sign-in must not leave
+/// the pointer behind either, because the next attempt would read it without the
+/// server having said anything, which is precisely the "stale pointer steers a
+/// later sign-in" failure.
+#[test]
+fn a_sign_in_consumes_the_challenge_it_used() {
+    let idp = idp_host(None);
+    let mcp = mcp_host(&idp.base);
+    let (caps, _root) = engine("lifecycle-consume", &["127.0.0.1"]);
+    let server = server_config(&format!("{}/mcp", mcp.base), Some(OAuthConfig::default()));
+    let store = TokenStore::new(caps.clone(), &server);
+    lca_mcp::remote::remember_unauthorized(&caps, &server, &format!("{}/mcp", mcp.base))
+        .expect("the 401 was captured");
+    assert!(
+        store
+            .pending_challenge()
+            .expect("read")
+            .is_some_and(|challenge| challenge.contains_key("resource_metadata")),
+        "the challenge was captured"
+    );
+
+    answer_callback(caps.clone());
+    lca_mcp::sign_in(caps.clone(), &server).expect("the sign-in completes");
+
+    assert!(
+        store.pending_challenge().expect("read").is_none(),
+        "the challenge was consumed by the sign-in that used it"
+    );
+}
+
+/// The residue rule, stated as the property that matters: after a sign-in, a
+/// **second** `sign_in` for the same server must not follow the old
+/// `resource_metadata`. It falls through to the configured (or origin) discovery
+/// path instead - which for this fixture means the sign-in no longer reaches
+/// host B at all, because nothing names it any more.
+///
+/// This is the assertion the consuming half exists for, and it is checked from
+/// the server's side (which paths host B saw) rather than from the store's.
+#[test]
+fn a_previous_sign_ins_metadata_does_not_steer_the_next_one() {
+    let idp = idp_host(None);
+    let mcp = mcp_host(&idp.base);
+    let (caps, _root) = engine("lifecycle-residue", &["127.0.0.1"]);
+    let server = server_config(&format!("{}/mcp", mcp.base), Some(OAuthConfig::default()));
+    lca_mcp::remote::remember_unauthorized(&caps, &server, &format!("{}/mcp", mcp.base))
+        .expect("the 401 was captured");
+    answer_callback(caps.clone());
+    lca_mcp::sign_in(caps.clone(), &server).expect("the first sign-in completes");
+    let after_first = idp.paths().len();
+    assert!(after_first > 0, "host B was reached by the first sign-in");
+
+    // A second sign-in with no fresh 401: the challenge is gone, so discovery
+    // must not consult host B's protected-resource metadata again.
+    answer_callback(caps.clone());
+    let second = lca_mcp::sign_in(caps.clone(), &server);
+    let paths = idp.paths();
+    let protected: Vec<&String> = paths
+        .iter()
+        .filter(|path| path.contains("oauth-protected-resource"))
+        .collect();
+    assert_eq!(
+        protected.len(),
+        1,
+        "the resource metadata was fetched exactly once, by the first sign-in \
+         ({:?}); second outcome {second:?}",
+        paths
+    );
+}
+
+/// The half the success path does not cover: a **failed** sign-in must consume
+/// the challenge too. `exchange` clears it after a successful token exchange, so
+/// a completed sign-in is already clean; but a sign-in that fails *before* the
+/// exchange (a refusal, a bad endpoint, an unreachable host) leaves the pointer
+/// behind, and the next attempt reads it without the server having said
+/// anything. That is the lifecycle hole the success-only clearing misses, and it
+/// is the one that matters, because a refusal is exactly when a stale pointer
+/// would be followed blindly.
+#[test]
+fn a_failed_sign_in_also_consumes_the_challenge() {
+    // A loopback IdP named by a *remote* server: refused by the loopback rule,
+    // so the sign-in fails before it can exchange anything.
+    let idp = idp_host(None);
+    let (caps, _root) = engine("lifecycle-failed", &[]);
+    let server = server_config(
+        "https://mcp.example.invalid/mcp",
+        Some(OAuthConfig::default()),
+    );
+    let store = TokenStore::new(caps.clone(), &server);
+    let mut challenge = BTreeMap::new();
+    challenge.insert(
+        "resource_metadata".to_string(),
+        format!("{}/.well-known/oauth-protected-resource", idp.base),
+    );
+    store.set_pending_challenge(&challenge).expect("seed");
+    lca_mcp::sign_in(caps.clone(), &server).expect_err("the loopback rule refuses");
+    assert!(
+        store.pending_challenge().expect("read").is_none(),
+        "a refused sign-in leaves no pointer for the next attempt to follow"
     );
 }

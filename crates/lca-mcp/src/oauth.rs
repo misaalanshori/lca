@@ -217,6 +217,54 @@ fn origin_of(url: &str) -> Result<String, String> {
     Ok(format!("{scheme}://{authority_no_user}"))
 }
 
+/// How many hosts **one sign-in** may admit (gh #290 design point 5).
+///
+/// A metadata document is attacker-influenced input: it comes from the server
+/// you are signing into. Without a bound it can name a thousand authorization
+/// servers and the flow would admit every one of them for its duration, which
+/// turns "grant the IdP" into "grant whatever the server felt like listing".
+///
+/// Eight is chosen to be comfortably more than any real deployment needs - an
+/// authorization endpoint, a token endpoint, a registration endpoint and a
+/// metadata document can legitimately be four *distinct* hosts - while being
+/// small enough that a listing spree is visible in a `via` report rather than
+/// merely bounded. Exceeding it is a refusal, not a truncation: a silently
+/// shortened host list would fail later, at a request whose denial names no
+/// reason.
+pub const MAX_FLOW_HOSTS: usize = 8;
+
+/// The host a URL names, for the loopback rule: the loopback of the **MCP
+/// server** and of the **OAuth endpoint** are different questions.
+///
+/// gh #290 design point 6: a loopback authorization server is legitimate when
+/// the MCP server is itself loopback - that is a developer's local IdP, and
+/// RFC 8252 blesses it (it is also exactly the case `discover`'s origin
+/// fallback serves). The same endpoint named by a **remote** server's metadata
+/// is an attempt to make the machine talk to itself, which is `net-local`'s
+/// domain and needs its own consent. So the comparison is between two hosts,
+/// not a blanket ban: a rule phrased "refuse loopback endpoints" would break
+/// every local development flow.
+fn loopback_of(url: &str) -> bool {
+    checked_endpoint(url, "a URL under the loopback rule")
+        .ok()
+        .is_some_and(|(_, host)| is_loopback_host(&host))
+}
+
+/// Refuse a discovered endpoint when a **remote** MCP server named it and it
+/// resolves to this machine (gh #290 design point 6).
+///
+/// Returns the explanation, so both call sites (the metadata document and the
+/// RFC 8414 issuer) word the refusal the same way.
+fn refuse_remote_loopback(server: &HttpServerConfig, endpoint: &str, what: &str) -> Option<String> {
+    if loopback_of(&server.url) || !loopback_of(endpoint) {
+        return None;
+    }
+    Some(format!(
+        "{what} is a loopback address ({endpoint}), named by a server that is not local: \
+         a remote server may not direct this machine to itself"
+    ))
+}
+
 /// Find the authorization server: the configured metadata document
 /// wins (pi's `authServerMetadataUrl`), else the challenge's
 /// `resource_metadata` (RFC 9728), else the MCP origin as its own
@@ -234,6 +282,13 @@ fn discover(
         return IdpMeta::from_document(&get_document(caps, server.timeout(), &url)?);
     }
     if let Some(metadata_url) = challenge.get("resource_metadata") {
+        // The metadata URL itself is the first thing the server chose, so it
+        // gets the loopback rule before a request goes to it (gh #290).
+        if let Some(refusal) =
+            refuse_remote_loopback(server, metadata_url, "the resource metadata URL")
+        {
+            return Err(refusal);
+        }
         let document = get_document(caps.clone(), server.timeout(), metadata_url)?;
         let issuer = document
             .get("authorization_servers")
@@ -241,6 +296,21 @@ fn discover(
             .and_then(|servers| servers.first())
             .and_then(|first| first.as_str())
             .ok_or_else(|| "the resource metadata names no authorization server".to_string())?;
+        // `authorization_servers` is attacker-influenced input, so the issuer
+        // is refused when it is a wildcard (a flow-scoped grant on
+        // `*.example.com` would let one sign-in reach every subdomain) or a
+        // loopback address named by a remote server, and it is validated as a
+        // URL before `.well-known` is appended to it (gh #290 design point 5).
+        if issuer.contains('*') {
+            return Err(format!(
+                "the resource metadata names a wildcard authorization server ({issuer}); \
+                 a sign-in may only be sent to a host the document states exactly"
+            ));
+        }
+        checked_endpoint(issuer, "the authorization server")?;
+        if let Some(refusal) = refuse_remote_loopback(server, issuer, "the authorization server") {
+            return Err(refusal);
+        }
         let url = format!(
             "{}/.well-known/oauth-authorization-server",
             issuer.trim_end_matches('/')
@@ -345,6 +415,24 @@ pub fn sign_in(
     // a discovered host must not outlive the flow that needed it.
     let outcome = sign_in_flow(caps.clone(), server, challenge, scope, redirect_uri, flow);
     caps.oauth_flow_clear();
+    // And the **persisted challenge is consumed here, on every path** (gh #290's
+    // lifecycle). `exchange` already clears it after a successful token
+    // exchange, so a clean sign-in was never the problem; a sign-in that fails
+    // before the exchange - a refusal, a bad endpoint, an unreachable host -
+    // used to leave the pointer behind, and the next attempt would read it
+    // without the server having said anything.
+    //
+    // That is the failure that matters rather than a tidiness one: the whole
+    // point of `resource_metadata` is that the server is telling you *now* where
+    // its authorization server is. A pointer it sent once and has since stopped
+    // sending is a standing instruction from whoever sent the first 401, and
+    // following it silently is how this fix would become a security finding.
+    //
+    // Best-effort: the sign-in's own outcome is what the caller acts on, and a
+    // store that cannot delete is a separate problem. The scope-only half goes
+    // too - a step-up scope from a failed attempt is no more current than the
+    // pointer beside it.
+    let _ = store.clear_pending();
     outcome
 }
 

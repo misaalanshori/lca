@@ -18,6 +18,12 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **MCP sign-in no longer trusts a metadata document blindly** (gh #290). The
+  `WWW-Authenticate` challenge a `401` carries now survives into sign-in on every
+  path — including a failed one, so a stale pointer can never steer the next
+  attempt — and the document's own claims are checked: a wildcard or loopback
+  authorization server named by a **remote** server is refused, and one sign-in
+  reaches at most 8 hosts.
 - **`Space` in `/settings` both toggles and types** (gh #386 gap 3). With no search
   typed it changes the highlighted setting, as `Enter` does; once the filter has
   text, a space lands in the filter instead. Neither job had to be given up.

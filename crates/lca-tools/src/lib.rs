@@ -33,7 +33,7 @@ pub use capabilities::serve_http::{
     self as serve_http, Bound, DEFAULT_PORT, HttpResponse, IncomingRequest, Listener,
     MAX_BODY_BYTES, PORT_ATTEMPTS, Refusal, Routed, ServeHttpNamespace, SessionToken,
 };
-pub use capabilities::{BrowserError, CompletionError};
+pub use capabilities::{BrowserError, CompletionError, MAX_OAUTH_FLOW_HOSTS};
 pub use capabilities::{
     BrowserOpener, Capabilities, CapabilityGrants, Denial, RESOURCE_FILE_MAX_BYTES,
     RESOURCE_PACKAGE_MAX_BYTES, RESOURCE_READ_MAX_BYTES, ResourceSource, STATE_TOTAL_MAX_BYTES,

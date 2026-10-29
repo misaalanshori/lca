@@ -1,5 +1,6 @@
 //! Split from `capabilities.rs` (cycle 7, P3). Behaviour unchanged.
 
+use super::MAX_OAUTH_FLOW_HOSTS;
 use super::*;
 
 impl Capabilities {
@@ -54,8 +55,18 @@ impl Capabilities {
         lock(&self.oauth_flow_hosts).clone()
     }
 
-    /// Attach the hosts a sign-in will need. Replaces the set: one flow at a
-    /// time, and the caller starts from the hosts it discovered.
+    /// Attach the hosts a sign-in will need. Extends the set: the caller may
+    /// attach in two waves (the discovery URLs it can see, then the endpoints
+    /// discovery named).
+    ///
+    /// **Bounded** (gh #290 design point 5): the host list comes from a
+    /// metadata document, which is attacker-influenced input, so one flow may
+    /// hold at most [`MAX_OAUTH_FLOW_HOSTS`] distinct hosts. The check is
+    /// against the cap *after* the whole wave is parsed and deduplicated, so
+    /// attaching the same host twice is free and a wave that would exceed the
+    /// cap is refused whole - a partially applied wave would leave the flow
+    /// reaching some of what it asked for and failing later at a request whose
+    /// denial names no reason.
     pub fn oauth_flow_attach(
         &self,
         hosts: impl IntoIterator<Item = String>,
@@ -69,15 +80,23 @@ impl Capabilities {
                 patterns.push(pattern);
             }
         }
-        // Extend, not replace: the caller may attach in two waves (the
-        // discovery URLs it can see, then the endpoints discovery named).
-        // Deduplicated, because the same host across both waves is normal.
-        let mut hosts = lock(&self.oauth_flow_hosts);
-        for pattern in patterns {
-            if !hosts.contains(&pattern) {
-                hosts.push(pattern);
+        let merged: Vec<lca_permissions::NetPattern> = {
+            let current = lock(&self.oauth_flow_hosts);
+            let mut merged = current.clone();
+            for pattern in patterns {
+                if !merged.contains(&pattern) {
+                    merged.push(pattern);
+                }
             }
+            merged
+        };
+        if merged.len() > MAX_OAUTH_FLOW_HOSTS {
+            return Err(CapabilityError::Invalid(format!(
+                "an OAuth flow may admit at most {MAX_OAUTH_FLOW_HOSTS} hosts; this one asked for {}",
+                merged.len()
+            )));
         }
+        *lock(&self.oauth_flow_hosts) = merged;
         Ok(())
     }
 

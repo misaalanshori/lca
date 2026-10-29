@@ -211,7 +211,13 @@ pub fn parse_www_authenticate(header: &str) -> BTreeMap<String, String> {
         }
         match (part.split_once('='), key.take()) {
             (Some((name, value)), _) => {
-                params.insert(name.trim().to_string(), value.trim().to_string());
+                // RFC 7235 auth-params are case-insensitive, and RFC 9728's
+                // member is spelled `resource_metadata`. Lowercasing here is what
+                // lets every reader ask for it by its canonical spelling without
+                // each one re-deciding how to compare - a server that sends
+                // `Resource_Metadata` is not misconfigured, it is exercising the
+                // freedom the grammar gives it (gh #290).
+                params.insert(name.trim().to_ascii_lowercase(), value.trim().to_string());
             }
             (None, _) => {
                 key = Some(part.to_string());
@@ -713,6 +719,31 @@ mod tests {
         };
         assert!(server.has_static_auth());
         assert_eq!(server.timeout(), std::time::Duration::from_secs(60));
+    }
+
+    // Verifies: gh #290 - RFC 7235 auth-param names are case-insensitive, so a
+    // server sending `Resource_Metadata` is within the grammar. Normalising at
+    // the parser is what lets every reader ask for the canonical spelling
+    // without each one re-deciding how to compare; before this, a challenge
+    // spelled that way lost the pointer and the RFC 9728 branch stayed dead for
+    // a server that was merely exercising its freedom.
+    #[test]
+    fn a_challenge_member_is_matched_regardless_of_case() {
+        let challenge = parse_www_authenticate(
+            r#"Bearer Resource_Metadata="https://x.invalid/m", SCOPE="extra""#,
+        );
+        assert_eq!(
+            challenge.get("resource_metadata").map(String::as_str),
+            Some("https://x.invalid/m"),
+            "the canonical spelling reaches the reader: {challenge:?}"
+        );
+        assert_eq!(challenge.get("scope").map(String::as_str), Some("extra"));
+        assert!(
+            !challenge
+                .keys()
+                .any(|key| key.chars().any(char::is_uppercase)),
+            "no member keeps its original case: {challenge:?}"
+        );
     }
 
     // Verifies: gh #418 Phase C#C2 - pi's `createMcpToolName` shape: a

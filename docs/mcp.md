@@ -224,9 +224,33 @@ is the one place MCP reaches a host you did not configure. The rule:
   anywhere, or plain `http://` on loopback only (RFC 8252, and how a local
   developer IdP is reached). A discovered `http://` endpoint on any other host is
   refused with the URL and the rule in the message.
+- The metadata document is treated as **untrusted input**, because it is the word
+  of the server you are signing into. Three refusals follow from that, each
+  reported rather than silently narrowed:
+  - a **wildcard** authorization server (`https://*.example.com`) is refused — a
+    sign-in goes to a host the document states exactly (gh #290);
+  - a **loopback** authorization server is refused *when the MCP server is not
+    itself loopback*. That is the machine talking to itself on a remote server's
+    instruction, which is `net-local`'s business and needs its own consent. A
+    local MCP server naming a local IdP is the ordinary development case and is
+    allowed;
+  - one sign-in may reach at most **8** distinct hosts. A document listing more
+    is refused outright rather than truncated, so a listing spree shows up as an
+    error instead of a mysteriously failing request later.
 
 The sign-in screen names the outside host — `via <server>: authorization host
 <host>` — so you see where the credential is about to go before it goes there.
+
+### The challenge is consumed, not kept
+
+A `resource_metadata` pointer is the server telling you *now* where its
+authorization server is, so LCA reads it once. The persisted challenge — the
+pointer, the `scope`, the whole `WWW-Authenticate` — is deleted when the sign-in
+attempt finishes, **whether it succeeded or failed**. A pointer left behind after a
+refusal would steer the next attempt without the server having said anything, and
+the pointer is attacker-influenced by construction, so remembering it forever is a
+standing instruction from whoever sent the first `401`. A step-up `scope` rides the
+same lifecycle.
 
 ### Tokens expire
 

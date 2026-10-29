@@ -24,3 +24,6 @@ mod split_reply_never_typed;
 // Gh #386 gap 1: the popup's ragged description column and missing provenance.
 #[path = "386-autocomplete-column-and-provenance.rs"]
 mod autocomplete_column_and_provenance;
+// Gh #290: MCP OAuth sign-in and the untrusted metadata document.
+#[path = "290-mcp-oauth-untrusted-metadata.rs"]
+mod mcp_oauth_untrusted_metadata;
