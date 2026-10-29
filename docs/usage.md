@@ -198,7 +198,9 @@ everyday set:
 - `/attach`, `/paste` — stage an image for the next message.
 - `/mcp`, `/ext`, `/skill` — servers, extensions, and skills.
 
-Skills and extensions add their own `/`-commands to the same menu.
+Skills and extensions add their own `/`-commands to the same menu. A skill is a
+`SKILL.md` directory with an optional four-field header and its instructions below
+it; [Skills](skills.md) describes both ways to write the header.
 
 **In any of these lists, the keyboard picks and the pointer clicks** (gh #386 gap
 2). Moving the mouse over a row does nothing - it does not move the highlight - so

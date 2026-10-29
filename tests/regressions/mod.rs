@@ -27,3 +27,6 @@ mod autocomplete_column_and_provenance;
 // Gh #290: MCP OAuth sign-in and the untrusted metadata document.
 #[path = "290-mcp-oauth-untrusted-metadata.rs"]
 mod mcp_oauth_untrusted_metadata;
+// Gh #304: a headerless `SKILL.md` lost its opening instruction lines.
+#[path = "304-skill-headerless-body-loss.rs"]
+mod skill_headerless_body_loss;

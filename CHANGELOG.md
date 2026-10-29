@@ -18,6 +18,12 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **A skill file with no header no longer loses its first lines** (gh #304). If a
+  `SKILL.md` opened with a sentence containing a colon — `Note: this repo needs Rust
+  1.85.` — that sentence was read as an unknown header field and dropped, so the part
+  of the instructions that sets the scene never reached the model and nothing said so.
+  A line is header only when it is one of the four known fields; anything else starts
+  the instructions. Fenced headers (`---`) behave exactly as before.
 - **MCP sign-in no longer trusts a metadata document blindly** (gh #290). The
   `WWW-Authenticate` challenge a `401` carries now survives into sign-in on every
   path — including a failed one, so a stale pointer can never steer the next
