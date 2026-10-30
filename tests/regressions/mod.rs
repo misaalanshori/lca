@@ -57,3 +57,6 @@ mod tabs_keep_close_and_no_sixel_claim;
 // Gh #267: `mcp.json` is written atomically, owner-only, and never truncated in place.
 #[path = "267-mcp-json-write-atomic-and-owner-only.rs"]
 mod mcp_json_write_atomic_and_owner_only;
+// Gh #262: each resource flag names its own expectation in a failure message.
+#[path = "262-per-flag-resource-copy.rs"]
+mod per_flag_resource_copy;

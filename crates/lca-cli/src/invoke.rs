@@ -468,9 +468,85 @@ pub fn prepare_resources(
     Ok(())
 }
 
+/// One resource flag's expectation (gh #262).
+///
+/// **The expectation and the message are one value on purpose.** They used to be
+/// two: the flag and its extension were arguments to a shared function that
+/// hardcoded `"not a skill file or directory"`, so `--theme ./my-theme.json`
+/// told the user their theme was not a skill file - the wrong noun for the flag
+/// they typed and the wrong extension for what they were writing. Keeping the
+/// sentence next to the rule means a flag added here cannot inherit a sentence
+/// written for another one; there is no "forgot to update the message" case,
+/// because there is no second place to update.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResourceKind {
+    /// The flag as the user types it (`--theme`).
+    pub flag: &'static str,
+    /// The extension a file must carry (without the dot).
+    pub extension: &'static str,
+    /// What to call the thing in a sentence ("theme file").
+    pub noun: &'static str,
+    /// Where these normally live, when the product has a home for them.
+    pub home: Option<&'static str>,
+}
+
+/// Every flag that takes a resource path, in the order errors are reported.
+///
+/// The one table the brief asks for: adding a fifth resource flag means adding a
+/// `ResourceKind` here, and the message, the extension check and the actionable
+/// hint all come from it.
+pub const RESOURCE_KINDS: &[ResourceKind] = &[
+    ResourceKind {
+        flag: "--skill",
+        extension: "md",
+        noun: "skill file",
+        // Skills are discovered from extension packs and project dirs rather than
+        // one user directory, so there is no single home to name.
+        home: None,
+    },
+    ResourceKind {
+        flag: "--theme",
+        extension: "toml",
+        noun: "theme file",
+        // `~/.lca/themes/` - `docs/configuration.md`'s "Theme files live under".
+        home: Some("~/.lca/themes/"),
+    },
+];
+
+/// The refusal for a path that exists but is the wrong kind (gh #262).
+///
+/// Per `AGENTS.md`, error copy says what to **do**: the extension to use, and where
+/// the file belongs when the product has such a place.
+///
+/// A flag with no entry in [`RESOURCE_KINDS`] gets the extension-only form -
+/// never a borrowed noun. That is the shape that keeps the defect from coming
+/// back: an unlisted flag cannot accidentally inherit `"theme file"`.
+fn wrong_kind_message(flag: &str, extension: &str, path: &std::path::Path) -> String {
+    let Some(kind) = RESOURCE_KINDS.iter().find(|kind| kind.flag == flag) else {
+        return format!(
+            "error: {flag} {}: not a `.{extension}` file or directory",
+            path.display()
+        );
+    };
+    match kind.home {
+        Some(home) => format!(
+            "error: {flag} {}: not a {} (expected `.{extension}`; put it in {home})",
+            path.display(),
+            kind.noun
+        ),
+        None => format!(
+            "error: {flag} {}: not a {} (expected `.{extension}`)",
+            path.display(),
+            kind.noun
+        ),
+    }
+}
+
 /// Refuse bad resource paths up front (gh #70): a `--skill` must
 /// name a directory or a `.md` file, a `--theme` a directory or a
 /// `.toml` file. Anything else is a usage error, never a silent skip.
+///
+/// Both flags accept a directory, so no message may claim otherwise.
 pub fn check_resource_paths(
     flag: &str,
     paths: &[std::path::PathBuf],
@@ -486,10 +562,7 @@ pub fn check_resource_paths(
         if !path.exists() {
             return Err(format!("error: {flag} {}: no such file", path.display()));
         }
-        return Err(format!(
-            "error: {flag} {}: not a skill file or directory",
-            path.display()
-        ));
+        return Err(wrong_kind_message(flag, ext, path));
     }
     Ok(())
 }

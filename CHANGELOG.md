@@ -18,6 +18,15 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **A bad `--theme` path no longer complains about skill files** (gh #262). `--skill`
+  and `--theme` shared one validator whose failure sentence was hardcoded to
+  `not a skill file or directory`, so `lca --theme ./my-theme.json` told the user their
+  theme was not a skill file — the wrong noun and the wrong extension for the flag they
+  typed. Each flag's expectation and sentence now live in one record
+  (`ResourceKind`), so the message is `not a theme file (expected `.toml`; put it in
+  ~/.lca/themes/)` — naming what to do, and where themes live. A flag validated without
+  a record gets an extension-only sentence rather than inheriting another flag's noun,
+  so this cannot come back with the next resource flag.
 - **`mcp.json` is written atomically and owner-only, and its Windows restriction is
   real** (gh #267). The file holds server configs, `env` and `headers` — credentials by
   design — and was persisted with an in-place `std::fs::write`, so an interrupted write

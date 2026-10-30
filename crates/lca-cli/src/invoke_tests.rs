@@ -291,3 +291,135 @@ fn at_file_under_the_bound_is_untouched() {
     assert!(!text.contains("truncated"), "no marker on the happy path");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+// Verifies: gh #262 - each resource flag names **its own** expectation, and not
+// another flag's.
+//
+// `check_resource_paths` served both `--skill` and `--theme` but hardcoded "not a
+// skill file or directory", so `--theme ./my-theme.json` told the user their theme
+// was not a skill file - the wrong noun and the wrong expectation.
+//
+// The negative half is the point: asserting only that the message is *helpful*
+// lets the copy drift back the next time a flag is added. Each row requires the
+// other flags' nouns to be absent.
+#[test]
+fn a_theme_path_error_names_a_theme_file_and_not_a_skill_file() {
+    let root = lca_testkit::scratch_path("lca-262-theme");
+    std::fs::create_dir_all(&root).expect("mkdir");
+    std::fs::write(root.join("my-theme.json"), "{}").expect("write");
+
+    let err = check_resource_paths("--theme", &[root.join("my-theme.json")], "toml")
+        .expect_err("a .json is not a theme file");
+    assert!(
+        err.contains("--theme"),
+        "the message names the flag the user typed: {err}"
+    );
+    assert!(
+        err.contains("theme"),
+        "and the thing it expected a theme file of: {err}"
+    );
+    assert!(
+        !err.contains("skill"),
+        "and never another flag's noun: {err}"
+    );
+    // Actionable: the expected extension and where themes live.
+    assert!(
+        err.contains("toml"),
+        "the message names the extension to use: {err}"
+    );
+    assert!(
+        err.contains("themes"),
+        "and where themes live, so the user knows what to do: {err}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// Verifies: gh #262 - `--skill` still names a skill file (no regression), and
+// does not borrow the theme copy.
+#[test]
+fn a_skill_path_error_names_a_skill_file_and_not_a_theme_file() {
+    let root = lca_testkit::scratch_path("lca-262-skill");
+    std::fs::create_dir_all(&root).expect("mkdir");
+    std::fs::write(root.join("notes.txt"), "x").expect("write");
+
+    let err = check_resource_paths("--skill", &[root.join("notes.txt")], "md")
+        .expect_err("a .txt is not a skill file");
+    assert!(err.contains("--skill"), "names the flag: {err}");
+    assert!(err.contains("skill"), "names a skill file: {err}");
+    assert!(!err.contains("theme"), "and not a theme: {err}");
+    assert!(err.contains("md"), "names the extension: {err}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// Verifies: gh #262 - a **missing** path is still "no such file" for every flag,
+// because "not a theme file" would be wrong for a path that does not exist.
+#[test]
+fn a_missing_resource_path_says_no_such_file_for_every_flag() {
+    let root = lca_testkit::scratch_path("lca-262-missing");
+    std::fs::create_dir_all(&root).expect("mkdir");
+    for (flag, ext) in [("--skill", "md"), ("--theme", "toml")] {
+        let err = check_resource_paths(flag, &[root.join("nope")], ext)
+            .expect_err("a missing path refuses");
+        assert!(err.contains("no such file"), "{flag}: {err}");
+        assert!(
+            !err.contains("not a "),
+            "{flag}: absence is not a wrong-kind error: {err}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// Verifies: gh #262 - a directory is accepted for both flags today, so neither
+// message may claim otherwise. The row pins the current contract so the copy
+// cannot start promising a directory rule that does not exist.
+#[test]
+fn a_directory_is_accepted_for_both_resource_flags() {
+    let root = lca_testkit::scratch_path("lca-262-dir");
+    let dir = root.join("pack");
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    for (flag, ext) in [("--skill", "md"), ("--theme", "toml")] {
+        assert!(
+            check_resource_paths(flag, std::slice::from_ref(&dir), ext).is_ok(),
+            "{flag} accepts a directory"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// Verifies: gh #262 - the exact wording, so the receipt is legible.
+//
+// Asserted as a full string rather than by fragments: the point of the issue is
+// that the sentence named the wrong thing, and a fragment check is what let the
+// wrong noun through in the first place.
+#[test]
+fn the_resource_path_messages_read_as_the_issue_asks() {
+    let root = lca_testkit::scratch_path("lca-262-wording");
+    std::fs::create_dir_all(&root).expect("mkdir");
+    std::fs::write(root.join("my-theme.json"), "{}").expect("write");
+    std::fs::write(root.join("notes.txt"), "x").expect("write");
+
+    let theme = check_resource_paths("--theme", &[root.join("my-theme.json")], "toml")
+        .expect_err("wrong kind");
+    assert!(
+        theme.ends_with(": not a theme file (expected `.toml`; put it in ~/.lca/themes/)"),
+        "the theme sentence names the noun, the extension and where it goes: {theme}"
+    );
+
+    let skill =
+        check_resource_paths("--skill", &[root.join("notes.txt")], "md").expect_err("wrong kind");
+    assert!(
+        skill.ends_with(": not a skill file (expected `.md`)"),
+        "the skill sentence names its own expectation: {skill}"
+    );
+
+    // A flag not in the table gets the extension-only form, never a borrowed
+    // noun. A `.txt` asked for as `.prompt` is the wrong kind, and the sentence
+    // must stay generic rather than inherit another flag's wording.
+    let unlisted = check_resource_paths("--prompt", &[root.join("notes.txt")], "prompt")
+        .expect_err("not listed, and the extension disagrees");
+    assert!(
+        unlisted.ends_with(": not a `.prompt` file or directory"),
+        "an unlisted flag cannot inherit another flag's noun: {unlisted}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
