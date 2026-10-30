@@ -261,11 +261,15 @@ fn no_native_extension_implements_a_hook_it_cannot_receive() {
             checked += 1;
             let worlds = declared_worlds(&src);
             let serves_hooks = worlds.iter().any(|world| world == WORLD_SERVING_HOOKS);
+            // Windows spells the separator `\\`, and every exemption above is
+            // written with `/` because that is what a human reads. Normalising
+            // here rather than writing two spellings keeps the list portable.
             let relative = file
                 .strip_prefix(&root)
                 .unwrap_or(&file)
                 .display()
-                .to_string();
+                .to_string()
+                .replace('\\', "/");
             if !serves_hooks && !KNOWN_DEAD_HOOKS.iter().any(|(path, _)| *path == relative) {
                 offenders.push(format!(
                     "{}: implements {} but declares worlds = {worlds:?}",

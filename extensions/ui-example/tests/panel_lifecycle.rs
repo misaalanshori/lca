@@ -73,56 +73,39 @@ fn panel_lines(handle: &dyn ExtensionDispatch) -> String {
     .join("\n")
 }
 
-/// Whether the program has printed a prompt (or anything at all).
+/// Write one line into the panel and wait for the shell to have run it.
 ///
-/// Windows' ConPTY takes noticeably longer to deliver its first bytes than a
-/// unix pty does, and `cmd.exe` prints a banner before its prompt. Typing before
-/// any of that arrives is not a defect - the write is buffered and the shell
-/// runs the line - but it makes a fixed sleep flaky, so every row that types
-/// waits for the program to speak first.
-fn program_has_spoken(handle: &dyn ExtensionDispatch) -> bool {
-    let header = ["session:", "keys:", "not available"];
-    panel_lines(handle).lines().any(|line| {
-        let line = line.trim();
-        !line.is_empty() && !header.iter().any(|h| line.starts_with(h))
-    })
-}
-
-/// Type one line and wait for it to have any visible effect.
-fn type_line(handle: &dyn ExtensionDispatch, line: &str) {
-    // Start the session first: opening the panel is the invocation, and a
-    // keystroke sent before it lands on nothing (the extension has no handle to
-    // write to yet).
-    let _ = panel_lines(handle);
-    for _attempt in 0..80 {
-        if program_has_spoken(handle) {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-    handle
-        .on_ui_event(
-            "panel",
-            &lca_protocol::UiInput::Key {
-                key: format!("{line}\r"),
-            },
-        )
-        .expect("event");
-}
-
-/// Type a line into the panel and wait for the program to echo it back.
+/// **Retried, because a pty write issued before the child reads its input is
+/// lost** (gh #578, which found this row losing that race on `windows-latest`,
+/// and #301 before it). `cmd.exe` under ConPTY prints its banner before it is
+/// ready to read, so "the program has spoken" is not "the program is listening".
+/// Retrying is the honest shape: the row is about a keystroke reaching the
+/// program *eventually*, which is what a user experiences, and it claims nothing
+/// about a startup latency the pty layer owns.
+///
+/// Two occurrences of `line` mean the shell ran it - one is the echo of the
+/// keystroke, the second is the program's own output.
 fn type_and_wait(handle: &dyn ExtensionDispatch, line: &str) -> String {
-    type_line(handle, line);
+    // Opening the panel is the invocation: before it there is no handle to write
+    // to, so the first render is what starts the session.
+    let _ = panel_lines(handle);
     let mut panel = String::new();
-    for _attempt in 0..80 {
-        panel = panel_lines(handle);
-        // The echoed command and the program's own output both contain the
-        // marker; two occurrences means the shell has run it, not merely echoed
-        // the keystroke back at the terminal.
-        if panel.matches(line).count() >= 2 {
-            break;
+    for _attempt in 0..40 {
+        handle
+            .on_ui_event(
+                "panel",
+                &lca_protocol::UiInput::Key {
+                    key: format!("{line}\r"),
+                },
+            )
+            .expect("event");
+        for _wait in 0..8 {
+            panel = panel_lines(handle);
+            if panel.matches(line).count() >= 2 {
+                return panel;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
         }
-        std::thread::sleep(std::time::Duration::from_millis(50));
     }
     panel
 }
