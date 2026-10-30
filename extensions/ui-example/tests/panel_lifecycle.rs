@@ -73,6 +73,38 @@ fn panel_lines(handle: &dyn ExtensionDispatch) -> String {
     .join("\n")
 }
 
+/// Whether the shell has **run** `line`, as opposed to merely echoing the keystrokes.
+///
+/// The program's own output is a row that is *exactly* the marker once the digits and
+/// trailing whitespace are ignored; the echo is never that, because it carries the
+/// prompt (`$ echo MARKER9` under `sh`, `>echo MARKER9` under `cmd.exe`).
+///
+/// **This replaced a `count() >= 2` rule, and the replacement is the fix for a
+/// Windows-only red main** (this cycle's CI run, twice, and reproducible). Counting two
+/// occurrences assumed the echo always carries the whole marker - but ConPTY truncates
+/// the echoed command at the console width, and the job log showed `>echo SECOND30`
+/// for `echo SECOND301`. The count never reached two, so `type_and_wait` retried its
+/// write forty times; each retry appended another echo/output pair, two commands
+/// flooded past `SCREEN_MAX_ROWS` (200), and the rolling screen then legitimately
+/// trimmed `FIRST301` - so a *different* row's assertion about the earlier output
+/// failed. One wrong predicate, three symptoms.
+///
+/// The trailing `\r` is real: a pty turns the shell's `\n` into `\r\n`, and a row
+/// carries it. Comparising on the trimmed row handles both platforms without caring
+/// which newline convention arrived.
+fn ran_line(panel: &str, line: &str) -> bool {
+    // The marker appears as its own row, with no prompt attached. `ends_with` rather
+    // than `==` because a long marker can be followed by padding cells.
+    panel.lines().any(|row| {
+        let row = row.trim();
+        row == line
+            || (row.ends_with(line)
+                // ...but never when the row is the echoed command, which has the
+                // prompt in front of it.
+                && !row.contains(&format!("echo {line}")))
+    })
+}
+
 /// Write one line into the panel and wait for the shell to have run it.
 ///
 /// **Retried, because a pty write issued before the child reads its input is
@@ -82,9 +114,6 @@ fn panel_lines(handle: &dyn ExtensionDispatch) -> String {
 /// Retrying is the honest shape: the row is about a keystroke reaching the
 /// program *eventually*, which is what a user experiences, and it claims nothing
 /// about a startup latency the pty layer owns.
-///
-/// Two occurrences of `line` mean the shell ran it - one is the echo of the
-/// keystroke, the second is the program's own output.
 fn type_and_wait(handle: &dyn ExtensionDispatch, line: &str) -> String {
     // Opening the panel is the invocation: before it there is no handle to write
     // to, so the first render is what starts the session.
@@ -101,7 +130,7 @@ fn type_and_wait(handle: &dyn ExtensionDispatch, line: &str) -> String {
             .expect("event");
         for _wait in 0..8 {
             panel = panel_lines(handle);
-            if panel.matches(line).count() >= 2 {
+            if ran_line(&panel, line) {
                 return panel;
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
