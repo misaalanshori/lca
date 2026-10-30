@@ -96,26 +96,35 @@ fn the_renderer_does_not_leak_strings() {
 //
 // All three parts matter: a cache that is never read is dead weight, and one with
 // no bound is the same bug with a longer lifetime. The bound is a named constant
-// so the row can check the eviction path uses the same number the docs quote.
+// so the row can check the cache is built from the same number the docs quote.
+//
+// **Corrected by gh #579.** This row used to require `cache.remove(` inside `render`,
+// which was true while `render` hand-evicted. The eviction now lives in the shared
+// `LruCache` (one policy for the crate, #323/#579), so `render` correctly contains no
+// eviction at all - keeping the old assertion would have forced the second policy back
+// in. The bound is now asserted at the *construction* site, which is where it is applied.
 #[test]
 fn the_parse_cache_is_bounded_and_consulted() {
     let src = source();
     assert!(
-        src.contains("const PARSE_CACHE_SIZE: usize ="),
+        src.contains("const PARSE_CACHE_SIZE: usize =")
+            || src.contains("pub const PARSE_CACHE_SIZE: usize ="),
         "the cache bound is a named constant, not a literal at the eviction site"
+    );
+    assert!(
+        src.contains("LruCache::new(PARSE_CACHE_SIZE)"),
+        "and the cache is built from it, so the bound is applied by the shared policy"
     );
     let render = function_body(&src, "render");
     assert!(
         render.contains("PARSE_CACHE"),
         "`render` consults the cache:\n{render}"
     );
+    // Eviction is the policy's job now, so the assertion is that `render` does **not**
+    // pick a victim - the opposite of what this row used to require.
     assert!(
-        render.contains("PARSE_CACHE_SIZE"),
-        "and evicts against the bound:\n{render}"
-    );
-    assert!(
-        render.contains("cache.remove("),
-        "with an actual eviction, not just a length check:\n{render}"
+        !render.contains("cache.remove(") && !render.contains("keys().next()"),
+        "and leaves eviction to `LruCache` rather than picking its own victim:\n{render}"
     );
 }
 

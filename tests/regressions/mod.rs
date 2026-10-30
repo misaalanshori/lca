@@ -48,3 +48,6 @@ mod mermaid_leak_and_asymmetric_label;
 // Gh #323: one cache policy, per-terminal Kitty state, checked console modes.
 #[path = "323-engine-robustness.rs"]
 mod engine_robustness;
+// Gh #579: the crate-wide cache-policy guard that #323's engine-only version missed.
+#[path = "579-one-cache-policy-crate-wide.rs"]
+mod one_cache_policy_crate_wide;

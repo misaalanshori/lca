@@ -155,6 +155,38 @@ fn a_repaint_of_the_same_diagram_does_not_reparse() {
     );
 }
 
+// Verifies: gh #579 - a repaint is still served from the cache **when the cache is
+// full**, which is the case an eviction policy decides.
+//
+// `a_repaint_of_the_same_diagram_does_not_reparse` proves the under-filled case, where
+// no policy can get it wrong. At capacity the question becomes "which entry goes", so
+// this row fills the cache to its bound, keeps one diagram hot across many repaints
+// while the cache stays full, and asserts the hot one never re-parses. A policy that
+// evicted by insertion order would still pass (the hot key is the oldest insert), which
+// is why this row and the survival row above are separate: this one pins "repaints are
+// cached at all", that one pins "the right entry survives".
+#[test]
+fn a_repaint_at_capacity_does_not_reparse() {
+    const HOT: &str = "flowchart LR\n  Full[At capacity] --> B[End]\n";
+    // Fill exactly to the bound with unrelated diagrams, so every further insert must
+    // evict something.
+    let _ = mermaid::render(HOT);
+    for index in 0..(mermaid::PARSE_CACHE_SIZE - 1) {
+        let filler = format!("flowchart TD\n  F{index}[Filler {index}] --> G{index}[End]\n");
+        let _ = mermaid::render(&filler);
+    }
+    let parses_before = mermaid::parse_count();
+    for round in 0..200 {
+        let art = mermaid::render(HOT).expect("renders");
+        assert!(art.width > 0, "round {round}");
+    }
+    assert_eq!(
+        mermaid::parse_count(),
+        parses_before,
+        "200 repaints of a diagram already in a full cache must not re-parse it"
+    );
+}
+
 // Verifies: gh #325 - the cache is **bounded**, which is what makes "does not grow
 // with the session" true.
 //
@@ -235,5 +267,46 @@ fn many_distinct_diagrams_are_bounded_by_the_cache() {
         growth < 64 * 1024,
         "150 further distinct diagrams grew the heap by {growth} bytes; the parse \
          cache is bounded, so the retained set must not scale with the count"
+    );
+}
+
+// Verifies: gh #579 - a **hot diagram survives unrelated inserts**, which is the row
+// that fails under hash-order eviction.
+//
+// #325 gave this cache `cache.keys().next()`, and `HashMap` iteration order is hash
+// order: the victim is arbitrary, so a diagram actively on screen can be evicted by
+// an insert that has nothing to do with it and re-parsed on the next frame. Twenty
+// entries is small enough that a transcript with a few diagrams plus scrolling
+// reaches it, so "arbitrary" is reachable in ordinary use, not only in theory.
+//
+// The row re-uses the hot diagram every round - the way a repaint does - while feeding
+// `PARSE_CACHE_SIZE * 3` distinct others. Under LRU the hot entry is touched each round
+// and is the *last* thing to go; under hash order enough draws eventually take it.
+#[test]
+fn a_hot_diagram_survives_capacity_worth_of_unrelated_inserts() {
+    const HOT: &str = "flowchart TD\n  Hot[On screen] --> B[Now]\n";
+    let _ = mermaid::render(HOT);
+    let parses_before = mermaid::parse_count();
+
+    for index in 0..(mermaid::PARSE_CACHE_SIZE * 3) {
+        // A repaint of the visible diagram: must be served from the cache.
+        let hot = mermaid::render(HOT).expect("renders");
+        assert!(hot.width > 0);
+        // An unrelated diagram scrolled into view behind it.
+        let other = format!("flowchart TD\n  O{index}[Other {index}] --> P{index}[End]\n");
+        let _ = mermaid::render(&other);
+    }
+
+    // The hot entry was never evicted, so none of those 60 repaints re-parsed it.
+    // Counting parses is stricter than checking the art: a re-parse returns the same
+    // `Art`, so only the counter can tell "cached" from "recomputed".
+    let parses_after = mermaid::parse_count();
+    // 60 unrelated diagrams each parse once; the hot one must add nothing.
+    let expected = mermaid::PARSE_CACHE_SIZE * 3;
+    assert!(
+        parses_after - parses_before <= expected,
+        "the hot diagram was re-parsed {} time(s) beyond the {expected} unrelated \
+         parses; hash-order eviction drops it arbitrarily",
+        (parses_after - parses_before).saturating_sub(expected)
     );
 }

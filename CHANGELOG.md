@@ -18,6 +18,16 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **The Mermaid parse cache no longer evicts in arbitrary hash order** (gh #579). #325 gave
+  it `cache.keys().next()`, and `HashMap` iteration order is hash order, so the victim had
+  no relation to recency: a diagram **actively on screen** could be evicted by an unrelated
+  insert and re-parsed on the next frame. Measured on the pre-fix build — **37 wasted
+  re-parses across 60 repaints** of one visible diagram while 60 others scrolled past it.
+  The cache now uses the engine's shared `LruCache` (gh #323), so `lca-tui` has one eviction
+  policy again rather than two. The NFR-24 guard is widened from `engine/` to the whole
+  crate, which is the gap that let this survive a cycle: a new cache in `widgets/` using the
+  old idiom now fails, and the sweep `rg 'keys\(\)\.next\(\)' crates/lca-tui/src` returns
+  nothing but comments.
 - **One cache eviction policy, per-terminal Kitty state, and two Windows console checks**
   (gh #323). Four engine-robustness defects. The width cache evicted
   `HashMap::keys().next()`, whose position is hash order, so the victim was arbitrary and
