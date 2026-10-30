@@ -33,3 +33,6 @@ mod skill_headerless_body_loss;
 // Gh #333: a tab switch must not leave an overlay pinned over the next tab.
 #[path = "333-overlays-close-on-tab-switch.rs"]
 mod overlays_close_on_tab_switch;
+// Gh #328: an expanded diff card must not print its result twice.
+#[path = "328-diff-card-does-not-duplicate.rs"]
+mod diff_card_does_not_duplicate;

@@ -18,6 +18,12 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **An expanded diff card no longer prints the result twice** (gh #328). The diff block
+  was followed by the general command-output block with no `else` between them, so a
+  result carrying a diff was rendered by both — an `edit` printed its summary twice, and
+  a tool whose result *is* the diff printed every line twice (three copies in the worst
+  case, headers included). A card's body is now one choice: a diff, or general output.
+  A trailing note the diff does not contain still appears, once, after the diff.
 - **Switching tabs no longer leaves a dialog pinned over the new tab** (gh #333).
   `/extensions`, the extension manager, `/mcp`, an install confirmation and the
   login/permission prompts belong to the tab that opened them, so a switch closes

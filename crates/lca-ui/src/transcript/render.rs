@@ -653,98 +653,75 @@ fn render_tool(
             (theme.role(Role::Muted))(&format!("Elapsed {}", format_duration_ms(elapsed)))
         ));
     }
-    // gh #9 / EFG-016: a structured diff renders as pi's diff card -
-    // the diff's own line kinds in the two diff roles, bounded like
-    // every other preview, inside the same state band. The diff came
-    // from the tool's own before/after (EFG-014); nothing here parses
-    // display text back into a change.
-    if let Some(diff) = diff {
-        if let Some(summary) = result {
-            rows.push(format!("  {}", (theme.role(Role::ToolOutput))(summary)));
-        }
-        let lines: Vec<&str> = diff.lines().collect();
-        let preview = if expanded {
-            lines.len()
-        } else {
-            DIFF_PREVIEW_LINES
-        };
-        for line in lines.iter().take(preview) {
-            let clipped = truncate_to_width(line, inner.saturating_sub(2), "…", false);
-            rows.push(format!("  {}", (theme.role(diff_role(line)))(&clipped)));
-        }
-        if lines.len() > preview {
-            let key = render_key_hint(theme, keybindings, "app.tools.expand", None);
-            let shape = if key.is_empty() {
-                format!("… ({} more lines)", lines.len() - preview)
-            } else {
-                format!("… ({} more lines, {key} to expand)", lines.len() - preview)
-            };
-            rows.push(format!("  {}", (theme.role(Role::Muted))(&shape)));
-        }
-    }
-    // pi shows a bounded preview of command output (`bash.ts`
-    // `BASH_PREVIEW_LINES` = 5, `ls.ts` 20, `grep.ts` 15) and a one-line
-    // card for the rest; Ctrl+O expands to the full result.
-    if let Some(result) = result {
-        // gh #391 gap 4: the LLM-facing spillover footer is bookkeeping, not
-        // output. It is stripped before anything else so it can never spend
-        // one of the five tail rows, and the card's own truncation warning
-        // below is the single place that fact is shown.
-        let body = super::preview::strip_truncation_footer(result);
-        // gh #404 gap 1 / design point 7: a codemode parent leads with its own
-        // content, not with the wrapper's banner. Narrow by construction - see
-        // `nested::is_wrapper_boilerplate` for why only the wrapper's exact
-        // shapes are cut and author output that mentions them survives.
-        let stripped;
-        let body = if name.contains("codemode") {
-            stripped = super::nested::strip_wrapper_boilerplate(body);
-            stripped.as_str()
-        } else {
-            body
-        };
-        let preview = super::preview::preview_lines(name);
-        let total = body.lines().count();
-        if expanded {
-            // Expanded shows everything, but still collapses `\r` progress
-            // repaints: the terminal kept only the last segment, and an
-            // expanded card printing every repaint is unreadable.
-            let collapsed = super::preview::collapse_carriage_returns(body);
-            for line in wrap_text_with_ansi(&collapsed, inner.saturating_sub(2)) {
-                rows.push(format!("  {}", (theme.role(Role::ToolOutput))(&line)));
+    // gh #9 / EFG-016: a structured diff renders as pi's diff card - the diff's own
+    // line kinds in the two diff roles, bounded like every other preview, inside the
+    // same state band. The diff came from the tool's own before/after (EFG-014); nothing
+    // here parses display text back into a change.
+    //
+    // Gh #328: **diff and general output are one choice, not two blocks.** This used to
+    // be `if let Some(diff) { … }` followed by `if let Some(result) { … }` with no
+    // `else`, so a result carrying a diff drew the diff and then the general block over
+    // the same `result` - an `edit` printed its summary twice and a tool whose result
+    // *was* the diff printed every line twice. The predicate is [`DiffBody`]: either the
+    // result is rendered as a diff, or as general output, and the value that chose is
+    // what the second half obeys.
+    let body = Body::classify(diff.as_deref(), result.as_deref(), name);
+    match &body {
+        Body::Diff {
+            summary,
+            diff,
+            note,
+        } => {
+            // The summary is the card's one-line claim and the diff is its evidence, so
+            // it leads. `note` is anything in the result that the diff does not already
+            // contain - and it goes *after* the diff, where the trailing prose a tool
+            // appends (a warning, a count of skipped files) is read in the order the tool
+            // wrote it.
+            if let Some(summary) = summary {
+                rows.push(format!("  {}", (theme.role(Role::ToolOutput))(summary)));
             }
-        } else if preview > 0 && total > 0 {
-            // gh #391 gap 1: wrap first, slice **visual** rows, and keep the
-            // tail for shells - `preview.rs` carries the why.
-            let built = super::preview::build_preview(name, body, inner.saturating_sub(2));
-            let marker = |omitted: usize| {
+            let lines: Vec<&str> = diff.lines().collect();
+            let preview = if expanded {
+                lines.len()
+            } else {
+                DIFF_PREVIEW_LINES
+            };
+            for line in lines.iter().take(preview) {
+                let clipped = truncate_to_width(line, inner.saturating_sub(2), "…", false);
+                rows.push(format!("  {}", (theme.role(diff_role(line)))(&clipped)));
+            }
+            if lines.len() > preview {
                 let key = render_key_hint(theme, keybindings, "app.tools.expand", None);
                 let shape = if key.is_empty() {
-                    format!("… ({omitted} earlier lines)")
+                    format!("… ({} more lines)", lines.len() - preview)
                 } else {
-                    format!("… ({omitted} earlier lines, {key} to expand)")
+                    format!("… ({} more lines, {key} to expand)", lines.len() - preview)
                 };
-                format!("  {}", (theme.role(Role::Muted))(&shape))
-            };
-            // The omission marker names what precedes a tail, so it sits
-            // above it; a head preview names what follows, so below.
-            if built.omitted > 0 && built.marker_above {
-                rows.push(marker(built.omitted));
+                rows.push(format!("  {}", (theme.role(Role::Muted))(&shape)));
             }
-            for line in &built.rows {
-                rows.push(format!("  {}", (theme.role(Role::ToolOutput))(line)));
+            if let Some(note) = note
+                && expanded
+            {
+                for line in wrap_text_with_ansi(note, inner.saturating_sub(2)) {
+                    rows.push(format!("  {}", (theme.role(Role::ToolOutput))(&line)));
+                }
             }
-            if built.omitted > 0 && !built.marker_above {
-                rows.push(marker(built.omitted));
-            }
-        } else if total > 1 {
-            rows.push(format!(
-                "  {}{}",
-                (theme.role(Role::Muted))("…"),
-                paren_hint(theme, keybindings, "app.tools.expand", "to expand")
-            ));
+        }
+        Body::Output => {
+            // The general command-output block, unchanged: everything the card ever did
+            // with a result that is not a diff. Extracted only so the two paths are
+            // visibly exclusive - see [`render_tool_output`].
+            render_tool_output(
+                &mut rows,
+                result.as_deref(),
+                name,
+                expanded,
+                inner,
+                theme,
+                keybindings,
+            );
         }
     }
-
     // gh #404 gap 1: this card's nested calls, as a checklist. Drawn after the
     // parent's own result, so the card reads "what it did, then what it did it
     // with" - and expanding the card expands the checklist with it.
@@ -764,6 +741,206 @@ fn render_tool(
         out.push(band_row(&format!(" {row}"), width, &bg));
     }
     out.push(band_row("", width, &bg));
+}
+
+/// The general command-output block of a tool card, unchanged (gh #328).
+///
+/// Extracted from `render_tool` only so the diff and output paths are **visibly
+/// exclusive**: the card calls [`Body::classify`] once and then runs exactly one of these.
+/// Before, this block was a second `if let Some(result)` that ran after the diff arm as
+/// well, which is what printed an expanded diff twice.
+///
+/// Every behaviour below is the pre-#328 behaviour, kept verbatim: the preview length
+/// per tool (`preview::preview_lines`), `\r` collapsing on expand, the head/tail split
+/// for shells, the omission marker's side, and the single-row "`…` to expand" hint.
+#[allow(clippy::too_many_arguments)]
+fn render_tool_output(
+    rows: &mut Vec<String>,
+    result: Option<&str>,
+    name: &str,
+    expanded: bool,
+    inner: usize,
+    theme: &Theme,
+    keybindings: &lca_tui::engine::keybindings::KeybindingsManager,
+) {
+    // pi shows a bounded preview of command output (`bash.ts`
+    // `BASH_PREVIEW_LINES` = 5, `ls.ts` 20, `grep.ts` 15) and a one-line
+    // card for the rest; Ctrl+O expands to the full result.
+    let Some(result) = result else {
+        return;
+    };
+    // gh #391 gap 4: the LLM-facing spillover footer is bookkeeping, not
+    // output. It is stripped before anything else so it can never spend
+    // one of the five tail rows, and the card's own truncation warning
+    // below is the single place that fact is shown.
+    let body = super::preview::strip_truncation_footer(result);
+    // gh #404 gap 1 / design point 7: a codemode parent leads with its own
+    // content, not with the wrapper's banner. Narrow by construction - see
+    // `nested::is_wrapper_boilerplate` for why only the wrapper's exact
+    // shapes are cut and author output that mentions them survives.
+    let stripped;
+    let body = if name.contains("codemode") {
+        stripped = super::nested::strip_wrapper_boilerplate(body);
+        stripped.as_str()
+    } else {
+        body
+    };
+    let preview = super::preview::preview_lines(name);
+    let total = body.lines().count();
+    if expanded {
+        // Expanded shows everything, but still collapses `\r` progress
+        // repaints: the terminal kept only the last segment, and an
+        // expanded card printing every repaint is unreadable.
+        let collapsed = super::preview::collapse_carriage_returns(body);
+        for line in wrap_text_with_ansi(&collapsed, inner.saturating_sub(2)) {
+            rows.push(format!("  {}", (theme.role(Role::ToolOutput))(&line)));
+        }
+    } else if preview > 0 && total > 0 {
+        // gh #391 gap 1: wrap first, slice **visual** rows, and keep the
+        // tail for shells - `preview.rs` carries the why.
+        let built = super::preview::build_preview(name, body, inner.saturating_sub(2));
+        let marker = |omitted: usize| {
+            let key = render_key_hint(theme, keybindings, "app.tools.expand", None);
+            let shape = if key.is_empty() {
+                format!("… ({omitted} earlier lines)")
+            } else {
+                format!("… ({omitted} earlier lines, {key} to expand)")
+            };
+            format!("  {}", (theme.role(Role::Muted))(&shape))
+        };
+        // The omission marker names what precedes a tail, so it sits
+        // above it; a head preview names what follows, so below.
+        if built.omitted > 0 && built.marker_above {
+            rows.push(marker(built.omitted));
+        }
+        for line in &built.rows {
+            rows.push(format!("  {}", (theme.role(Role::ToolOutput))(line)));
+        }
+        if built.omitted > 0 && !built.marker_above {
+            rows.push(marker(built.omitted));
+        }
+    } else if total > 1 {
+        rows.push(format!(
+            "  {}{}",
+            (theme.role(Role::Muted))("…"),
+            paren_hint(theme, keybindings, "app.tools.expand", "to expand")
+        ));
+    }
+}
+
+/// What a tool card's body is (gh #328): **one** choice between a diff and general
+/// output, so the two can never both render.
+///
+/// The defect this type replaces was two independent `if let`s in a row - a diff arm
+/// followed by an output arm - which meant a result carrying a diff was rendered by
+/// both. A type rather than an `else` because the diff arm needs three pieces the output
+/// arm must not see, and because "which one is it" is exactly the question a reader of
+/// this code asks.
+enum Body<'a> {
+    /// The result is shown as a diff: the one-line summary, the change, and any note the
+    /// result carried that the diff does not already contain.
+    Diff {
+        /// The card's claim, from the result's leading line(s).
+        summary: Option<String>,
+        /// The change itself.
+        diff: &'a str,
+        /// Result text the diff does not contain. `None` when the result is entirely
+        /// accounted for - which is the common case, and the reason a `Some(diff)` card
+        /// usually shows no extra block.
+        note: Option<String>,
+    },
+    /// The result is shown as general command output, exactly as it always was.
+    Output,
+}
+
+impl<'a> Body<'a> {
+    /// The predicate (gh #328 design point 1): a tool card renders as a diff **or** as
+    /// output, decided here and nowhere else.
+    ///
+    /// * No diff → output. Unchanged behaviour for every non-diff tool.
+    /// * A diff → **diff**, with the result split into a summary and whatever else it
+    ///   carried. The split is what keeps the fix non-lossy: dropping the general block
+    ///   wholesale would have deleted a trailing note or a truncation marker with it.
+    fn classify(diff: Option<&'a str>, result: Option<&str>, name: &str) -> Body<'a> {
+        let Some(diff) = diff.filter(|text| !text.is_empty()) else {
+            return Body::Output;
+        };
+        // A codemode parent's result leads with the wrapper's own banner (gh #404 gap 1);
+        // stripping it here keeps the split honest, because the banner is not the card's
+        // claim and would otherwise read as the summary.
+        let result = result.map(|text| {
+            let body = super::preview::strip_truncation_footer(text);
+            if name.contains("codemode") {
+                super::nested::strip_wrapper_boilerplate(body)
+            } else {
+                body.to_string()
+            }
+        });
+        let Some(result) = result.as_deref().map(str::trim).filter(|t| !t.is_empty()) else {
+            return Body::Diff {
+                summary: None,
+                diff,
+                note: None,
+            };
+        };
+        let (summary, note) = split_summary_and_note(result, diff);
+        Body::Diff {
+            summary,
+            diff,
+            note,
+        }
+    }
+}
+
+/// Split a result into the card's **summary** and any text the diff does not already
+/// contain (gh #328 design point 3).
+///
+/// Three shapes, all observed:
+///
+/// * the result repeats the diff (a patch tool that returns the change as prose) → there
+///   is nothing left over, so no note and no summary either: the diff *is* the content,
+///   and printing its first line as a summary would be a fourth copy of it;
+/// * the result is a one-line claim beside the diff (`edit`'s "Successfully replaced …")
+///   → that line is the summary, and there is no note;
+/// * the result is a claim **plus** other prose (a warning, a count of skipped files) →
+///   the first line is the summary and the rest is the note, which the card prints after
+///   the diff so it reads in the order the tool wrote it.
+///
+/// Returns `(summary, note)`.
+fn split_summary_and_note(result: &str, diff: &str) -> (Option<String>, Option<String>) {
+    let diff_lines: Vec<&str> = diff
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    let result_lines: Vec<&str> = result.lines().collect();
+    // No separate "the result *is* the diff" early exit: a line the diff already draws is
+    // skipped below, so that case falls out as (no summary, no note) without a second rule
+    // restating it. The version with an explicit `all_in_diff` check was written first and
+    // removed after mutation-testing showed it unreachable - the per-line skip already
+    // answered it, and an unpinned branch is how a rule rots (the gh #304 lesson).
+    let mut summary = None;
+    let mut note_lines: Vec<&str> = Vec::new();
+    for line in &result_lines {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        // A line the diff already draws is not summarised or repeated: it is the evidence.
+        if diff_lines.contains(&trimmed) {
+            continue;
+        }
+        if summary.is_none() {
+            summary = Some(trimmed.to_string());
+        } else {
+            note_lines.push(line);
+        }
+    }
+    if note_lines.is_empty() {
+        (summary, None)
+    } else {
+        (summary, Some(note_lines.join("\n").trim().to_string()))
+    }
 }
 
 /// The collapsed preview length for a structured diff (gh #9): enough

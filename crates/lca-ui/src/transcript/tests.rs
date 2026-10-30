@@ -1072,3 +1072,8 @@ fn finished_cards_render_their_recorded_duration() {
         "refusals render none:\n{text}"
     );
 }
+
+// Gh #328: the diff-versus-output choice for a tool card's body, split out under the
+// 1,200-line ceiling.
+#[path = "render_diff_tests.rs"]
+mod diff_body_tests;
