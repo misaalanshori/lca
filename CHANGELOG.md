@@ -18,6 +18,18 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **Mermaid diagrams no longer leak memory on every repaint, and asymmetric nodes show
+  their label** (gh #325). `split_edge` used `String::leak` for node identifiers, so every
+  paint of a diagram — including every resize and every tick repaint — retained two
+  allocations per edge forever; a long session with one diagram grew without bound.
+  Measured before the fix at ~96 bytes per render of a three-edge flowchart. The leak bought
+  nothing: its only caller copies the identifier into its own `String` immediately. The
+  parsed diagram is now cached (bounded at 20 entries, evicted oldest-first, keyed by the
+  exact source), so a repaint across a resize reuses the parse instead of repeating it.
+  Separately, `Shape::Asymmetric` (`id>label]`) hand-built its middle row as spaces and
+  dropped the label entirely; every shape now places its label through one helper, and the
+  edge scanner tells an asymmetric opener from an arrow head so such a node works on
+  either side of an edge.
 - **A `hooks`-only lifecycle hook can no longer be implemented by an extension that will
   never receive it** (gh #578). `on-session-close` is exported by exactly one world,
   `hooks`, and the host dispatches it only to a handle that declares `hooks` — so a body

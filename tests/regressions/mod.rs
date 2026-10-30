@@ -42,3 +42,6 @@ mod panel_screen_and_pty_leak;
 // Gh #578: a hook is deliverable only to an extension that declares its world.
 #[path = "578-hooks-only-for-callers.rs"]
 mod hooks_only_for_callers;
+// Gh #325: the mermaid renderer must not leak, re-parse a repaint, or drop a label.
+#[path = "325-mermaid-leak-and-asymmetric-label.rs"]
+mod mermaid_leak_and_asymmetric_label;

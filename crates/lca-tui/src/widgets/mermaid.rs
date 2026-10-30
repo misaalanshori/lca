@@ -57,9 +57,77 @@ pub struct Art {
     pub warnings: Vec<String>,
 }
 
+/// How many parsed diagrams the cache holds before it evicts.
+///
+/// **The bound is the decision, not an afterthought** (gh #325): an unbounded
+/// cache would be the leak with a longer lifetime. Twenty is chosen against the
+/// shape of the thing being cached - a transcript shows a handful of diagrams at
+/// once, and the scroll-back that re-parses is a screenful - so a session with
+/// one diagram in it holds one entry, and a session with thirty holds the last
+/// twenty. Eviction is oldest-insertion-first, matching `WIDTH_CACHE_SIZE`'s
+/// house pattern in `engine::text` rather than inventing a second policy.
+const PARSE_CACHE_SIZE: usize = 20;
+
+thread_local! {
+    /// Parsed diagrams by source text (gh #325).
+    ///
+    /// The parse is **width-independent** — `render` emits spans and a `width`,
+    /// and the caller decides whether it fits - so one entry serves every resize
+    /// and every repaint at any width. Without this cache a repaint re-parsed,
+    /// which meant the leak fired on each one; with it, the fix for the leak is
+    /// also the fix for the per-frame cost. See [`render`].
+    static PARSE_CACHE: std::cell::RefCell<std::collections::HashMap<String, Option<Art>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
 /// Render mermaid source, or `None` when this subset cannot parse it
 /// (markdown keeps the fenced source, pi's fail-soft contract).
+///
+/// **Cached** (gh #325): the result is keyed by the exact source text and reused
+/// until `PARSE_CACHE_SIZE` newer diagrams push it out. A `None` is cached too,
+/// because "this is not a diagram this subset can draw" is the answer that a
+/// streaming message asks for on every frame - and re-deciding it per frame is
+/// the same wasted work as re-parsing.
 pub fn render(source: &str) -> Option<Art> {
+    if let Some(hit) = PARSE_CACHE.with(|cache| cache.borrow().get(source).cloned()) {
+        return hit;
+    }
+    let parsed = parse(source);
+    PARSE_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= PARSE_CACHE_SIZE
+            && let Some(first) = cache.keys().next().cloned()
+        {
+            cache.remove(&first);
+        }
+        cache.insert(source.to_string(), parsed.clone());
+    });
+    parsed
+}
+
+/// How many times the parser has run, for tests (gh #325).
+///
+/// `pub(crate)` and behind a `#[cfg(test)]` read: the count exists so a row can
+/// assert that a repaint is served from the cache rather than re-parsed, which no
+/// allocation count can show once the leak is gone (a second parse of the same
+/// text allocates and frees the same bytes, so live-byte totals cannot see it).
+/// A plain `AtomicUsize` rather than a feature flag: it is one relaxed increment
+/// on a path that already builds a canvas of rows.
+static PARSE_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// How many real parses have run in this process.
+///
+/// Public because the row that asserts "a repaint is served from the cache" lives
+/// in an integration test, which cannot see `pub(crate)` items. Nothing in the
+/// product calls it; it reads one atomic and cannot affect rendering.
+#[must_use]
+pub fn parse_count() -> usize {
+    PARSE_COUNT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Parse without consulting the cache. [`render`] is the public entry.
+fn parse(source: &str) -> Option<Art> {
+    PARSE_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut kind = None;
     let mut title: Option<String> = None;
     let mut warnings: Vec<String> = Vec::new();
@@ -453,112 +521,143 @@ enum Shape {
     Asymmetric,
 }
 
+/// Build a node's outline for `shape`, with `label` placed inside it.
+///
+/// **Every shape places its label the same way** (gh #325). A shape differs in
+/// its **borders** - corners, slants, doubled edges - and never in how the label
+/// goes in, so [`label_row`] is the one place a label is positioned. The previous
+/// version hand-built each interior instead, which is why `Asymmetric` shipped
+/// with a middle row of spaces and no label at all: one shape was written
+/// differently from the rest, and nothing said it had to agree.
+///
+/// **There is no inside-the-box overflow case, by construction.** The width is
+/// *derived* from the label (`label width + border overhead`), so the label always
+/// fits and the box widens to hold it - the same policy every other shape already
+/// had. A diagram that then exceeds the pane is the caller's existing rule
+/// (`markdown` falls back to the fenced source when `art.width > inner_width`),
+/// which is where a width decision belongs: a box cannot know the window.
 fn make_box(label: &str, shape: Shape) -> NodeBox {
     let label = if label.is_empty() { " " } else { label };
     let len = label.chars().count();
     match shape {
-        Shape::DoubleRound => NodeBox {
-            rows: vec![
-                vec![('(', Class::Border); 2]
-                    .into_iter()
-                    .chain(
-                        [(' ', Class::Text)]
-                            .into_iter()
-                            .chain(label.chars().map(|c| (c, Class::Text))),
-                    )
-                    .chain(vec![
+        // A capsule is one row: the borders are `((` and `))` with air inside.
+        Shape::DoubleRound => {
+            let width = len + 6;
+            NodeBox {
+                rows: vec![label_row(
+                    label,
+                    &[
+                        ('(', Class::Border),
+                        ('(', Class::Border),
+                        (' ', Class::Text),
+                    ],
+                    &[
                         (' ', Class::Text),
                         (')', Class::Border),
                         (')', Class::Border),
-                    ])
-                    .collect(),
-            ],
-            width: len + 6,
-        },
+                    ],
+                    width,
+                )],
+                width,
+            }
+        }
+        // Asymmetric (`id>label]`): a vertical left edge and a slanted right one.
+        // The slant costs a column on the right, which is why the label sits
+        // against the left border with one cell of air before the slant.
         Shape::Asymmetric => {
             let width = len + 3;
+            let mut top = vec![('┌', Class::Border)];
+            top.extend((1..width - 1).map(|_| ('─', Class::Border)));
+            top.push(('╲', Class::Border));
+            let mut bottom = vec![('└', Class::Border)];
+            bottom.extend((1..width).map(|_| ('─', Class::Border)));
             NodeBox {
                 rows: vec![
-                    (0..width)
-                        .map(|col| {
-                            if col == 0 {
-                                ('┌', Class::Border)
-                            } else if col + 1 == width {
-                                ('╲', Class::Border)
-                            } else {
-                                ('─', Class::Border)
-                            }
-                        })
-                        .collect(),
-                    (0..width)
-                        .map(|col| {
-                            if col == 0 {
-                                ('│', Class::Border)
-                            } else if col + 1 == width {
-                                ('╲', Class::Border)
-                            } else {
-                                (' ', Class::None)
-                            }
-                        })
-                        .collect(),
-                    (0..width)
-                        .map(|col| {
-                            if col == 0 {
-                                ('└', Class::Border)
-                            } else {
-                                ('─', Class::Border)
-                            }
-                        })
-                        .collect(),
+                    top,
+                    label_row(
+                        label,
+                        &[('│', Class::Border)],
+                        &[('╲', Class::Border)],
+                        width,
+                    ),
+                    bottom,
                 ],
                 width,
             }
         }
+        // A rhombus: slanted top and bottom, straight sides.
         Shape::Rhombus => {
-            let inner = len.max(1);
-            let width = inner + 2;
+            let width = len + 2;
             let mut top = vec![('╱', Class::Border)];
-            top.extend((0..inner).map(|_| ('─', Class::Border)));
+            top.extend((0..len).map(|_| ('─', Class::Border)));
             top.push(('╲', Class::Border));
-            let mut middle = vec![('│', Class::Border)];
-            middle.extend(label.chars().map(|c| (c, Class::Text)));
-            while middle.len() + 1 < width {
-                middle.push((' ', Class::None));
-            }
-            middle.push(('│', Class::Border));
             let mut bottom = vec![('╲', Class::Border)];
-            bottom.extend((0..inner).map(|_| ('─', Class::Border)));
+            bottom.extend((0..len).map(|_| ('─', Class::Border)));
             bottom.push(('╱', Class::Border));
             NodeBox {
-                rows: vec![top, middle, bottom],
+                rows: vec![
+                    top,
+                    label_row(
+                        label,
+                        &[('│', Class::Border)],
+                        &[('│', Class::Border)],
+                        width,
+                    ),
+                    bottom,
+                ],
                 width,
             }
         }
-        _ => {
+        Shape::Rect | Shape::Round => {
             let (tl, tr, bl, br) = if shape == Shape::Round {
                 ('╭', '╮', '╰', '╯')
             } else {
                 ('┌', '┐', '└', '┘')
             };
             let width = len + 2;
-            let mut top = Vec::with_capacity(width);
-            top.push((tl, Class::Border));
+            let mut top = vec![(tl, Class::Border)];
             top.extend((1..width - 1).map(|_| ('─', Class::Border)));
             top.push((tr, Class::Border));
-            let mut middle = Vec::with_capacity(width);
-            middle.push(('│', Class::Border));
-            middle.extend(label.chars().map(|c| (c, Class::Text)));
-            middle.push(('│', Class::Border));
-            let mut bottom = Vec::with_capacity(width);
-            bottom.push((bl, Class::Border));
+            let mut bottom = vec![(bl, Class::Border)];
             bottom.extend((1..width - 1).map(|_| ('─', Class::Border)));
             bottom.push((br, Class::Border));
             NodeBox {
-                rows: vec![top, middle, bottom],
+                rows: vec![
+                    top,
+                    label_row(
+                        label,
+                        &[('│', Class::Border)],
+                        &[('│', Class::Border)],
+                        width,
+                    ),
+                    bottom,
+                ],
                 width,
             }
         }
     }
+}
+
+/// The one row a label is placed on: `left`, the label, padding, then `right`.
+///
+/// Padding carries [`Class::None`] because it is background, not text - the
+/// caller's `into_rows` trims trailing empty spans, so an unpadded right edge
+/// would still be correct, but an *interior* gap that claims `Text` would be
+/// styled as a word.
+fn label_row(
+    label: &str,
+    left: &[(char, Class)],
+    right: &[(char, Class)],
+    width: usize,
+) -> Vec<(char, Class)> {
+    let mut row = Vec::with_capacity(width);
+    row.extend(left.iter().copied());
+    row.extend(label.chars().map(|ch| (ch, Class::Text)));
+    while row.len() + right.len() < width {
+        row.push((' ', Class::None));
+    }
+    row.extend(right.iter().copied());
+    row
 }
 
 fn paint_box(canvas: &mut Canvas, kase: &NodeBox, row: usize, col: usize) {
@@ -618,8 +717,28 @@ fn parse_node(text: &str, bare: bool) -> Option<(String, String, Shape)> {
 /// Flowchart edge tokens, longest first.
 const FLOW_ARROWS: &[&str] = &["-.->", "==>", "-->", "---", "--x", "--o"];
 
+/// Whether the `>` at `at` opens an asymmetric node rather than ending an arrow.
+///
+/// `id>label]` and an arrow head both use `>`, so the opening one is the `>` that
+/// has an identifier immediately before it and a closing `]` somewhere after.
+/// Without this distinction `A --> B` would be read as an asymmetric opener at
+/// the arrow's own head.
+fn is_asymmetric_open(bytes: &[char], at: usize) -> bool {
+    let ident_before = at > 0 && (bytes[at - 1].is_ascii_alphanumeric() || bytes[at - 1] == '_');
+    // An arrow's `>` is preceded by `-`, `=` or `.`; an asymmetric opener is
+    // preceded by the node id's last character.
+    ident_before && bytes[at + 1..].contains(&']')
+}
+
 /// Split `A -->|label| B` / `A -- label --> B` style statements.
-fn split_edge(statement: &str) -> Option<(&str, &str, String, &str)> {
+///
+/// Returns owned `String`s for the two sides (gh #325). It used to return
+/// `&'static str` via `String::leak`, which bought **nothing**: the only caller
+/// immediately hands each side to `parse_node`, which copies the identifier out
+/// into its own `String` anyway. So the leak was a pure cost - two allocations
+/// per edge that were never freed, on every paint, because a diagram re-renders
+/// whenever its entry is re-rendered (a resize, a repaint, a `/theme` change).
+fn split_edge(statement: &str) -> Option<(String, &str, String, String)> {
     let bytes: Vec<char> = statement.chars().collect();
     let mut depth = 0i32;
     let mut at = None;
@@ -627,7 +746,16 @@ fn split_edge(statement: &str) -> Option<(&str, &str, String, &str)> {
     'scan: while i < bytes.len() {
         match bytes[i] {
             '[' | '(' | '{' => depth += 1,
-            ']' | ')' | '}' => depth -= 1,
+            // Gh #325: `>` opens an asymmetric node (`id>label]`), so it must be
+            // counted or the `]` that closes it drives `depth` negative and the
+            // rest of the statement - arrow included - is scanned as if it were
+            // inside a node. That is why an asymmetric node on the *left* of an
+            // edge never split, while one on the right did: the scanner only
+            // reached the arrow before the first `]`.
+            //
+            // Only at depth 0, so a `>` inside brackets stays literal text.
+            '>' if depth == 0 && is_asymmetric_open(&bytes, i) => depth += 1,
+            ']' | ')' | '}' => depth = (depth - 1).max(0),
             '-' | '=' | '.' | '>' | 'x' | 'o' if depth == 0 => {
                 for token in FLOW_ARROWS {
                     let token_chars: Vec<char> = token.chars().collect();
@@ -666,13 +794,12 @@ fn split_edge(statement: &str) -> Option<(&str, &str, String, &str)> {
     } else {
         (inline_label, after)
     };
-    Some((leak(left.trim()), arrow, label, leak(right)))
-}
-
-/// Own a &str for the edge parser's returns (statements are short and the
-/// diagram is small; the allocation keeps the split logic honest).
-fn leak(text: &str) -> &'static str {
-    text.to_string().leak()
+    Some((
+        left.trim().to_string(),
+        arrow,
+        label,
+        right.trim().to_string(),
+    ))
 }
 
 fn render_flow(
@@ -737,7 +864,7 @@ fn render_flow(
             } else {
                 '▶'
             };
-            let from = parse_node(left, true)?;
+            let from = parse_node(&left, true)?;
             upsert(
                 &from.0,
                 Some(&from.1),
@@ -746,7 +873,7 @@ fn render_flow(
                 &mut labels,
                 &mut shapes,
             );
-            let to = parse_node(right, true)?;
+            let to = parse_node(&right, true)?;
             upsert(
                 &to.0,
                 Some(&to.1),
