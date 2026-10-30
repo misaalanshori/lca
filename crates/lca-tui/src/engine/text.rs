@@ -31,7 +31,6 @@ use osc8::get_active_osc8_close;
 pub use osc8::{ActiveHyperlink, Osc8Terminator, linkify_urls, parse_osc8_hyperlink};
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthChar;
@@ -39,7 +38,17 @@ use unicode_width::UnicodeWidthChar;
 const WIDTH_CACHE_SIZE: usize = 512;
 
 thread_local! {
-    static WIDTH_CACHE: RefCell<HashMap<String, usize>> = RefCell::new(HashMap::new());
+    /// Measured widths, bounded and **least-recently-used** (gh #323).
+    ///
+    /// This used to be a bare `HashMap` evicting `keys().next()`, and `HashMap`
+    /// iteration order is hash order - so the victim was arbitrary, and a hot
+    /// width could be dropped by the next cold insert precisely when the cache was
+    /// doing the most work. It is now the engine's one [`super::lru::LruCache`],
+    /// so the policy is stated once for the codebase instead of re-decided per
+    /// cache. LRU rather than insertion order because a frame re-measures the rows
+    /// it already showed: recently used predicts used-soon.
+    static WIDTH_CACHE: RefCell<super::lru::LruCache<String, usize>> =
+        RefCell::new(super::lru::LruCache::new(WIDTH_CACHE_SIZE));
 }
 
 /// Extract the supported ANSI/OSC/APC sequence at `pos`, if any. The CSI
@@ -359,7 +368,7 @@ fn strip_sequences(s: &str) -> String {
 /// The cache still only ever stores what the slow path computed, so this adds nothing
 /// to its memory: styled lines now answer before they can be inserted.
 pub fn visible_width(s: &str) -> usize {
-    if let Some(w) = WIDTH_CACHE.with(|c| c.borrow().get(s).copied()) {
+    if let Some(w) = WIDTH_CACHE.with(|c| c.borrow_mut().get(&s.to_string())) {
         return w;
     }
     if let Some(width) = ascii_visible_width(s) {
@@ -387,15 +396,7 @@ fn visible_width_slow(s: &str) -> usize {
         clean = strip_sequences(&clean);
     }
     let width: usize = clean.graphemes(true).map(grapheme_width).sum();
-    WIDTH_CACHE.with(|c| {
-        let mut cache = c.borrow_mut();
-        if cache.len() >= WIDTH_CACHE_SIZE
-            && let Some(first) = cache.keys().next().cloned()
-        {
-            cache.remove(&first);
-        }
-        cache.insert(s.to_string(), width);
-    });
+    WIDTH_CACHE.with(|c| c.borrow_mut().insert(s.to_string(), width));
     width
 }
 

@@ -45,3 +45,6 @@ mod hooks_only_for_callers;
 // Gh #325: the mermaid renderer must not leak, re-parse a repaint, or drop a label.
 #[path = "325-mermaid-leak-and-asymmetric-label.rs"]
 mod mermaid_leak_and_asymmetric_label;
+// Gh #323: one cache policy, per-terminal Kitty state, checked console modes.
+#[path = "323-engine-robustness.rs"]
+mod engine_robustness;

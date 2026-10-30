@@ -8,7 +8,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::keys::{is_valid_key_id, matches_key};
+use super::keys::{is_valid_key_id, matches_key_with_kitty};
 
 /// One action's default bindings and description.
 #[derive(Debug, Clone, Copy)]
@@ -398,6 +398,15 @@ pub struct KeybindingsManager {
     keys_by_action: BTreeMap<String, Vec<String>>,
     conflicts: Vec<KeybindingConflict>,
     invalid_keys: Vec<(String, String)>,
+    /// This terminal's Kitty keyboard protocol state (gh #323 defect 2).
+    ///
+    /// `None` means "no terminal attached", and a match then asks the ambient
+    /// process value - which is exactly the pre-#323 behaviour, so a caller that
+    /// never attaches anything is unchanged. A terminal attaches its own cell with
+    /// [`KeybindingsManager::set_kitty_state`], and from then on this manager's
+    /// answer comes from *that* terminal, so two managers in one process can
+    /// disagree at the same instant.
+    kitty_state: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl Default for KeybindingsManager {
@@ -419,6 +428,7 @@ impl KeybindingsManager {
             keys_by_action: BTreeMap::new(),
             conflicts: Vec::new(),
             invalid_keys: Vec::new(),
+            kitty_state: None,
         };
         manager.rebuild();
         manager
@@ -489,8 +499,42 @@ impl KeybindingsManager {
     }
 
     /// Whether raw input matches the action.
+    ///
+    /// **The signature is unchanged on purpose** (gh #323): this is called from 44
+    /// sites in `lca-ui`, a crate this cycle does not touch, and threading a
+    /// parameter through all of them would be a much larger change for the same
+    /// behaviour. The terminal's state comes from the manager instead - see
+    /// [`KeybindingsManager::set_kitty_state`].
     pub fn matches(&self, data: &str, action: &str) -> bool {
-        self.keys(action).iter().any(|key| matches_key(data, key))
+        let kitty = self
+            .kitty_state
+            .as_ref()
+            .map(|cell| cell.load(std::sync::atomic::Ordering::SeqCst));
+        self.keys(action)
+            .iter()
+            .any(|key| matches_key_with_kitty(data, key, kitty))
+    }
+
+    /// Attach this terminal's Kitty keyboard protocol state (gh #323 defect 2).
+    ///
+    /// Takes the terminal's own `Arc<AtomicBool>`, so the value tracks negotiation
+    /// live without this manager owning a clock or a notification: the reader
+    /// thread stores into the same cell the match reads. Two managers holding two
+    /// cells can therefore disagree, which is the property a process-global (or a
+    /// `thread_local`) cannot have.
+    pub fn set_kitty_state(&mut self, state: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+        self.kitty_state = Some(state);
+    }
+
+    /// Detach, falling back to the ambient process value.
+    pub fn clear_kitty_state(&mut self) {
+        self.kitty_state = None;
+    }
+
+    /// Whether this manager knows its terminal's Kitty state.
+    #[must_use]
+    pub fn has_kitty_state(&self) -> bool {
+        self.kitty_state.is_some()
     }
 
     /// Replace the user override map and rebuild.

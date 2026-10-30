@@ -12,6 +12,7 @@ pub mod crash;
 pub mod fake_terminal;
 pub mod keybindings;
 pub mod keys;
+pub mod lru;
 pub mod main_screen;
 pub mod program_status;
 pub mod selection;

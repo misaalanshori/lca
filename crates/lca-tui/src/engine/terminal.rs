@@ -20,7 +20,6 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use super::keys::set_kitty_protocol_active;
 use super::program_status::{
     PROGRAM_STATUS_QUERY, ProgramState, ProgramStatusMode, format_program_status,
     is_program_status_reply, is_program_status_traffic, multiplexer_strips_osc,
@@ -141,6 +140,33 @@ pub trait Terminal: Send {
     fn rows(&self) -> u16;
     /// Whether the Kitty keyboard protocol is active.
     fn kitty_protocol_active(&self) -> bool;
+
+    /// This terminal's Kitty keyboard protocol cell, for a `KeybindingsManager`
+    /// to share (gh #323 defect 2).
+    ///
+    /// **Defaulted to `None`**, so the change is additive: a terminal that does not
+    /// offer its state (a fake, a test double) is simply matched against the ambient
+    /// value, which is the pre-#323 behaviour. A real terminal returns the same
+    /// `Arc` its reader thread stores into, so negotiation is visible to the matcher
+    /// the instant it happens.
+    fn kitty_state(&self) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {
+        None
+    }
+
+    /// Why raw mode could not be enabled, when it could not (gh #323 defect 3).
+    ///
+    /// **Defaulted to `None`** so every implementation and every caller compiles
+    /// unchanged - this is additive. A terminal that refused the mode change is
+    /// still usable in a degraded way (input arrives cooked, so the app must not
+    /// promise raw-mode key handling), and the reason is the only actionable part.
+    ///
+    /// The message names the handle and carries the OS code; see
+    /// `sys::set_mode_refusal`. A caller that ignores this gets exactly the old
+    /// behaviour, which is why the fix is a *report* rather than a loud failure the
+    /// interface layer cannot yet route.
+    fn raw_mode_error(&self) -> Option<String> {
+        None
+    }
     /// Move the cursor up (negative) or down (positive).
     fn move_by(&mut self, lines: i32);
     /// Hide the cursor.
@@ -242,7 +268,13 @@ fn parse_negotiation(seq: &str) -> Option<Negotiation> {
 struct Shared {
     input: Mutex<InputHandler>,
     resize: Mutex<ResizeHandler>,
-    kitty: AtomicBool,
+    /// This terminal's Kitty keyboard protocol state (gh #323 defect 2).
+    ///
+    /// An `Arc` rather than a plain `AtomicBool` because the key matcher needs to
+    /// read the *same* cell: a `KeybindingsManager` holds a clone (see
+    /// `set_kitty_state`), so negotiation on the reader thread is visible to the
+    /// matcher with no notification and, crucially, without a process-wide flag.
+    kitty: std::sync::Arc<AtomicBool>,
     modify_other_keys: AtomicBool,
     /// An OSC 7501 support reply arrived (gh #213): auto-mode
     /// reporting may flow.
@@ -303,6 +335,8 @@ impl ProgressGate for TerminalWriter {
 pub struct ProcessTerminal {
     shared: Arc<Shared>,
     raw_state: Option<sys::RawModeState>,
+    /// Why raw mode was refused, if it was (gh #323 defect 3).
+    raw_mode_error: Option<String>,
     reader: Option<JoinHandle<()>>,
     keyboard_protocol_pushed: bool,
     write_log: Option<PathBuf>,
@@ -349,7 +383,7 @@ impl ProcessTerminal {
             shared: Arc::new(Shared {
                 input: Mutex::new(Box::new(|_| {})),
                 resize: Mutex::new(Box::new(|| {})),
-                kitty: AtomicBool::new(false),
+                kitty: std::sync::Arc::new(AtomicBool::new(false)),
                 modify_other_keys: AtomicBool::new(false),
                 program_status: AtomicBool::new(false),
                 cols: AtomicU16::new(cols),
@@ -358,6 +392,7 @@ impl ProcessTerminal {
                 reader_done: AtomicBool::new(false),
             }),
             raw_state: None,
+            raw_mode_error: None,
             reader: None,
             keyboard_protocol_pushed: false,
             write_log: resolve_write_log(),
@@ -411,7 +446,28 @@ impl Terminal for ProcessTerminal {
             *h = on_resize;
         }
         if sys::stdin_is_tty() {
-            self.raw_state = sys::enable_raw_mode().ok();
+            // Gh #323 defect 3: a refusal used to vanish into `.ok()`, leaving the
+            // app believing it was in raw mode while the console stayed cooked. The
+            // mode is still not applied - there is nothing to apply - but the reason
+            // is kept and exposed through [`Terminal::raw_mode_error`], and written
+            // to the write log when one is configured so a capture shows it.
+            match sys::enable_raw_mode() {
+                Ok(state) => self.raw_state = Some(state),
+                Err(err) => {
+                    if let Some(path) = &self.write_log
+                        && let Ok(mut f) = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(path)
+                    {
+                        let _ = std::io::Write::write_all(
+                            &mut f,
+                            format!("raw-mode refused: {err}\n").as_bytes(),
+                        );
+                    }
+                    self.raw_mode_error = Some(err.to_string());
+                }
+            }
         }
         // A previous `stop` set the shutdown flag; clear it so a restart
         // (the external editor) gets a live reader thread.
@@ -455,8 +511,11 @@ impl Terminal for ProcessTerminal {
         if self.keyboard_protocol_pushed || self.shared.kitty.load(Ordering::SeqCst) {
             self.raw_write("\x1b[<u");
             self.keyboard_protocol_pushed = false;
+            // The terminal's own cell is the source (gh #323 defect 2); the
+            // process-ambient value is only the fallback for a match made with no
+            // terminal attached, so a real terminal must not write it - doing so is
+            // how one pane's teardown used to deafen another's matcher.
             self.shared.kitty.store(false, Ordering::SeqCst);
-            set_kitty_protocol_active(false);
         }
         self.disable_modify_other_keys();
         self.shared.shutdown.store(true, Ordering::SeqCst);
@@ -484,7 +543,6 @@ impl Terminal for ProcessTerminal {
             self.raw_write("\x1b[<u");
             self.keyboard_protocol_pushed = false;
             self.shared.kitty.store(false, Ordering::SeqCst);
-            set_kitty_protocol_active(false);
         }
         self.disable_modify_other_keys();
         let deadline = Instant::now() + Duration::from_millis(max_ms);
@@ -496,11 +554,13 @@ impl Terminal for ProcessTerminal {
                 break;
             }
             match sys::wait_stdin(i32::try_from(remaining).unwrap_or(i32::MAX)) {
-                Ok(true) => {
+                Ok(outcome) if outcome.is_key() => {
                     let _ = sys::read_stdin(&mut buf);
                     last = Instant::now();
                 }
-                Ok(false) => {}
+                // Draining input during a shutdown: a resize is not input and
+                // there is nothing left to repaint for.
+                Ok(_) => {}
                 Err(_) => break,
             }
         }
@@ -529,6 +589,14 @@ impl Terminal for ProcessTerminal {
 
     fn kitty_protocol_active(&self) -> bool {
         self.shared.kitty.load(Ordering::SeqCst)
+    }
+
+    fn kitty_state(&self) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {
+        Some(self.shared.kitty.clone())
+    }
+
+    fn raw_mode_error(&self) -> Option<String> {
+        self.raw_mode_error.clone()
     }
 
     fn move_by(&mut self, lines: i32) {
@@ -718,8 +786,13 @@ fn reader_loop(shared: Arc<Shared>, escape_timeout_ms: u64) {
     let mut buf = [0u8; 4096];
 
     while !shared.shutdown.load(Ordering::SeqCst) {
+        // Gh #323 defect 4: a resize record wakes this loop **and is acted on
+        // now**, rather than being swallowed and noticed on the next tick. The
+        // size check below runs on every arm, so the only difference is latency -
+        // but latency is the whole defect: a dropped record means the app paints
+        // at the old width until something else happens to wake it (#522's class).
         match sys::wait_stdin(50) {
-            Ok(true) => match sys::read_stdin(&mut buf) {
+            Ok(outcome) if outcome.is_key() => match sys::read_stdin(&mut buf) {
                 Ok(0) => {}
                 Ok(n) => {
                     last_data = Instant::now();
@@ -729,7 +802,13 @@ fn reader_loop(shared: Arc<Shared>, escape_timeout_ms: u64) {
                 }
                 Err(_) => break,
             },
-            Ok(false) => {}
+            // The console told us the buffer changed size (gh #323 defect 4). It
+            // is not a key, so nothing is read; falling straight through to the
+            // size check below is the whole fix. No second code path, because the
+            // check already runs on every arm - what was broken was *when* the
+            // loop got there: a dropped record meant the next iteration blocked in
+            // `wait_stdin` for another full timeout first.
+            Ok(_) => {}
             Err(_) => break,
         }
 
@@ -793,9 +872,9 @@ fn apply_negotiation(shared: &Shared, seq: &str, out: &mut dyn FnMut(&str)) -> b
                 if shared.modify_other_keys.swap(false, Ordering::SeqCst) {
                     out("\x1b[>4;0m");
                 }
-                if !shared.kitty.swap(true, Ordering::SeqCst) {
-                    set_kitty_protocol_active(true);
-                }
+                // Gh #323 defect 2: the local cell is what the matcher reads, so
+                // negotiation only has to reach it. No process-global write.
+                shared.kitty.store(true, Ordering::SeqCst);
             } else if !shared.modify_other_keys.load(Ordering::SeqCst) {
                 out("\x1b[>4;2m");
                 shared.modify_other_keys.store(true, Ordering::SeqCst);

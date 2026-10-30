@@ -17,17 +17,38 @@ use legacy::*;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// Global Kitty keyboard protocol state. Set by the terminal after
-/// negotiation; consulted by the mode-aware matches below (`\x1b\r` means
-/// `shift+enter` under Kitty, `alt+enter` in legacy mode).
+/// The Kitty keyboard protocol state a key match should assume (gh #323).
+///
+/// **The flag describes one terminal**, so it belongs to that terminal's
+/// [`KeybindingsManager`] rather than to the process. It used to be a single
+/// `AtomicBool` static, which had two consequences that looked unrelated and were
+/// the same bug: two terminals in one process could not disagree (whichever
+/// negotiated last won, and `\x1b\r` would mean `shift+enter` in a pane that had
+/// never enabled Kitty), and every test that set it raced every other test that
+/// set it, so the suite's result depended on scheduling.
+///
+/// The ambient value here is the **fallback for a match made without an attached
+/// terminal** - that is, `matches_key` called directly, which is what the unit rows
+/// do. A [`KeybindingsManager`] that has been given a terminal's cell (via
+/// `KeybindingsManager::set_kitty_state`) uses that instead, so two managers in one
+/// process disagree correctly and concurrently.
+///
+/// **Deliberately not a `thread_local`.** A thread-local would make the *test* race
+/// go away while leaving two terminals in one process broken, because both would
+/// read their own thread's copy rather than their own terminal's. The row
+/// `two_managers_disagree_about_kitty_simultaneously` is the assertion a
+/// thread-local fails, and it is why this is a per-instance cell.
 static KITTY_PROTOCOL_ACTIVE: AtomicBool = AtomicBool::new(false);
 
-/// Set the global Kitty keyboard protocol state.
+/// Set the ambient (no-terminal) Kitty keyboard protocol state.
+///
+/// Test-support and single-terminal callers only; a terminal that wants its own
+/// answer hands its cell to `KeybindingsManager::set_kitty_state` instead.
 pub fn set_kitty_protocol_active(active: bool) {
     KITTY_PROTOCOL_ACTIVE.store(active, Ordering::SeqCst);
 }
 
-/// Query the global Kitty keyboard protocol state.
+/// Query the ambient (no-terminal) Kitty keyboard protocol state.
 pub fn is_kitty_protocol_active() -> bool {
     KITTY_PROTOCOL_ACTIVE.load(Ordering::SeqCst)
 }
@@ -351,7 +372,26 @@ pub fn is_valid_key_id(key_id: &str) -> bool {
 
 /// Match raw terminal input against a key identifier such as `ctrl+c`,
 /// `shift+enter`, or `escape`.
+///
+/// Uses the **ambient** Kitty state, which is right for a caller with no terminal
+/// attached (the unit rows, a one-off check). A `KeybindingsManager` passes its
+/// terminal's own value through [`matches_key_with_kitty`] instead.
 pub fn matches_key(data: &str, key_id: &str) -> bool {
+    matches_key_with_kitty(data, key_id, None)
+}
+
+/// [`matches_key`] against an explicit Kitty state (gh #323 defect 2).
+///
+/// `kitty` is `None` for "no terminal said anything, use the ambient value". A
+/// `Some` is a **terminal's own** answer, so two terminals can disagree inside one
+/// process - which is the whole point, and what a process-global (or a
+/// `thread_local`) cannot do.
+pub fn matches_key_with_kitty(data: &str, key_id: &str, kitty: Option<bool>) -> bool {
+    let kitty = kitty.unwrap_or_else(is_kitty_protocol_active);
+    matches_key_inner(data, key_id, kitty)
+}
+
+fn matches_key_inner(data: &str, key_id: &str, kitty_protocol: bool) -> bool {
     let ParsedKeyId { key, modifier } = parse_key_id(key_id);
     match key.as_str() {
         "escape" | "esc" => {
@@ -363,7 +403,7 @@ pub fn matches_key(data: &str, key_id: &str) -> bool {
                 || matches_modify_other_keys(data, CP_ESCAPE, 0)
         }
         "space" => {
-            if !is_kitty_protocol_active() {
+            if !kitty_protocol {
                 if modifier == MOD_CTRL && data == "\x00" {
                     return true;
                 }
@@ -401,7 +441,7 @@ pub fn matches_key(data: &str, key_id: &str) -> bool {
                 if matches_modify_other_keys(data, CP_ENTER, MOD_SHIFT) {
                     return true;
                 }
-                if is_kitty_protocol_active() {
+                if kitty_protocol {
                     return data == "\x1b\r" || data == "\n";
                 }
                 return false;
@@ -415,14 +455,14 @@ pub fn matches_key(data: &str, key_id: &str) -> bool {
                 if matches_modify_other_keys(data, CP_ENTER, MOD_ALT) {
                     return true;
                 }
-                if !is_kitty_protocol_active() {
+                if !kitty_protocol {
                     return data == "\x1b\r";
                 }
                 return false;
             }
             if modifier == 0 {
                 return data == "\r"
-                    || (!is_kitty_protocol_active() && data == "\n")
+                    || (!kitty_protocol && data == "\n")
                     || data == "\x1bOM"
                     || matches_kitty(data, CP_ENTER, 0)
                     || matches_kitty(data, CP_KP_ENTER, 0);
@@ -531,7 +571,7 @@ pub fn matches_key(data: &str, key_id: &str) -> bool {
         "left" => {
             if modifier == MOD_ALT {
                 return data == "\x1b[1;3D"
-                    || (!is_kitty_protocol_active() && data == "\x1bB")
+                    || (!kitty_protocol && data == "\x1bB")
                     || data == "\x1bb"
                     || matches_kitty(data, ARROW_LEFT, MOD_ALT);
             }
@@ -550,7 +590,7 @@ pub fn matches_key(data: &str, key_id: &str) -> bool {
         "right" => {
             if modifier == MOD_ALT {
                 return data == "\x1b[1;3C"
-                    || (!is_kitty_protocol_active() && data == "\x1bF")
+                    || (!kitty_protocol && data == "\x1bF")
                     || data == "\x1bf"
                     || matches_kitty(data, ARROW_RIGHT, MOD_ALT);
             }
@@ -590,14 +630,14 @@ pub fn matches_key(data: &str, key_id: &str) -> bool {
             let codepoint = ch as i64;
             let raw_ctrl = raw_ctrl_char(&key);
             if modifier == MOD_CTRL + MOD_ALT
-                && !is_kitty_protocol_active()
+                && !kitty_protocol
                 && let Some(rc) = raw_ctrl
                 && data == format!("\x1b{rc}")
             {
                 return true;
             }
             if modifier == MOD_ALT
-                && !is_kitty_protocol_active()
+                && !kitty_protocol
                 && (is_letter || is_digit || is_symbol)
                 && data == format!("\x1b{ch}")
             {

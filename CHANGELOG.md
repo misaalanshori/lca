@@ -18,6 +18,22 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **One cache eviction policy, per-terminal Kitty state, and two Windows console checks**
+  (gh #323). Four engine-robustness defects. The width cache evicted
+  `HashMap::keys().next()`, whose position is hash order, so the victim was arbitrary and
+  a hot width could be dropped by the next cold insert exactly when the cache was working
+  hardest; it now uses the engine's one `LruCache` (least-recently-used, deterministic
+  tie-breaking), so the policy is stated once instead of re-decided per cache. The Kitty
+  keyboard protocol flag was a process-global `AtomicBool`, so two terminals could not
+  disagree — whichever negotiated last decided how `\x1b\r` read everywhere — and every
+  test that set it raced every other; it now belongs to each terminal's
+  `KeybindingsManager`, and `matches()`'s signature is unchanged so no caller changed. On
+  Windows, `SetConsoleMode`'s return values were ignored, so a refused raw mode left the
+  app believing it was in raw mode; refusals now surface through
+  `Terminal::raw_mode_error` with the OS code, as an error rather than a panic. And
+  `wait_stdin` consumed and discarded non-key console records, so a
+  `WINDOW_BUFFER_SIZE_EVENT` never reached the loop and a resize was painted a tick late;
+  the wait now reports what it found.
 - **Mermaid diagrams no longer leak memory on every repaint, and asymmetric nodes show
   their label** (gh #325). `split_edge` used `String::leak` for node identifiers, so every
   paint of a diagram — including every resize and every tick repaint — retained two

@@ -299,9 +299,18 @@ fn the_negotiation_keeps_exactly_one_key_layer_active() {
         "the Kitty layer retired the fallback"
     );
     assert_eq!(out.last().map(String::as_str), Some("\x1b[>4;0m"));
+    // Gh #323 defect 2: the *terminal's* cell is what the matcher reads, so that
+    // is what must follow - the process-global flag is no longer written by a real
+    // terminal, because writing it is how one pane's negotiation used to change
+    // another pane's key interpretation.
     assert!(
-        crate::engine::keys::is_kitty_protocol_active(),
-        "the parser's Kitty state follows"
+        term.kitty_state()
+            .is_some_and(|cell| cell.load(Ordering::SeqCst)),
+        "the terminal's own Kitty cell follows the negotiation"
+    );
+    assert!(
+        !crate::engine::keys::is_kitty_protocol_active(),
+        "and the process-ambient flag is deliberately left alone"
     );
 
     // Kitty arrives first elsewhere (no prior DA): it starts directly
@@ -316,8 +325,9 @@ fn the_negotiation_keeps_exactly_one_key_layer_active() {
         out.is_empty(),
         "the enable sequence is write-free when it is already off"
     );
-    // Leave the process-wide parser flag as the test found it.
-    set_kitty_protocol_active(false);
+    // No process-wide flag to restore: gh #323 defect 2 moved the terminal's state
+    // into its own cell, so this row cannot leave anything behind for a parallel row
+    // to observe. That cleanup line is why the old flag raced.
 }
 
 /// An environment reader over a fixed map: `[(key, value), ...]`.

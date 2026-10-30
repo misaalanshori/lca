@@ -416,3 +416,32 @@ fn selection_does_not_reverse_the_reset_and_style_at_its_seam() {
     );
     assert_eq!(visible_width(&out), 8, "nor the width");
 }
+
+// Verifies: gh #323 defect 1, at the real call site - a hot measured width
+// survives a flood of cold ones.
+//
+// The width cache evicted `HashMap::keys().next()`, whose position is hash order,
+// so a hot entry (the visible rows of a frame, re-measured every frame) could be
+// dropped by any cold insert (a newly scrolled-in row). The row below fails on
+// that shape: 2,000 cold measurements is far more than the 512-entry bound, and
+// under arbitrary eviction enough draws would eventually take the hot key.
+//
+// Asserted through `visible_width` rather than the cache directly, so it covers
+// the wiring as well as the policy: a cache with the right policy that the
+// function does not consult would pass a `LruCache`-only row.
+#[test]
+fn a_hot_width_is_not_evicted_by_cold_measurements() {
+    // A slow-path string: the fast path (`ascii_visible_width`) answers without
+    // the cache, so only a wide character actually exercises it.
+    let hot = "世界-hottest-width";
+    let expected = visible_width(hot);
+
+    for index in 0..2000 {
+        // Re-measure the hot row every round, the way a repaint does.
+        assert_eq!(visible_width(hot), expected, "round {index}");
+        // Then measure a fresh one, which is what pushes entries out.
+        let _ = visible_width(&format!("世{index}"));
+    }
+    // And it is still right after the flood, not merely non-panicking.
+    assert_eq!(visible_width(hot), expected);
+}

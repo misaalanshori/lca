@@ -5,14 +5,15 @@
 
 use super::*;
 
-fn with_kitty<T>(active: bool, f: T)
-where
-    T: FnOnce(),
-{
-    let prev = is_kitty_protocol_active();
-    set_kitty_protocol_active(active);
-    f();
-    set_kitty_protocol_active(prev);
+/// Match with an explicit Kitty state (gh #323 defect 2).
+///
+/// **This replaces a `with_kitty` helper that mutated the process-global flag** -
+/// the sanctioned test change the brief names. Every row below that used it now
+/// passes its state as a parameter, so the rows no longer race each other under
+/// `nextest`'s parallelism (the old helper set a static that a concurrently running
+/// row could observe, and restore it out from under that row).
+fn kitty(active: bool) -> Option<bool> {
+    Some(active)
 }
 
 // Verifies: gh #66 follow-up - the key vocabulary accepts every
@@ -86,14 +87,10 @@ fn shift_tab_and_shift_enter_dialects() {
     assert!(matches_key("\x1b[Z", "shift+tab"));
     assert!(matches_key("\x1b[9;2u", "shift+tab"));
     assert!(matches_key("\x1b[13;2u", "shift+enter"));
-    with_kitty(true, || {
-        assert!(matches_key("\x1b\r", "shift+enter"));
-        assert!(matches_key("\n", "shift+enter"));
-        assert!(!matches_key("\x1b\r", "alt+enter"));
-    });
-    with_kitty(false, || {
-        assert!(matches_key("\x1b\r", "alt+enter"));
-    });
+    assert!(matches_key_with_kitty("\x1b\r", "shift+enter", kitty(true)));
+    assert!(matches_key_with_kitty("\n", "shift+enter", kitty(true)));
+    assert!(!matches_key_with_kitty("\x1b\r", "alt+enter", kitty(true)));
+    assert!(matches_key_with_kitty("\x1b\r", "alt+enter", kitty(false)));
 }
 
 #[test]
@@ -116,10 +113,12 @@ fn escape_alone_and_alt_prefixed_printables() {
     assert!(matches_key("\x1b[27u", "escape"));
     assert!(matches_key("\x1b[27;1u", "escape"));
     assert!(matches_key("\x1b[27;1;27~", "escape"));
-    with_kitty(false, || {
-        assert!(matches_key("\x1bx", "alt+x"));
-        assert!(matches_key("\x1b\x03", "ctrl+alt+c"));
-    });
+    assert!(matches_key_with_kitty("\x1bx", "alt+x", kitty(false)));
+    assert!(matches_key_with_kitty(
+        "\x1b\x03",
+        "ctrl+alt+c",
+        kitty(false)
+    ));
 }
 
 #[test]
@@ -382,4 +381,79 @@ fn a_malformed_shifted_sequence_declines() {
         // None of them may panic, whatever they answer.
         let _ = matches_key(bad, "ctrl+shift+/");
     }
+}
+
+// Verifies: gh #323 defect 2 - **two terminals can hold different Kitty states at
+// the same instant**, and each match answers from its own.
+//
+// This is the row a `thread_local` fails, and it is the reason the flag is a
+// per-manager cell rather than one. Both managers here live on this thread and are
+// consulted in the same breath: `\x1b\r` must mean `shift+enter` for the terminal
+// that negotiated Kitty and `alt+enter` for the one that did not. A thread-local
+// would hand both the same answer; a process-global would hand both whichever was
+// set last.
+//
+// The failure this prevents is concrete: a second pane (or a second `lca` view in one
+// process) that never enabled Kitty would reinterpret every Shift+Enter as Alt+Enter,
+// because the first terminal's negotiation won process-wide.
+#[test]
+fn two_managers_disagree_about_kitty_simultaneously() {
+    use crate::engine::keybindings::KeybindingsManager;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
+    let kitty_terminal = Arc::new(AtomicBool::new(true));
+    let legacy_terminal = Arc::new(AtomicBool::new(false));
+    let mut kitty_manager = KeybindingsManager::new();
+    kitty_manager.set_kitty_state(kitty_terminal.clone());
+    let mut legacy_manager = KeybindingsManager::new();
+    legacy_manager.set_kitty_state(legacy_terminal.clone());
+
+    // Interleaved, not sequential: the point is that they coexist, so a stale global
+    // written by the first could not explain the second's answer.
+    for round in 0..3 {
+        assert!(
+            kitty_manager.matches("\x1b\r", "tui.input.newLine"),
+            "round {round}: the Kitty terminal reads Shift+Enter"
+        );
+        assert!(
+            !matches_key_with_kitty("\x1b\r", "alt+enter", kitty(true)),
+            "round {round}: and the Kitty terminal does not read Alt+Enter"
+        );
+        assert!(
+            matches_key_with_kitty("\x1b\r", "alt+enter", kitty(false)),
+            "round {round}: the legacy terminal reads Alt+Enter"
+        );
+        assert!(
+            !legacy_manager.matches("\x1b\r", "tui.input.newLine"),
+            "round {round}: and not Shift+Enter"
+        );
+    }
+
+    // Negotiation is live: the terminal flips its own cell and the manager follows
+    // without any notification, which is why the state is a shared `Arc` and not a
+    // copied `bool`.
+    legacy_terminal.store(true, std::sync::atomic::Ordering::SeqCst);
+    assert!(
+        legacy_manager.matches("\x1b\r", "tui.input.newLine"),
+        "a terminal that negotiates Kitty later is followed"
+    );
+    assert!(
+        kitty_manager.matches("\x1b\r", "tui.input.newLine"),
+        "and the other terminal is unaffected"
+    );
+}
+
+// Verifies: gh #323 - a manager with no terminal attached keeps the old ambient
+// behaviour, so the change is additive rather than a new required wiring.
+#[test]
+fn a_manager_without_a_terminal_uses_the_ambient_state() {
+    use crate::engine::keybindings::KeybindingsManager;
+    let manager = KeybindingsManager::new();
+    assert!(!manager.has_kitty_state(), "nothing attached by default");
+    let prev = is_kitty_protocol_active();
+    // Ambient on: the unattached manager follows it, as it always did.
+    set_kitty_protocol_active(true);
+    assert!(manager.matches("\x1b\r", "tui.input.newLine"));
+    set_kitty_protocol_active(prev);
 }
