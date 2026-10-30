@@ -326,6 +326,8 @@ Consent text: the reason string, followed by "This gives it an interactive termi
 
 On denial: spawn returns a permission error.
 
+**Lifecycle: the host reaps, but not promptly, so the extension ends its own child.** The handle table belongs to the capability engine, and dropping any entry kills the whole process tree, so nothing survives the engine. The engine, though, is shared by every extension in the session and outlives any one of them — a killed extension whose engine is still alive keeps its child running. An extension therefore kills its handle on the way out (`on_session_close` and, for the abnormal paths that skip it, a `Drop`), and treats a kill that has already happened as a no-op rather than an error. See [extension-authoring](extension-authoring.md).
+
 ### ui
 
 Grants the right to render in named regions. See ADR-0003 for the rendering model.

@@ -18,6 +18,19 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **The reference `ui` extension's panel no longer leaks a shell or erases its own
+  output** (gh #301). Two defects in the example every extension author copies. First,
+  `on_session_close` was a no-op and `PanelSession` had no `Drop`, so each panel session
+  left an interactive `sh`/`cmd.exe` behind; the host does eventually reap it
+  (`PtyChild::drop` kills the tree), but only when the whole session's capability engine
+  drops — measured: a dropped extension whose engine was still alive left a live `sh`.
+  Both nets now exist and share one idempotent teardown. Second, the panel drained up to
+  4 KiB per frame and kept nothing, so any frame drawn when the program had produced no
+  new bytes showed a bare header — the panel flickered between content and blank. It now
+  keeps a bounded rolling screen (16 KiB / 200 rows, trimmed on a line boundary, escape
+  sequences stripped) and draws that, so a quiet frame redraws what is already there.
+  A session that exits says `session ended (exit N)` instead of freezing on its last
+  output.
 - **An expanded diff card no longer prints the result twice** (gh #328). The diff block
   was followed by the general command-output block with no `else` between them, so a
   result carrying a diff was rendered by both — an `edit` printed its summary twice, and

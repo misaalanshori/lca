@@ -676,6 +676,13 @@ Do not ask for `home-config` unless reading an existing tool's login is the actu
 
 The `process` and `pty` capabilities both need a reason string that is shown verbatim at install time. Write it for a person who does not know what the extension does. Reach for `pty` specifically when the spawned program checks whether it has a real terminal and behaves differently without one; `process`'s plain pipe-backed streams are enough for anything that doesn't.
 
+**A spawned process is yours to end, and `on_session_close` is not enough on its own.** The host does reap a child eventually — the capability engine owns the handle table and its `drop` kills the whole tree — but that engine is shared by every extension in the session, so "eventually" means "when the registry goes": in between, your child keeps running with no one reading it. Hold nothing back, either: a handle your extension forgets is a process still alive, because the engine's own `drop` is the last resort, not the first. So do both, which is what the reference `ui` extension does:
+
+- **Kill in `on_session_close`.** It is the ordinary path, and it is the half the ABI defines — but note the host only dispatches it to an extension that declares the `hooks` world, so a `ui`-only extension's `on_session_close` is currently never called. Do not rely on it alone.
+- **Kill in `Drop` as well.** A panic, an early return, or a session that never closes cleanly all skip the ordinary path, and a `Drop` on your handle is the only thing that still runs. Both nets call **one** teardown that takes the handle out before acting on it, so a second call is a no-op rather than a second kill — the reference does exactly that, because a normal exit fires both.
+
+A panel that shows a live program's output is a **screen**, not a stream: keep the output you have read and re-render it every frame, because a frame where the program produced nothing is the normal case and drawing only the newest chunk means drawing a blank panel. Bound what you keep (both bytes and rows), trim on a line boundary, and strip escape sequences — the host's `sanitize_text` turns a control character into visible `\xNN` text, so raw SGR reaching a panel shows as `\x1b[31m` debris rather than colour.
+
 If an extension needs a response from the current model as an input to its own logic, rather than only producing output the model reads, that is `completion`, not a call to another extension. There is no extension-to-extension calling in this design; see ADR-0008.
 
 Test the denied path. A user can revoke a grant, and an extension that panics when a capability is missing fails badly at the worst moment. Every capability call returns a result. Handle it.

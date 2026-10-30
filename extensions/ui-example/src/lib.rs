@@ -28,6 +28,9 @@
 
 #![deny(unsafe_code)]
 
+/// The panel's rolling screen (gh #301).
+pub mod panel_screen;
+
 /// The manifest this form ships with (single source for
 /// [`manifest_grants`]; a test keeps them in step).
 pub const MANIFEST: &str = include_str!("../extension.toml");
@@ -122,12 +125,71 @@ pub fn demo_program() -> &'static str {
     if cfg!(windows) { "cmd.exe" } else { "sh" }
 }
 
+pub use crate::panel_screen::PanelScreen;
+
 /// The live session a panel holds: whatever handle the pty capability
 /// handed back, alive for as long as the extension handle is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PanelSession {
     /// The capability's pty handle.
     pub handle: u32,
+}
+
+/// The panel's widget tree: the session header, then the screen's rows, then
+/// what the session has to say about itself (gh #301).
+///
+/// One builder for both delivery modes, so the native panel and the WASM panel
+/// can only differ in what they *know* - a live screen or nothing - never in how
+/// they render it.
+#[must_use]
+pub fn panel_nodes(
+    session: Option<&PanelSession>,
+    screen: Option<&PanelScreen>,
+) -> Vec<lca_protocol::Widget> {
+    use lca_protocol::Widget;
+    let text = |content: &str, role: &str| Widget::Text {
+        content: content.to_string(),
+        role: role.to_string(),
+    };
+    let Some(session) = session else {
+        return vec![
+            Widget::Column(vec![1]),
+            Widget::KeyValue(vec![(
+                "session".to_string(),
+                "not available in this delivery mode".to_string(),
+            )]),
+        ];
+    };
+    let mut nodes = vec![Widget::Column(Vec::new())];
+    nodes.push(Widget::KeyValue(vec![
+        ("session".to_string(), format!("pty {}", session.handle)),
+        (
+            "keys".to_string(),
+            "typed here reach the program".to_string(),
+        ),
+    ]));
+    let rows = screen.map(PanelScreen::rows).unwrap_or_default();
+    for row in &rows {
+        nodes.push(text(row, "default"));
+    }
+    if let Some(code) = screen.and_then(PanelScreen::ended) {
+        // Gh #301: a session that has exited says so. Freezing on its last
+        // output would be indistinguishable from one that has gone quiet.
+        nodes.push(text(&panel_screen::ended_label(code), "muted"));
+    } else if rows.is_empty() {
+        // Nothing has run yet: say what the panel is for rather than showing a
+        // bare header.
+        nodes.push(text(
+            "type here: the session answers in this panel",
+            "muted",
+        ));
+    }
+    // Arena rule: node0 is the root and children are indices.
+    let last = nodes.len() as u32;
+    if let Widget::Column(children) = &mut nodes[0] {
+        *children = (1..last).collect();
+    }
+    nodes
 }
 
 /// Build the tree for one region. `session` is `None` in a mode that
@@ -168,26 +230,10 @@ pub fn render_region_with(
             text("press m in a region for the modal, q to close it", "muted"),
             text("all four regions granted", "muted"),
         ],
-        "panel" => match session {
-            Some(session) => vec![
-                Widget::Column(vec![1, 2]),
-                Widget::KeyValue(vec![
-                    ("session".to_string(), format!("pty {}", session.handle)),
-                    (
-                        "keys".to_string(),
-                        "typed here reach the program".to_string(),
-                    ),
-                ]),
-                text("type here: the session answers in this panel", "muted"),
-            ],
-            None => vec![
-                Widget::Column(vec![1]),
-                Widget::KeyValue(vec![(
-                    "session".to_string(),
-                    "not available in this delivery mode".to_string(),
-                )]),
-            ],
-        },
+        // Gh #301: the panel is a screen, so its tree is built from what the
+        // session has already produced. `None` here is the mode that cannot keep
+        // a handle (the WASM guest), which is also the mode with no screen.
+        "panel" => return Some(panel_nodes(session, None)),
         "modal" => vec![
             Widget::Boxed {
                 title: Some("ui-example".to_string()),
@@ -256,6 +302,10 @@ mod native {
     pub struct UiExample {
         cap: ArcSession,
         session: Mutex<Option<PanelSession>>,
+        /// Gh #301: what the session has produced, kept so a frame with no new
+        /// bytes can draw it again. Behind the same mutex as the session because
+        /// the two are read together and started together.
+        screen: Mutex<PanelScreen>,
         /// Gh #409: plan-mode state, held here because it is the extension's
         /// (ADR-0013's taxonomy). The host pulls `render` per frame, so this
         /// needs no notification when it changes.
@@ -272,6 +322,7 @@ mod native {
             UiExample {
                 cap,
                 session: Mutex::new(None),
+                screen: Mutex::new(PanelScreen::new()),
                 badge: Mutex::new(PlanBadge::default()),
             }
         }
@@ -284,6 +335,55 @@ mod native {
         /// The live panel session, when one has started.
         pub fn panel_session(&self) -> Option<u32> {
             lock(&self.session).map(|session| session.handle)
+        }
+
+        /// What the panel has to draw, for a test or a host that wants it
+        /// without going through the widget tree.
+        pub fn panel_screen(&self) -> &Mutex<PanelScreen> {
+            &self.screen
+        }
+
+        /// End the panel session and release the pty, if one is running.
+        ///
+        /// The one teardown both nets use: `on_session_close` calls it on the
+        /// ordinary path, `Drop` on the abnormal one, and it is **safe to call
+        /// twice** - the handle is taken out of the `Option` first, so the second
+        /// call finds `None` and issues no `pty_kill`. That is the property that
+        /// makes two nets free rather than a source of double-kill errors, and
+        /// `panel_lifecycle.rs` pins it.
+        ///
+        /// Takes `&self` rather than `&mut self` because `on_session_close` gets
+        /// one: the mutex is what makes the take exclusive.
+        pub fn end_panel_session(&self) -> Option<u32> {
+            let ended = lock(&self.session).take();
+            if let Some(session) = ended {
+                // A failure here is reported by the capability engine's own
+                // denial/error record; there is nothing this extension can do
+                // about it and nothing a user could act on, so it is not raised
+                // as an effect. The handle is gone from this extension either
+                // way, which is the part this code owns.
+                let _ = self.cap.pty_kill(session.handle);
+            }
+            ended.map(|session| session.handle)
+        }
+    }
+
+    impl Drop for UiExample {
+        /// Gh #301: the second net. `on_session_close` is the ordinary path, but
+        /// a panic, an early return, or a session that never closes cleanly all
+        /// skip it - and the pty child is a real process.
+        ///
+        /// Worth being precise about what this does and does not buy: the host
+        /// *does* reap the child eventually, because `Capabilities` owns the
+        /// handle table and `PtyChild::drop` kills the tree. But the engine is an
+        /// `Arc` shared with the session's other extensions, so "eventually" is
+        /// "when the whole session's registry goes" - measured, not assumed: a
+        /// dropped `UiExample` whose engine is still alive leaves a live `sh`
+        /// behind (see the report for the probe). This closes that window.
+        ///
+        /// Idempotent for the same reason [`UiExample::end_panel_session`] is.
+        fn drop(&mut self) {
+            self.end_panel_session();
         }
     }
 
@@ -336,56 +436,46 @@ mod native {
         }
 
         fn render(&self, region: &str) -> Result<Option<WidgetTree>, DispatchError> {
+            if region != "panel" {
+                return Ok(render_region_with(region, None, &lock(&self.badge))
+                    .map(|nodes| WidgetTree { nodes }));
+            }
             // The panel starts the demo session on its first render:
             // the user opening the panel IS the invocation (FR-UI-6's
             // shape - nothing starts on its own).
-            if region == "panel" {
-                let mut session = lock(&self.session);
-                if session.is_none() {
-                    let args: Vec<String> = Vec::new();
-                    let spawned = self
-                        .cap
-                        .pty_spawn(demo_program(), &args, "workspace", 24, 80);
-                    if let Ok(handle) = spawned {
-                        *session = Some(PanelSession { handle });
-                    }
+            let mut session = lock(&self.session);
+            if session.is_none() {
+                let args: Vec<String> = Vec::new();
+                let spawned = self
+                    .cap
+                    .pty_spawn(demo_program(), &args, "workspace", 24, 80);
+                if let Ok(handle) = spawned {
+                    *session = Some(PanelSession { handle });
                 }
             }
-            let session = lock(&self.session);
-            // The live read: whatever the program has produced since
-            // the last frame, as data (the host draws it; nothing here
-            // touches a terminal).
-            if region == "panel"
-                && let Some(live) = session.as_ref()
-                && let Ok(Some(output)) = self.cap.pty_read(live.handle, 4096)
-            {
-                {
-                    let text = String::from_utf8_lossy(&output);
-                    // Arena rule: node0 is the root and children are
-                    // indices, so a column links the header and lines.
-                    let mut nodes = vec![lca_protocol::Widget::Column(Vec::new())];
-                    nodes.push(lca_protocol::Widget::KeyValue(vec![(
-                        "session".to_string(),
-                        format!("pty {}", live.handle),
-                    )]));
-                    for line in text.lines().take(20) {
-                        nodes.push(lca_protocol::Widget::Text {
-                            content: line.to_string(),
-                            role: "default".to_string(),
-                        });
-                    }
-                    let last = nodes.len() as u32;
-                    if let lca_protocol::Widget::Column(children) = &mut nodes[0] {
-                        *children = (1..last).collect();
-                    }
-                    return Ok(Some(WidgetTree { nodes }));
+            // The live read: whatever the program has produced since the last
+            // frame, folded into the rolling screen as data (the host draws it;
+            // nothing here touches a terminal).
+            //
+            // Gh #301: the read and the fold happen on **every** panel frame, and
+            // an empty read is a normal answer rather than a reason to draw
+            // nothing. `Ok(None)` is the session's end, which the screen records
+            // so the panel can say so instead of freezing on its last output.
+            let mut screen = lock(&self.screen);
+            if let Some(live) = session.as_ref() {
+                match self.cap.pty_read(live.handle, 4096) {
+                    Ok(Some(chunk)) => screen.observe(&chunk, None),
+                    Ok(None) => screen.observe(&[], Some(0)),
+                    // A refusal or an I/O error: the panel keeps what it has
+                    // rather than blanking, and the engine's own record carries
+                    // the reason.
+                    Err(_) => {}
                 }
             }
+            let nodes = panel_nodes(session.as_ref(), Some(&screen));
+            drop(screen);
             drop(session);
-            Ok(
-                render_region_with(region, lock(&self.session).as_ref(), &lock(&self.badge))
-                    .map(|nodes| WidgetTree { nodes }),
-            )
+            Ok(Some(WidgetTree { nodes }))
         }
 
         fn on_ui_event(&self, region: &str, input: &UiInput) -> Result<UiEffect, DispatchError> {
@@ -460,7 +550,18 @@ mod native {
             Box::pin(std::future::ready(Ok(())))
         }
 
+        /// Gh #301: the ordinary teardown net - the panel's child is a real
+        /// process, so closing the session ends it rather than leaving it to the
+        /// engine's own `Drop` whenever that finally runs.
+        ///
+        /// **The dispatch is not wired for a `ui`-only extension**, and that is a
+        /// host finding rather than something this crate can fix:
+        /// `ExtensionRegistry::on_session_close` filters on `World::Hooks`, so a
+        /// handle declaring only `World::Ui` is never called. The method is here
+        /// because it is the correct half of the contract and the interface the
+        /// ABI defines; `Drop` is what actually runs (see the report).
         fn on_session_close(&self) -> DispatchFuture<'static, Result<(), DispatchError>> {
+            self.end_panel_session();
             Box::pin(std::future::ready(Ok(())))
         }
     }
