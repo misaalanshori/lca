@@ -189,6 +189,177 @@ impl TabsWidget {
     /// Returning the region *with* the string is the point: the caller cannot
     /// compute the glyph's column by any other rule without re-deriving the
     /// truncation, which is how the two drifted apart.
+    /// Lay the horizontal bar out at `width` (gh #326).
+    ///
+    /// Four levers, applied in this order until the bar fits - the same
+    /// priority the rail uses, outermost-in:
+    ///
+    /// 1. **flags** - whole flags come off cells with room to spare, `(badge)`
+    ///    first, then `●`/`◌`, but **never the `*`** active marker: that is how the
+    ///    bar says which session the user is in;
+    /// 2. **`[+]`** - a convenience, not an affordance for something on screen;
+    /// 3. **whole tabs**, from the right, never the active one;
+    /// 4. **the titles** - the only part that is truncated, so the frame, the index
+    ///    and the `×` survive to the last cell.
+    ///
+    /// The old code truncated the *painted row* instead, which ate the flags and
+    /// the `×` and left the bar wider than its width anyway (measured: 4 tabs at
+    /// width 80 painted 82 cells).
+    fn layout_horizontal(&self, width: usize) -> (Vec<TabCell>, Option<(usize, usize, usize)>) {
+        let active = self.active();
+        // Per surviving tab: the index into `items`, its title, and which flags it
+        // may still show.
+        struct Slot {
+            index: usize,
+            title: String,
+            badge: bool,
+            markers: bool,
+        }
+        let mut slots: Vec<Slot> = self
+            .items
+            .iter()
+            .enumerate()
+            .map(|(index, item)| Slot {
+                index,
+                title: item.title.clone(),
+                badge: item.badge.is_some(),
+                markers: item.is_dirty || item.is_generating,
+            })
+            .collect();
+
+        // The painted cell for a slot, honouring its surviving flags.
+        let cell_of = |slot: &Slot, title: &str| -> String {
+            let item = &self.items[slot.index];
+            let mut flags = String::new();
+            if Some(slot.index) == active {
+                flags.push('*');
+            }
+            if slot.markers {
+                if item.is_dirty {
+                    flags.push('●');
+                }
+                if item.is_generating {
+                    flags.push('◌');
+                }
+            }
+            if slot.badge
+                && let Some(badge) = &item.badge
+            {
+                flags.push_str(&format!(" ({badge})"));
+            }
+            if item.closable {
+                flags.push_str(CLOSE_TEXT);
+            }
+            format!("[ {}. {title}{flags} ]", slot.index + 1)
+        };
+        let span_of = |slots: &[Slot], show_add: bool| -> usize {
+            slots
+                .iter()
+                .map(|slot| visible_width(&cell_of(slot, &slot.title)))
+                .sum::<usize>()
+                + slots.len().saturating_sub(1) * 2
+                + if show_add { 5 } else { 0 }
+        };
+
+        let mut show_add = self.show_add_button;
+
+        // 1. Flags, one at a time, from the right - the least the bar can give up.
+        //    `*` is never a candidate, so the active marker cannot vanish.
+        'flags: while !slots.is_empty() && span_of(&slots, show_add) > width {
+            for slot in slots.iter_mut().rev() {
+                // The active tab's flags are fair game - only the `*` marker is not.
+                if slot.badge {
+                    slot.badge = false;
+                    continue 'flags;
+                }
+                if slot.markers {
+                    slot.markers = false;
+                    continue 'flags;
+                }
+            }
+            break;
+        }
+
+        // 2. `[+]`.
+        if show_add && span_of(&slots, false) > width {
+            show_add = false;
+        }
+
+        // 3. Whole tabs from the right, never the active one. The victim is chosen
+        //    by **item index**, not slot position: once a slot is removed the two
+        //    stop agreeing, and comparing them dropped the active tab (measured: an
+        //    active third tab disappeared at width 40, leaving tab 1 on the bar).
+        while slots.len() > 1 && span_of(&slots, show_add) > width {
+            let active_slot = active.and_then(|a| slots.iter().position(|s| s.index == a));
+            let victim = match active_slot {
+                Some(slot) if slot + 1 == slots.len() => slots.len() - 2,
+                _ => slots.len() - 1,
+            };
+            slots.remove(victim);
+        }
+
+        // 4. The titles take the leftover room.
+        let mut remaining = width.saturating_sub(if show_add { 5 } else { 0 });
+        let mut tabs: Vec<TabCell> = Vec::with_capacity(slots.len());
+        for (position, slot) in slots.iter().enumerate() {
+            remaining = remaining.saturating_sub(if position == 0 { 0 } else { 2 });
+            let full = cell_of(slot, &slot.title);
+            let text = if visible_width(&full) <= remaining {
+                full
+            } else {
+                let frame = visible_width(&cell_of(slot, ""));
+                let room = remaining.saturating_sub(frame);
+                let shortened = truncate_to_width(&slot.title, room, "…", false);
+                cell_of(slot, &shortened)
+            };
+            // A cell can still overrun when the frame alone is wider than the pane.
+            // Tighten the frame, and as the true last resort hard-truncate: a bar
+            // that paints past its width is the defect this function exists to
+            // prevent, so the bound wins over showing a full `[ n. × ]`. At these
+            // widths (1-4 cells) the pane cannot show a tab anyway.
+            let text = if visible_width(&text) > remaining {
+                let mut out = text;
+                for tightened in [
+                    out.replace(" × ]", " ×"),
+                    out.replace("[ ", "["),
+                    out.replace("[ ", "[").replace(" × ]", "×"),
+                ] {
+                    if visible_width(&tightened) < visible_width(&out) {
+                        out = tightened;
+                    }
+                    if visible_width(&out) <= remaining {
+                        break;
+                    }
+                }
+                if visible_width(&out) > remaining && remaining > 0 {
+                    out = truncate_to_width(&out, remaining, "", false);
+                }
+                out
+            } else {
+                text
+            };
+            remaining = remaining.saturating_sub(visible_width(&text));
+            tabs.push(TabCell {
+                row: 0,
+                start: 0,
+                end: visible_width(&text),
+                text,
+                close: None,
+            });
+        }
+
+        // Positions, and a close region per painted glyph.
+        let mut col = 0usize;
+        for cell in tabs.iter_mut() {
+            cell.start = col;
+            cell.end = col + visible_width(&cell.text);
+            cell.close = rendered_close_region(&cell.text, cell.text.contains('×'));
+            col = cell.end + 2;
+        }
+        let add = (show_add && col + 3 <= width).then(|| (0, col, col + 3));
+        (tabs, add)
+    }
+
     fn vertical_cell(
         item: &TabItem,
         index: usize,
@@ -248,98 +419,8 @@ impl TabsWidget {
     fn layout(&self, width: u16) -> TabLayout {
         let width = width as usize;
         let active = self.active();
-        let mut titles: Vec<String> = self.items.iter().map(|item| item.title.clone()).collect();
         if self.orientation == TabOrientation::Horizontal {
-            // The chrome around each title: `[ {n}. ` + flags + ` ]`
-            // plus the two-space gutter and the `[+]` cell.
-            let chrome = |index: usize| {
-                let item = &self.items[index];
-                let flags = Self::flags(item, Some(index) == active);
-                3 + format!("{}. ", index + 1).len() + visible_width(&flags) + 2
-            };
-            let gutter = self.items.len().saturating_sub(1) * 2;
-            let add_cell = if self.show_add_button { 5 } else { 0 };
-            let total_of = |titles: &[String]| {
-                titles
-                    .iter()
-                    .enumerate()
-                    .map(|(i, t)| chrome(i) + visible_width(t))
-                    .sum::<usize>()
-                    + gutter
-                    + add_cell
-            };
-            let mut total = total_of(&titles);
-            // Shave the longest titles first; the active tab shaves
-            // last. Each pass strictly narrows one title, so the loop
-            // always terminates (a 1-cell title keeps its `…`).
-            while total > width {
-                let mut victim: Option<usize> = None;
-                let mut best = 1usize;
-                for (index, title) in titles.iter().enumerate() {
-                    if Some(index) == active {
-                        continue;
-                    }
-                    let w = visible_width(title);
-                    if w > best {
-                        best = w;
-                        victim = Some(index);
-                    }
-                }
-                let victim = victim.or_else(|| {
-                    titles
-                        .iter()
-                        .enumerate()
-                        .filter(|(i, _)| Some(*i) != active)
-                        .max_by_key(|(_, t)| visible_width(t))
-                        .map(|(i, _)| i)
-                });
-                let victim = victim.or_else(|| {
-                    titles
-                        .iter()
-                        .enumerate()
-                        .max_by_key(|(_, t)| visible_width(t))
-                        .map(|(i, _)| i)
-                });
-                let Some(victim) = victim else {
-                    break;
-                };
-                if visible_width(&titles[victim]) <= 1 {
-                    break;
-                }
-                let spare = total.saturating_sub(width).max(1);
-                let narrowed = visible_width(&titles[victim]).saturating_sub(spare).max(1);
-                titles[victim] = truncate_to_width(&self.items[victim].title, narrowed, "…", false);
-                let now = total_of(&titles);
-                if now >= total {
-                    break;
-                }
-                total = now;
-            }
-            let mut tabs = Vec::with_capacity(self.items.len());
-            let mut col = 0usize;
-            for (index, title) in titles.iter().enumerate() {
-                let item = &self.items[index];
-                let flags = Self::flags(item, Some(index) == active);
-                let cell = format!("[ {}. {title}{flags} ]", index + 1);
-                let start = col;
-                let end = start + visible_width(&cell);
-                let close = item.closable.then(|| {
-                    // The `×` owns its own cell before the frame.
-                    (end.saturating_sub(3), end.saturating_sub(2))
-                });
-                tabs.push(TabCell {
-                    row: 0,
-                    start,
-                    end,
-                    text: cell,
-                    close,
-                });
-                col = end + 2;
-            }
-            let add = self.show_add_button.then(|| {
-                let start = col;
-                (0, start, start + 3)
-            });
+            let (tabs, add) = self.layout_horizontal(width);
             TabLayout { tabs, add, rows: 1 }
         } else {
             let mut tabs = Vec::with_capacity(self.items.len());

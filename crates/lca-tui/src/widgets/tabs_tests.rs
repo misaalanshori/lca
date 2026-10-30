@@ -558,3 +558,286 @@ fn the_region_is_measured_by_finding_the_glyph_not_the_row_end() {
     // And a non-closable row never has one, whatever it paints.
     assert_eq!(rendered_close_region("▶ [1] se ×", false), None);
 }
+
+// Verifies: gh #326 - the horizontal bar never paints wider than its width.
+//
+// Found while checking the vertical fix against the surface the product actually
+// uses (`chat_tabs.rs` only ever builds a `Horizontal` bar). Measured on the
+// pre-fix build: **4 tabs at width 80 painted 82 cells**, and the overflow grew
+// with the tab count (2 tabs at 40 → 48, 1 tab at 10 → 16). The narrowing loop
+// shaves titles against a `total` it computes from `chrome()` + title widths, but
+// `chrome()` under-counted the flags/badge they actually add, so the loop
+// believed the bar fitted when it did not; the extra cells then simply painted
+// past the pane.
+//
+// Same defect class as this issue - a row that does not fit - one surface over,
+// so it is pinned here rather than filed blind.
+#[test]
+fn a_horizontal_bar_never_paints_wider_than_its_width() {
+    for tabs_count in [1usize, 2, 3, 4, 6] {
+        for badge in [None, Some("*".to_string()), Some("42k".to_string())] {
+            for add in [false, true] {
+                let mut widget = TabsWidget {
+                    orientation: TabOrientation::Horizontal,
+                    items: (1..=tabs_count)
+                        .map(|n| TabItem {
+                            id: format!("t{n}"),
+                            title: format!("session-number-{n}"),
+                            badge: badge.clone(),
+                            is_generating: false,
+                            is_dirty: true,
+                            closable: true,
+                        })
+                        .collect(),
+                    active_index: 0,
+                    show_add_button: add,
+                    hovered: None,
+                };
+                widget.items[0].is_generating = true;
+                for width in [80u16, 60, 40, 20, 10] {
+                    let row = &widget.render(width)[0];
+                    assert!(
+                        visible_width(row) <= width as usize,
+                        "{tabs_count} tabs, badge {badge:?}, add {add} at width {width}: \
+                         the bar painted {} cells: {row:?}",
+                        visible_width(row)
+                    );
+                }
+            }
+        }
+    }
+}
+
+// Verifies: gh #326 - every tab that survives on the bar keeps its close glyph.
+//
+// The affordance rule applies to the bars the user can see: if a tab is painted,
+// its `×` is painted, because the host hit-tests those cells. A bar too narrow for
+// all its tabs drops whole tabs from the right (never the active one) rather than
+// painting truncated ones - so the assertion is per *painted* tab, not "every tab
+// in the list".
+#[test]
+fn every_painted_horizontal_tab_keeps_its_close_glyph() {
+    for tabs_count in [1usize, 2, 3, 4] {
+        for width in [80u16, 60, 40, 20, 12] {
+            let widget = TabsWidget {
+                orientation: TabOrientation::Horizontal,
+                items: (1..=tabs_count)
+                    .map(|n| TabItem {
+                        id: format!("t{n}"),
+                        title: format!("session-number-{n}"),
+                        badge: None,
+                        is_generating: false,
+                        is_dirty: false,
+                        closable: true,
+                    })
+                    .collect(),
+                active_index: 0,
+                show_add_button: false,
+                hovered: None,
+            };
+            let row = &widget.render(width)[0];
+            // Tabs are painted as `[ n. `, so the index marker is what counts them
+            // (a `[` count would also catch ANSI resets and the `[+]` cell).
+            let painted = row.matches(". ").count() - row.matches("[+]").count();
+            assert!(painted >= 1, "at least the active tab is painted: {row:?}");
+            assert_eq!(
+                row.matches('×').count(),
+                painted,
+                "{tabs_count} tabs at width {width}: every painted tab keeps its glyph: {row:?}"
+            );
+            // And the active tab is never the one dropped: it is first on the bar.
+            assert!(
+                row.contains("[ 1. ") || row.contains("[1."),
+                "the active (first) tab survives at width {width}: {row:?}"
+            );
+        }
+    }
+}
+
+// Verifies: gh #326 - dropping a tab is the last resort, and it drops from the right.
+//
+// The bar gives up, in order: flags, then `[+]`, then whole tabs from the right.
+// A tab that does fit is never truncated in place of dropping the one that does
+// not, and the active tab is never the victim.
+#[test]
+fn a_bar_too_narrow_drops_tabs_rather_than_truncating_them_all() {
+    let widget = TabsWidget {
+        orientation: TabOrientation::Horizontal,
+        items: (1..=4)
+            .map(|n| TabItem {
+                id: format!("t{n}"),
+                title: "x".to_string(),
+                badge: None,
+                is_generating: false,
+                is_dirty: false,
+                closable: true,
+            })
+            .collect(),
+        active_index: 0,
+        show_add_button: true,
+        hovered: None,
+    };
+    let wide = &widget.render(200)[0];
+    assert_eq!(
+        wide.matches('×').count(),
+        4,
+        "all four fit when there is room"
+    );
+    assert!(wide.contains("[+]"), "and `[+]` is there");
+    let narrow = &widget.render(24)[0];
+    assert!(
+        narrow.matches('×').count() < 4,
+        "a narrow bar drops tabs instead of overflowing: {narrow:?}"
+    );
+    assert!(visible_width(narrow) <= 24, "and still fits: {narrow:?}");
+}
+
+// Verifies: gh #326 - the bar never hides the active tab to make room.
+//
+// Found while mutation-testing the drop rule: with the active tab last, dropping
+// "from the right" removed exactly it, so a narrow bar showed tabs 1 and 2 while
+// the session the user was in vanished from the bar entirely. The bar's job is to
+// say where they are, so the active tab is never the victim.
+#[test]
+fn a_narrow_bar_never_drops_the_active_tab() {
+    for active in [0usize, 1, 2, 3] {
+        for width in [80u16, 40, 30, 24, 20, 14] {
+            let widget = TabsWidget {
+                orientation: TabOrientation::Horizontal,
+                items: (1..=4)
+                    .map(|n| TabItem {
+                        id: format!("t{n}"),
+                        title: format!("session-number-{n}"),
+                        badge: None,
+                        is_generating: false,
+                        is_dirty: false,
+                        closable: true,
+                    })
+                    .collect(),
+                active_index: active,
+                show_add_button: false,
+                hovered: None,
+            };
+            let row = &widget.render(width)[0];
+            let painted = row.matches(". ").count();
+            assert!(
+                (1..=4).contains(&painted),
+                "the bar paints at least one tab: {row:?}"
+            );
+            // The active tab is the one carrying the `*` marker; it must be on the bar.
+            assert!(
+                row.contains('*'),
+                "the active tab (index {active}) is still on the bar at width {width}: {row:?}"
+            );
+        }
+    }
+    // And the active tab is the *only* one that may carry `*`, so the assertion
+    // above cannot be satisfied by a stale flag on some other tab.
+    let widget = TabsWidget {
+        orientation: TabOrientation::Horizontal,
+        items: (1..=4)
+            .map(|n| TabItem {
+                id: format!("t{n}"),
+                title: "s".to_string(),
+                badge: None,
+                is_generating: false,
+                is_dirty: false,
+                closable: true,
+            })
+            .collect(),
+        active_index: 2,
+        show_add_button: false,
+        hovered: None,
+    };
+    assert_eq!(widget.render(200)[0].matches('*').count(), 1);
+}
+
+// Verifies: gh #326 - flag-dropping never removes the `*` active marker.
+//
+// The active marker is not a state flag like `●`/`◌`/(badge): it is the bar's one
+// job, saying which session the user is in. It is the last thing a narrowing bar
+// may give up, and at any width that can fit a tab at all it must be present.
+#[test]
+fn the_active_marker_survives_every_width_that_can_show_a_tab() {
+    for active in [0usize, 1, 2, 3] {
+        for width in [80u16, 60, 40, 30, 24, 20, 14, 10] {
+            let widget = TabsWidget {
+                orientation: TabOrientation::Horizontal,
+                items: (1..=4)
+                    .map(|n| TabItem {
+                        id: format!("t{n}"),
+                        title: format!("session-number-{n}"),
+                        badge: Some("42k".to_string()),
+                        is_generating: true,
+                        is_dirty: true,
+                        closable: true,
+                    })
+                    .collect(),
+                active_index: active,
+                show_add_button: true,
+                hovered: None,
+            };
+            let row = &widget.render(width)[0];
+            assert_eq!(
+                row.matches('*').count(),
+                1,
+                "exactly one active marker, on the active tab, at width {width}: {row:?}"
+            );
+            assert!(
+                visible_width(row) <= width as usize,
+                "and the bar still fits at width {width}: {row:?}"
+            );
+        }
+    }
+}
+
+// Verifies: gh #326 - flag priority: (badge) goes before `●`/`◌`, and `*` last.
+//
+// Stated as the order the bar gives things up, because "which flag disappeared
+// first" is not observable from a single width - it needs a sweep from wide to
+// narrow, recording the width at which each one vanishes.
+#[test]
+fn flags_are_given_up_badge_first_then_markers_never_the_active_star() {
+    let widget = TabsWidget {
+        orientation: TabOrientation::Horizontal,
+        items: vec![TabItem {
+            id: "a".to_string(),
+            title: "x".to_string(),
+            badge: Some("42k".to_string()),
+            is_generating: true,
+            is_dirty: true,
+            closable: true,
+        }],
+        active_index: 0,
+        show_add_button: false,
+        hovered: None,
+    };
+    let mut lost_badge = None;
+    let mut lost_markers = None;
+    let mut lost_star = None;
+    for width in (4u16..40).rev() {
+        let row = &widget.render(width)[0];
+        if lost_badge.is_none() && !row.contains("42k") {
+            lost_badge = Some(width);
+        }
+        if lost_markers.is_none() && !row.contains('●') && !row.contains('◌') {
+            lost_markers = Some(width);
+        }
+        if lost_star.is_none() && !row.contains('*') {
+            lost_star = Some(width);
+        }
+    }
+    let (Some(badge), Some(markers)) = (lost_badge, lost_markers) else {
+        panic!(
+            "the badge and the markers must be given up somewhere below 40: {lost_badge:?} {lost_markers:?}"
+        );
+    };
+    assert!(
+        badge > markers,
+        "the badge goes before the markers (badge at {badge}, markers at {markers})"
+    );
+    assert!(
+        lost_star.map(|star| star < markers).unwrap_or(true),
+        "and the `*` only after them, if ever (star at {lost_star:?}, markers at {markers})"
+    );
+}

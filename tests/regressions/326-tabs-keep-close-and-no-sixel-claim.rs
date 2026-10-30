@@ -143,6 +143,54 @@ fn the_painted_row_and_the_hit_region_come_from_one_place() {
     );
 }
 
+// Verifies: gh #326 - the bar is fitted, not painted past its width.
+//
+// Found while verifying the vertical fix against the surface the product actually
+// uses (`chat_tabs.rs` builds only a `Horizontal` bar). Measured on the pre-fix
+// build: 4 tabs at width 80 painted **82 cells**, and the overflow grew with the
+// tab count - 2 tabs at 40 painted 48, 1 tab at 10 painted 16. The narrowing loop
+// shaved titles against a `total` it computed with a `chrome()` that under-counted
+// the flags, so it believed the bar fitted.
+//
+// The structural property is that the **last** thing the layout does is fit the
+// titles into the room left over, from per-tab flag state - not truncate a row
+// that was already assembled.
+#[test]
+fn the_bar_fits_its_width_by_shrinking_titles_last() {
+    let source = read("crates/lca-tui/src/widgets/tabs.rs");
+    let body = function_body(&source, "fn layout_horizontal(");
+
+    // Four levers, in this order, each guarded by a width test.
+    let at = |needle: &str| -> usize {
+        body.find(needle)
+            .unwrap_or_else(|| panic!("the {needle} lever exists in the horizontal layout"))
+    };
+    let badge = at("slot.badge = false");
+    let markers = at("slot.markers = false");
+    let add = at("show_add = false");
+    let drop = at("slots.remove(victim)");
+    let title = at("truncate_to_width(&slot.title");
+    assert!(
+        badge < markers && markers < add && add < drop && drop < title,
+        "flags, then `[+]`, then whole tabs, then titles - in that order"
+    );
+    // The `*` is never a lever: it is pushed unconditionally for the active slot.
+    assert!(
+        body.contains("flags.push('*')"),
+        "the active marker is not optional: {body}"
+    );
+    // And each survived tab is rebuilt as a cell, so nothing is truncated after
+    // the flags and the `×` were painted into it.
+    assert!(
+        body.contains("cell_of(slot, &shortened)"),
+        "the shortened title goes back through the cell builder: {body}"
+    );
+    assert!(
+        !body.contains("truncate_to_width(&text"),
+        "the painted row is never what gets truncated: {body}"
+    );
+}
+
 // Verifies: gh #326 - `0` cannot select a tab.
 #[test]
 fn zero_is_guarded_before_the_digit_arm() {
