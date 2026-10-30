@@ -75,33 +75,49 @@ fn panel_lines(handle: &dyn ExtensionDispatch) -> String {
 
 /// Whether the shell has **run** `line`, as opposed to merely echoing the keystrokes.
 ///
-/// The program's own output is a row that is *exactly* the marker once the digits and
-/// trailing whitespace are ignored; the echo is never that, because it carries the
-/// prompt (`$ echo MARKER9` under `sh`, `>echo MARKER9` under `cmd.exe`).
+/// The discriminator is **the echo row's absence**: the program's own output is a row
+/// that contains a word from the command and does *not* contain `echo`/`printf` (the
+/// echo always carries one of those verbs, whatever the platform's prompt looks like).
 ///
-/// **This replaced a `count() >= 2` rule, and the replacement is the fix for a
-/// Windows-only red main** (this cycle's CI run, twice, and reproducible). Counting two
-/// occurrences assumed the echo always carries the whole marker - but ConPTY truncates
-/// the echoed command at the console width, and the job log showed `>echo SECOND30`
-/// for `echo SECOND301`. The count never reached two, so `type_and_wait` retried its
-/// write forty times; each retry appended another echo/output pair, two commands
-/// flooded past `SCREEN_MAX_ROWS` (200), and the rolling screen then legitimately
-/// trimmed `FIRST301` - so a *different* row's assertion about the earlier output
-/// failed. One wrong predicate, three symptoms.
+/// # Why not count occurrences
 ///
-/// The trailing `\r` is real: a pty turns the shell's `\n` into `\r\n`, and a row
-/// carries it. Comparising on the trimmed row handles both platforms without caring
-/// which newline convention arrived.
+/// This replaced a `count() >= 2` rule, and the replacement fixed a **reproducibly red
+/// `windows-latest`** (two CI runs, then three more while getting this right). Counting
+/// assumed the echo always spells the marker out; ConPTY truncates the echoed command at
+/// the console width, so the count never reached two and `type_and_wait` retried its
+/// write **forty times**. Each retry appended another echo/output pair, two commands
+/// flooded past `SCREEN_MAX_ROWS` (200), and the rolling screen *legitimately* trimmed
+/// the earlier output - so a different row failed its retention assertion. One wrong
+/// predicate, three symptoms, and the suite went from 0.7 s to 20 s with nothing red on
+/// Linux to show for it.
+///
+/// # Why not match a token exactly
+///
+/// Tried, and wrong twice: `printf '\033[31mRED301...'` tokenizes to escape debris, and
+/// a row is `RED301 plain301` - two words from one command - so no single token equals a
+/// row. The verbs are the only stable thing across `sh` and `cmd.exe`, so they are what
+/// this keys on.
 fn ran_line(panel: &str, line: &str) -> bool {
-    // The marker appears as its own row, with no prompt attached. `ends_with` rather
-    // than `==` because a long marker can be followed by padding cells.
+    // A word worth looking for: alphanumeric, not a shell verb, not a flag, and long
+    // enough that a prompt character cannot be mistaken for it.
+    let words: Vec<&str> = line
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|word| {
+            word.len() >= 3
+                && !matches!(*word, "echo" | "printf" | "exit" | "true" | "false" | "033")
+        })
+        .collect();
+    if words.is_empty() {
+        // Nothing nameable (a bare `exit`): accept any non-echo row, which still beats
+        // counting.
+        return panel.lines().any(|row| {
+            !row.trim().is_empty() && !row.contains("echo ") && !row.contains("printf")
+        });
+    }
     panel.lines().any(|row| {
         let row = row.trim();
-        row == line
-            || (row.ends_with(line)
-                // ...but never when the row is the echoed command, which has the
-                // prompt in front of it.
-                && !row.contains(&format!("echo {line}")))
+        // The output row: carries a word from the command, and is not the echo.
+        !row.contains("echo ") && !row.contains("printf") && words.iter().any(|w| row.contains(w))
     })
 }
 
@@ -332,10 +348,19 @@ fn escape_sequences_from_the_program_never_reach_the_row() {
     // Wait for the *output*, not the echoed command: the echo necessarily
     // contains the escape as typed text, and asserting on it would say nothing
     // about what the program emitted.
+    // Wait for a row that carries **both** words the program printed. The old wait
+    // counted two occurrences of `RED301`, which assumed the echo spelled it out; the
+    // program's actual output is one row, `RED301 plain301`, so the count never reached
+    // two and this loop span its full 80 attempts (4 s) on every run. Measured against
+    // the real widget text rather than assumed - the echo row reads
+    // `$ printf '\033[31mRED301\033[0m plain301\n'`, which contains `printf`.
     let mut panel = String::new();
     for _attempt in 0..80 {
         panel = panel_lines(&handle);
-        if panel.matches("RED301").count() >= 2 {
+        let drew_output = panel.lines().any(|row| {
+            row.contains("RED301") && row.contains("plain301") && !row.contains("printf")
+        });
+        if drew_output {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
