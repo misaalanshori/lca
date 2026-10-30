@@ -51,3 +51,6 @@ mod engine_robustness;
 // Gh #579: the crate-wide cache-policy guard that #323's engine-only version missed.
 #[path = "579-one-cache-policy-crate-wide.rs"]
 mod one_cache_policy_crate_wide;
+// Gh #326: a narrow rail keeps its close button, and the ladder promises no Sixel.
+#[path = "326-tabs-keep-close-and-no-sixel-claim.rs"]
+mod tabs_keep_close_and_no_sixel_claim;

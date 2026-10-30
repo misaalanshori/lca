@@ -16,6 +16,13 @@ use crate::engine::text::{truncate_to_width, visible_width};
 #[path = "tabs_tests.rs"]
 mod tests;
 
+/// The close glyph and the space that precedes it (gh #326). A named constant
+/// because two places need it and they must agree: [`TabsWidget::flags`] paints
+/// it, and [`TabsWidget::vertical_cell`] has to know its width *before* it
+/// decides how much title fits. Written out twice, the reserve and the paint can
+/// disagree - which is the drift this issue is made of.
+const CLOSE_TEXT: &str = " ×";
+
 /// The tab layout direction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TabOrientation {
@@ -83,11 +90,39 @@ pub struct TabsWidget {
     pub hovered: Option<usize>,
 }
 
+/// The cell the `×` occupies in a **painted** rail row (gh #326).
+///
+/// Measured by walking the row to the glyph rather than by a rule like "the last
+/// column", because that rule is what made the region a phantom: the last column
+/// was a title character or the ellipsis whenever the glyph had been truncated
+/// away. `None` when the row draws no glyph, so a host can never dispatch a close
+/// for a button the user cannot see.
+fn rendered_close_region(row: &str, closable: bool) -> Option<(usize, usize)> {
+    if !closable {
+        return None;
+    }
+    // The column is the visible width of the prefix, **not** a per-character
+    // sum: `truncate_to_width` wraps the ellipsis in `\x1b[0m` resets, and those
+    // are zero cells on screen but four bytes in the string. A per-character walk
+    // counts each one and lands the region three cells past the glyph - the same
+    // drift, reintroduced in the fix for it.
+    let bytes_before = row.find('×')?;
+    let col = visible_width(&row[..bytes_before]);
+    Some((col, col + 1))
+}
+
 /// One laid-out tab cell: where it paints and where its `×` sits.
+///
+/// `text` is the **painted** row (gh #326). It lives here so `render`, the hit
+/// test and the spans all read one string: the vertical rail used to rebuild its
+/// row from `self.items` inside `render` while the hit test measured a separately
+/// truncated copy, and the two drifting apart is exactly how a click on the `×`
+/// stopped closing the tab.
 struct TabCell {
     row: usize,
     start: usize,
     end: usize,
+    text: String,
     close: Option<(usize, usize)>,
 }
 
@@ -96,8 +131,6 @@ struct TabCell {
 /// never disagree.
 struct TabLayout {
     tabs: Vec<TabCell>,
-    /// The painted (possibly truncated) titles, one per tab.
-    titles: Vec<String>,
     add: Option<(usize, usize, usize)>,
     rows: usize,
 }
@@ -130,9 +163,84 @@ impl TabsWidget {
             flags.push_str(&format!(" ({badge})"));
         }
         if item.closable {
-            flags.push_str(" ×");
+            flags.push_str(CLOSE_TEXT);
         }
         flags
+    }
+
+    /// One vertical rail row and its `×` region (gh #326).
+    ///
+    /// **Only the title is flexible.** The old code formatted the whole row -
+    /// marker, index, title, flags and `×` - and truncated *that*, so past a
+    /// certain width the `×` was cut away and the host still reported a close
+    /// region on the last remaining column. The user saw no close button, and a
+    /// click on a title character closed the tab.
+    ///
+    /// The priority order, outermost-in, is what this encodes:
+    ///
+    /// 1. **the `×`** - a close affordance, so it is reserved first and never
+    ///    truncated while there is a column to put it in;
+    /// 2. **the marker + `[n] `** - the index is how a digit-jump names the tab;
+    /// 3. **the flags** - state the title cannot carry, dropped whole rather
+    ///    than clipped (`(42k)` cut to `(4` is noise);
+    /// 4. **the title** - the only part that shrinks, and the first to be
+    ///    reduced to a bare `…`.
+    ///
+    /// Returning the region *with* the string is the point: the caller cannot
+    /// compute the glyph's column by any other rule without re-deriving the
+    /// truncation, which is how the two drifted apart.
+    fn vertical_cell(
+        item: &TabItem,
+        index: usize,
+        active: bool,
+        width: usize,
+    ) -> (String, Option<(usize, usize)>) {
+        let marker = if active { "▶ " } else { "  " };
+        let head = format!("{marker}[{}] ", index + 1);
+        // The state flags **without** the close glyph: `flags` paints the glyph as
+        // its last element, and the reservation below needs the two separately.
+        let state = {
+            let mut item_no_close = item.clone();
+            item_no_close.closable = false;
+            Self::flags(&item_no_close, active)
+        };
+        let close_text = if item.closable { CLOSE_TEXT } else { "" };
+        let head_width = visible_width(&head);
+        let close_width = visible_width(close_text);
+        let state_width = visible_width(&state);
+
+        // **The `×` is reserved before everything else**, including the index
+        // head, because it is the only thing on this row the user can act on.
+        // `width >= head + ×` is the normal case; below that the rail is too
+        // narrow to name the tab *and* close it, and the brief's own answer
+        // applies - the glyph alone, right-aligned where a close button belongs,
+        // rather than a row that ends in `…` with a phantom region behind it.
+        if width < head_width + close_width {
+            if width < close_width {
+                return (truncate_to_width(&head, width, "…", false), None);
+            }
+            let mut out = " ".repeat(width - close_width);
+            out.push_str(close_text.trim_start());
+            let region = rendered_close_region(&out, item.closable);
+            return (out, region);
+        }
+        let mut room = width - head_width - close_width;
+
+        // State flags next, dropped **whole** rather than clipped: a lone `*` or a
+        // truncated `(4` reads as state that is not there. The dirty/generating
+        // markers are single cells, so they survive longer than a badge, which is
+        // the right order - a badge repeats a number the host also shows.
+        let state_text = if state_width <= room {
+            state
+        } else {
+            String::new()
+        };
+        room -= visible_width(&state_text);
+
+        let title = truncate_to_width(&item.title, room, "…", false);
+        let out = format!("{head}{title}{state_text}{close_text}");
+        let region = rendered_close_region(&out, item.closable);
+        (out, region)
     }
 
     /// Lay out the widget at `width` (gh #208): titles shrink with `…`
@@ -223,6 +331,7 @@ impl TabsWidget {
                     row: 0,
                     start,
                     end,
+                    text: cell,
                     close,
                 });
                 col = end + 2;
@@ -231,27 +340,16 @@ impl TabsWidget {
                 let start = col;
                 (0, start, start + 3)
             });
-            TabLayout {
-                tabs,
-                titles,
-                add,
-                rows: 1,
-            }
+            TabLayout { tabs, add, rows: 1 }
         } else {
             let mut tabs = Vec::with_capacity(self.items.len());
             for (index, item) in self.items.iter().enumerate() {
-                let flags = Self::flags(item, Some(index) == active);
-                let marker = if Some(index) == active { "▶ " } else { "  " };
-                let mut cell = format!("{marker}[{}] {}{flags}", index + 1, item.title);
-                cell = truncate_to_width(&cell, width, "…", false);
-                let close = item.closable.then(|| {
-                    let end = visible_width(&cell);
-                    (end.saturating_sub(1), end)
-                });
+                let (cell, close) = Self::vertical_cell(item, index, Some(index) == active, width);
                 tabs.push(TabCell {
                     row: index,
                     start: 0,
                     end: visible_width(&cell),
+                    text: cell,
                     close,
                 });
             }
@@ -261,7 +359,6 @@ impl TabsWidget {
             });
             TabLayout {
                 tabs,
-                titles,
                 add,
                 rows: self.items.len() + usize::from(self.show_add_button),
             }
@@ -278,11 +375,7 @@ impl TabsWidget {
                 if index > 0 {
                     row.push_str("  ");
                 }
-                let item = &self.items[index];
-                let flags = Self::flags(item, Some(index) == self.active());
-                let title = &layout.titles[index];
-                row.push_str(&format!("[ {}. {title}{flags} ]", index + 1));
-                let _ = cell;
+                row.push_str(&cell.text);
             }
             if layout.add.is_some() {
                 if !self.items.is_empty() {
@@ -296,19 +389,9 @@ impl TabsWidget {
             vec![row]
         } else {
             let mut rows = Vec::with_capacity(layout.rows);
-            for (index, cell) in layout.tabs.iter().enumerate() {
-                let item = &self.items[index];
-                let flags = Self::flags(item, Some(index) == self.active());
-                let marker = if Some(index) == self.active() {
-                    "▶ "
-                } else {
-                    "  "
-                };
-                let mut row = format!("{marker}[{}] {}{flags}", index + 1, item.title);
-                row = truncate_to_width(&row, width as usize, "…", false);
-                rows.push(row);
-                let _ = cell;
-            }
+            // The painted row comes from the layout, which is also what the hit
+            // test measures (gh #326): rebuilding it here is how the two drifted.
+            rows.extend(layout.tabs.iter().map(|cell| cell.text.clone()));
             if layout.add.is_some() {
                 rows.push("[+]".to_string());
             }
@@ -395,6 +478,10 @@ impl TabsWidget {
                     None
                 }
             }
+            // Tabs are numbered from 1, so `0` names no tab and must be a no-op
+            // (gh #326). Without the guard, `0.saturating_sub(1) == 0` silently
+            // made it a jump to the first tab.
+            "0" => None,
             digit if digit.len() == 1 && digit.starts_with(|c: char| c.is_ascii_digit()) => {
                 let index = digit.parse::<usize>().unwrap_or(0).saturating_sub(1);
                 if index < self.items.len() {

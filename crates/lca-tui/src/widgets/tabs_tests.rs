@@ -285,3 +285,276 @@ fn vertical_hits_by_row_and_empty_is_quiet() {
     assert_eq!(empty.handle_key("right"), None);
     assert_eq!(empty.tab_at(0, 0, 80), None);
 }
+
+// Verifies: gh #326 - the close affordance survives a narrow rail.
+//
+// The old vertical layout formatted the whole row (`▶ [1] title * ×`), truncated
+// **that** to the width, and then placed the close region on the truncated
+// string's last column. Past a certain width the `×` itself was cut, so the user
+// saw no close button and the host still reported one - a phantom region on the
+// last column, which is why clicks "missed" rather than doing nothing.
+//
+// The fix is an ordering one: reserve the `×` first, then truncate the title into
+// what remains. Measured before the fix at width 10: the row read
+// `▶ [1] ses…`, with no `×` at all.
+#[test]
+fn a_narrow_vertical_tab_keeps_its_close_button() {
+    let tabs = vertical_rail(3, true);
+    for width in [40u16, 24, 16, 14, 12, 10, 8, 6, 4] {
+        let rows = tabs.render(width);
+        for (index, row) in rows.iter().take(3).enumerate() {
+            assert!(
+                row.contains('×'),
+                "tab {index} keeps its close glyph at width {width}: {row:?}"
+            );
+            assert!(
+                visible_width(row) <= width as usize,
+                "tab {index} still fits its width {width}: {row:?}"
+            );
+        }
+    }
+}
+
+// Verifies: gh #326 - the close hit region follows the rendered glyph.
+//
+// The ordering defect's second half: `tab_at` reported `Close(n)` at the last
+// column of the *truncated* cell, which after the glyph was cut was the `…` or a
+// title character. So a click on the ellipsis closed the tab, and a click on the
+// `×` (when it did fit) sometimes did not. The region must be the column the `×`
+// actually landed on.
+#[test]
+fn the_close_region_is_the_column_the_glyph_landed_on() {
+    let tabs = vertical_rail(3, true);
+    for width in [40u16, 24, 16, 12, 10, 8, 6] {
+        let rows = tabs.render(width);
+        for (row_index, row) in rows.iter().take(3).enumerate() {
+            let glyph_col = char_column_of(row, '×')
+                .unwrap_or_else(|| panic!("a `×` at width {width}: {row:?}"));
+            assert_eq!(
+                tabs.tab_at(glyph_col as u16, row_index as u16, width),
+                Some(TabHit::Close(row_index)),
+                "the `×` column itself closes tab {row_index} at width {width}: {row:?}"
+            );
+            // And the region is exactly the glyph: the column before it is tab body.
+            if glyph_col > 0 {
+                assert_eq!(
+                    tabs.tab_at((glyph_col - 1) as u16, row_index as u16, width),
+                    Some(TabHit::Tab(row_index)),
+                    "the cell before the `×` is the tab body at width {width}: {row:?}"
+                );
+            }
+        }
+    }
+}
+
+// Verifies: gh #326 - flags are dropped before the close glyph.
+//
+// The priority order for a narrowing rail, from the outside in: the `×` is an
+// affordance and never goes; the flags carry state the title cannot; the title is
+// the only thing that can shrink. So a rail one cell too narrow loses a title
+// character, and one far too narrow loses its flags, but the `×` stays until
+// there is room for nothing but it.
+#[test]
+fn flags_are_dropped_before_the_close_glyph() {
+    let mut tabs = vertical_rail(2, true);
+    tabs.items[0].badge = Some("42k".to_string());
+    tabs.items[0].is_dirty = true;
+
+    let wide = tabs.render(40);
+    assert!(wide[0].contains("(42k)"), "the badge fits: {:?}", wide[0]);
+    assert!(wide[0].contains('●'), "the dirty flag fits: {:?}", wide[0]);
+    assert!(wide[0].contains('×'), "and the close glyph: {:?}", wide[0]);
+
+    // Squeeze until the badge can no longer fit: the `×` outlives it.
+    for width in (6u16..40).rev() {
+        let row = &tabs.render(width)[0];
+        if !row.contains("(42k)") {
+            assert!(
+                row.contains('×'),
+                "the close glyph outlives the badge at width {width}: {row:?}"
+            );
+            break;
+        }
+    }
+    // At the narrowest widths the flags are gone and the `×` remains.
+    let narrow = tabs.render(4);
+    assert!(
+        narrow[0].contains('×'),
+        "the close glyph is the last thing to go: {:?}",
+        narrow[0]
+    );
+    assert!(
+        !narrow[0].contains('●') && !narrow[0].contains("(42k)"),
+        "the flags went first: {:?}",
+        narrow[0]
+    );
+}
+
+// Verifies: gh #326 - a tab with no room for a title still renders and closes.
+//
+// The degenerate case the old layout reached by accident: it printed `▶…` and
+// claimed the last column was the close button. It must stay *honest* - the `×`
+// alone is the right answer, and clicking it must close the tab.
+#[test]
+fn a_tab_too_narrow_for_a_title_still_renders_and_closes() {
+    let tabs = vertical_rail(2, true);
+    for width in [1u16, 2, 3, 4, 5] {
+        let rows = tabs.render(width);
+        assert_eq!(
+            rows.len(),
+            3,
+            "still one row per tab plus add at width {width}"
+        );
+        for (row_index, row) in rows.iter().take(2).enumerate() {
+            assert!(
+                !row.is_empty(),
+                "tab {row_index} draws something honest at width {width}"
+            );
+            assert!(
+                visible_width(row) <= width as usize,
+                "tab {row_index} fits at width {width}: {row:?}"
+            );
+        }
+        // Wherever the glyph landed it must be hittable; and at these widths the
+        // glyph is the only thing that can be there.
+        let row = &rows[0];
+        if let Some(col) = char_column_of(row, '×') {
+            assert_eq!(
+                tabs.tab_at(col as u16, 0, width),
+                Some(TabHit::Close(0)),
+                "the `×` is hittable at width {width}: {row:?}"
+            );
+        } else {
+            // No room even for the glyph: the click must not claim a phantom close.
+            let hit = tabs.tab_at((visible_width(row).saturating_sub(1)) as u16, 0, width);
+            assert_ne!(
+                hit,
+                Some(TabHit::Close(0)),
+                "no `×` drawn means no close region at width {width}: {row:?}"
+            );
+        }
+    }
+}
+
+// Verifies: gh #326 - `0` is a no-op, not a jump to the first tab.
+//
+// `0.saturating_sub(1) == 0` meant the digit that should select nothing selected
+// tab 1. Tabs are numbered from 1, so `0` names no tab; the guard is the digit
+// itself.
+#[test]
+fn the_zero_digit_selects_no_tab() {
+    for orientation in [TabOrientation::Horizontal, TabOrientation::Vertical] {
+        let mut tabs = vertical_rail(4, true);
+        tabs.orientation = orientation;
+        tabs.active_index = 2;
+        assert_eq!(
+            tabs.handle_key("0"),
+            None,
+            "{orientation:?}: `0` emits no event"
+        );
+        assert_eq!(
+            tabs.active_index, 2,
+            "{orientation:?}: `0` does not move the active tab"
+        );
+        // And the digits that do name tabs still work.
+        assert_eq!(
+            tabs.handle_key("1"),
+            Some(TabEvent::Select(0)),
+            "{orientation:?}: `1` still selects the first tab"
+        );
+        assert_eq!(
+            tabs.handle_key("0"),
+            None,
+            "{orientation:?}: `0` stays quiet after a real jump"
+        );
+        assert_eq!(tabs.active_index, 0, "{orientation:?}: still on tab 1");
+    }
+}
+
+/// A vertical rail of `count` closable tabs named `session-N`.
+fn vertical_rail(count: usize, add: bool) -> TabsWidget {
+    TabsWidget {
+        orientation: TabOrientation::Vertical,
+        items: (1..=count)
+            .map(|n| TabItem {
+                id: format!("t{n}"),
+                title: format!("session-{n}"),
+                badge: None,
+                is_generating: false,
+                is_dirty: false,
+                closable: true,
+            })
+            .collect(),
+        active_index: 0,
+        show_add_button: add,
+        hovered: None,
+    }
+}
+
+/// The cell column where `glyph` is painted in `row`, in the widget's own
+/// coordinate space.
+///
+/// Measured as the visible width of the **prefix** up to the glyph, not by
+/// walking characters: `truncate_to_width` emits `\x1b[0m` resets around the
+/// ellipsis, and a per-character walk counts each of those four bytes as one
+/// cell, so it reports a column three cells past the truth. (My first version did
+/// exactly that, and the row "failed" at a column the glyph had never occupied.)
+fn char_column_of(row: &str, glyph: char) -> Option<usize> {
+    let bytes_before = row.find(glyph)?;
+    Some(visible_width(&row[..bytes_before]))
+}
+
+// Verifies: gh #326 - a non-closable rail row has no close region at all.
+//
+// The old layout already guarded this (`item.closable.then(...)`), so it is a
+// **regression** row rather than a red-before one: a non-closable tab paints no
+// `×`, and the region must stay absent rather than falling back to "the last
+// column", which is what a width-derived rule would do.
+#[test]
+fn a_rail_row_without_a_close_glyph_has_no_close_region() {
+    let mut tabs = vertical_rail(2, true);
+    tabs.items[0].closable = false;
+    for width in [40u16, 20, 12, 8, 4, 2] {
+        let row = &tabs.render(width)[0];
+        assert!(
+            !row.contains('×'),
+            "a non-closable tab paints no glyph at width {width}: {row:?}"
+        );
+        let last = visible_width(row).saturating_sub(1) as u16;
+        assert_eq!(
+            tabs.tab_at(last, 0, width),
+            Some(TabHit::Tab(0)),
+            "the last column is the tab body, not a phantom close, at width {width}: {row:?}"
+        );
+    }
+    // The closable sibling still answers, so this is not the region being off.
+    let sibling = &tabs.render(40)[1];
+    let col = char_column_of(sibling, '×').expect("tab 1 is closable");
+    assert_eq!(tabs.tab_at(col as u16, 1, 40), Some(TabHit::Close(1)));
+}
+
+// Verifies: gh #326 - the region is measured by finding the glyph, not by
+// taking the row's last column.
+//
+// This is the row that separates the two rules. After the ordering fix the glyph
+// *is* always painted last, so the two rules agree for every row the widget
+// produces today - which is exactly why the derivation is pinned here, at the
+// function that owns it, instead of only through `tab_at`. A future change that
+// paints anything after the `×` (a badge, a modified marker) would silently make
+// "the last column" wrong again, and this row is what notices.
+#[test]
+fn the_region_is_measured_by_finding_the_glyph_not_the_row_end() {
+    // A row whose glyph is followed by more cells: the width-derived rule reports
+    // the trailing cells' column, the glyph-derived rule reports the glyph's.
+    // `▶ [1] se ` is 9 cells, so the `×` owns cell 9.
+    let observed = rendered_close_region("▶ [1] se × ··", true);
+    assert_eq!(
+        observed,
+        Some((9, 10)),
+        "the region is the glyph's own cell, wherever it sits: {observed:?}"
+    );
+    // No glyph painted, nothing to close - even though the row has a last column.
+    assert_eq!(rendered_close_region("▶ [1] session", true), None);
+    // And a non-closable row never has one, whatever it paints.
+    assert_eq!(rendered_close_region("▶ [1] se ×", false), None);
+}

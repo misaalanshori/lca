@@ -18,7 +18,17 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
-- **The Mermaid parse cache no longer evicts in arbitrary hash order** (gh #579). #325 gave
+- **A narrow tab rail keeps its close button, and `0` no longer jumps to tab 1** (gh #326).
+  The vertical `TabsWidget` formatted the whole row — marker, index, title, flags and the
+  `×` — and truncated *that*, so past a certain width the glyph was cut away while the
+  click region still sat on the last surviving column: the user saw no close button, and
+  clicking a letter of the title closed the tab. Truncation now applies to the title only,
+  with the `×` reserved first, and the region is found by locating the painted glyph rather
+  than by taking the row's last column. The priority order when a rail narrows is `×`, then
+  the marker/index, then whole flags, then the title — a rail one cell too narrow loses a
+  title character, and a very narrow one shows the `×` alone. `0` is now a no-op instead of
+  selecting the first tab (`0.saturating_sub(1)` made it one).
+- **The mermaid parse cache no longer evicts in arbitrary hash order** (gh #579). #325 gave
   it `cache.keys().next()`, and `HashMap` iteration order is hash order, so the victim had
   no relation to recency: a diagram **actively on screen** could be evicted by an unrelated
   insert and re-parsed on the next frame. Measured on the pre-fix build — **37 wasted
