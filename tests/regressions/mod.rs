@@ -60,3 +60,6 @@ mod mcp_json_write_atomic_and_owner_only;
 // Gh #262: each resource flag names its own expectation in a failure message.
 #[path = "262-per-flag-resource-copy.rs"]
 mod per_flag_resource_copy;
+// Gh #268: RPC honours `queue.follow_up_mode`, and the teardown is awaited not bridged.
+#[path = "268-follow-up-mode-and-async-teardown.rs"]
+mod follow_up_mode_and_async_teardown;

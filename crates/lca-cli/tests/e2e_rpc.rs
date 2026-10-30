@@ -694,3 +694,169 @@ fn a_prompt_with_stdin_closed_immediately_still_runs() {
         let _ = std::fs::remove_dir_all(&box_.root);
     }
 }
+
+// ---------------------------------------------------------------------------
+// gh #268: RPC honours `queue.follow_up_mode`.
+//
+// RPC was the third surface to owe this ordering rule and the only one that did
+// not pay it: TUI (`tui/commands.rs`) and `lca-ui`'s queue both branch on
+// `QueueMode`, while `rpc.rs` drained its `follow_ups` one at a time
+// unconditionally. So an embedder driving LCA over RPC saw different semantics
+// from the same session in a terminal, and nothing in the suite noticed because
+// every existing row queues exactly one follow-up.
+//
+// **The rows assert what the provider received**, not the queue's internals: the
+// mock records each request it is asked to serve, so "serial" and "joined" are
+// distinguishable from the outside. A broken drain that dropped a message would
+// also fail these, which is the point.
+// ---------------------------------------------------------------------------
+
+/// Write `queue.follow_up_mode` into the sandbox's user config.
+fn set_follow_up_mode(box_: &common::Sandbox, mode: &str) {
+    let dir = box_.state_dir();
+    std::fs::create_dir_all(&dir).expect("mkdir state");
+    let path = dir.join("config.toml");
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut text = existing;
+    if !text.contains("queue.follow_up_mode") {
+        text.push_str(&format!("\nqueue.follow_up_mode = \"{mode}\"\n"));
+    }
+    std::fs::write(&path, text).expect("write config");
+}
+
+/// The **newest** user message of each request the provider served, in order.
+///
+/// The transcript is cumulative, so reading every user message would report
+/// `one|two|three` for the third request whether the queue joined them or ran
+/// them serially - a joined drain and a serial one would look identical. Only the
+/// last user message says what the queue handed over for *that* turn.
+fn served_prompts(mock: &common::Mock) -> Vec<String> {
+    mock.bodies()
+        .iter()
+        .filter_map(|body| {
+            let parsed: serde_json::Value = serde_json::from_str(body).ok()?;
+            let messages = parsed["messages"].as_array()?;
+            messages
+                .iter()
+                .filter(|m| m["role"] == "user")
+                .filter_map(|m| m["content"].as_str())
+                .next_back()
+                .map(str::to_string)
+        })
+        .collect()
+}
+
+// Verifies: gh #268 - `one-at-a-time` (the default) delivers two queued
+// follow-ups as **two separate turns**, in the order they were queued.
+//
+// This is the row that passes today, kept as the control: it proves the new
+// `all` row below is measuring the mode and not some unrelated change in the
+// drain.
+#[test]
+fn rpc_one_at_a_time_delivers_queued_follow_ups_serially() {
+    let runtime = rt();
+    // Same shape as the `all` row - slow first turn, both follow-ups inside it -
+    // so the pair differs in exactly one variable: the configured mode.
+    let mock = runtime.block_on(start_mock(vec![
+        Reply::SseAfter(1200, sse_text("first done")),
+        Reply::Sse(sse_text("second")),
+        Reply::Sse(sse_text("third")),
+    ]));
+    let box_ = sandbox("rpc-268-one-at-a-time");
+    set_follow_up_mode(&box_, "one-at-a-time");
+    let output = drive_interleaved(
+        &box_,
+        &mock,
+        &[
+            (ZERO, cmd("p1", "prompt", r#""message":"one""#)),
+            (
+                std::time::Duration::from_millis(150),
+                cmd("f1", "follow_up", r#""message":"two""#),
+            ),
+            (
+                std::time::Duration::from_millis(150),
+                cmd("f2", "follow_up", r#""message":"three""#),
+            ),
+        ],
+    );
+    let prompts = served_prompts(&mock);
+    let turns = json_lines(&output)
+        .iter()
+        .filter(|l| l["type"] == "turn-end")
+        .count();
+    assert_eq!(
+        turns, 3,
+        "one-at-a-time runs one turn per queued message: {prompts:?}"
+    );
+    // Serial: each request carries its own message, never a joined pair.
+    assert!(
+        prompts.iter().any(|p| p.contains("two")),
+        "the second message reached the provider on its own: {prompts:?}"
+    );
+    assert!(
+        prompts.iter().any(|p| p.contains("three")),
+        "and the third too: {prompts:?}"
+    );
+    assert!(
+        !prompts
+            .iter()
+            .any(|p| p.contains("two") && p.contains("three")),
+        "never joined, because one-at-a-time flushes one per turn: {prompts:?}"
+    );
+    let _ = std::fs::remove_dir_all(&box_.root);
+}
+
+// Verifies: gh #268 - `all` **joins** two queued follow-ups into one turn, the
+// behaviour TUI and `lca-ui`'s queue already implement (`texts.join("\n\n")`).
+//
+// This is the row that fails on pre-fix code: RPC ignored the setting and always
+// drained one message per turn, so an embedder asking for `all` got serial turns.
+#[test]
+fn rpc_all_joins_queued_follow_ups_into_one_turn() {
+    let runtime = rt();
+    // The first turn is deliberately slow (1200 ms) and both follow-ups are
+    // written well inside it. That matters: a follow-up written *after* the run
+    // ends starts a run of its own, so only messages still queued at a run end can
+    // be joined. With a 600 ms turn and 400 ms gaps, the second write landed after
+    // `turn-end` and the row measured serial delivery for a reason that had
+    // nothing to do with the mode.
+    let mock = runtime.block_on(start_mock(vec![
+        Reply::SseAfter(1200, sse_text("first done")),
+        Reply::Sse(sse_text("joined reply")),
+    ]));
+    let box_ = sandbox("rpc-268-all");
+    set_follow_up_mode(&box_, "all");
+    let output = drive_interleaved(
+        &box_,
+        &mock,
+        &[
+            (ZERO, cmd("p1", "prompt", r#""message":"one""#)),
+            (
+                std::time::Duration::from_millis(150),
+                cmd("f1", "follow_up", r#""message":"two""#),
+            ),
+            (
+                std::time::Duration::from_millis(150),
+                cmd("f2", "follow_up", r#""message":"three""#),
+            ),
+        ],
+    );
+    let prompts = served_prompts(&mock);
+    let turns = json_lines(&output)
+        .iter()
+        .filter(|l| l["type"] == "turn-end")
+        .count();
+    assert_eq!(
+        turns, 2,
+        "`all` drains both queued follow-ups in one turn, so two turns total: \
+         {prompts:?}"
+    );
+    assert!(
+        prompts
+            .iter()
+            .any(|p| p.contains("two") && p.contains("three")),
+        "and the provider saw them joined, TUI's `texts.join(\"\\n\\n\")` shape: \
+         {prompts:?}"
+    );
+    let _ = std::fs::remove_dir_all(&box_.root);
+}

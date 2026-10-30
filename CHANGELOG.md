@@ -18,6 +18,17 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **RPC honours `queue.follow_up_mode`, and the session-close teardown is awaited** (gh #268).
+  `--mode rpc` drained queued follow-ups one at a time unconditionally, so an embedder got
+  serial turns while the same session in a terminal joined them under `all` — the third
+  surface to owe a documented ordering rule and the only one that did not pay it. The mode
+  is now resolved once where the config is loaded and both surfaces branch on it. Separately,
+  `headless` and the RPC loop called `drive_blocking(async { … on_session_close().await })`
+  from inside an `async fn`: an OS thread plus a nested single-thread runtime inside a running
+  async context, for a hook that is already `async fn`. Both `.await` it now — same
+  completion guarantee, no thread — and a guard keeps the idiom out of any async call site,
+  where the 16 remaining `drive_blocking` uses are all in sync functions on the interface's
+  command thread and belong there.
 - **A bad `--theme` path no longer complains about skill files** (gh #262). `--skill`
   and `--theme` shared one validator whose failure sentence was hardcoded to
   `not a skill file or directory`, so `lca --theme ./my-theme.json` told the user their

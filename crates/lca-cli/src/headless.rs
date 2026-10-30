@@ -359,6 +359,15 @@ pub(crate) struct Setup {
     /// The MCP session manager (gh #418 Phase E): the turn waits on its
     /// startup connections, bounded, before the first request.
     pub(crate) mcp_manager: std::sync::Arc<lca_mcp::manager::McpManager>,
+    /// `queue.follow_up_mode`, resolved **once** where the config is loaded
+    /// (gh #268).
+    ///
+    /// The setting is honoured by TUI (`tui/commands.rs`), by `lca-ui`'s queue,
+    /// and now by the RPC loop - which used to hardcode one-at-a-time and so
+    /// diverged from the terminal for the same session. Resolving it here rather
+    /// than at each consumer means the parse and its default live in one place,
+    /// so a fourth surface cannot invent a third answer.
+    pub(crate) follow_up_mode: lca_protocol::QueueMode,
     // Held for the run: dropping it removes the session temp dir.
     pub(crate) _temp_guard: crate::SessionTempGuard,
     // Held for a volatile run: dropping it removes the temp store.
@@ -655,6 +664,12 @@ pub(crate) async fn setup(
     } else {
         None
     };
+    // gh #268: one parse of the documented setting, so every surface that drains a
+    // follow-up queue agrees. `unwrap_or_default()` matches TUI's
+    // `parse(...).unwrap_or_default()` exactly - an unknown value falls back to the
+    // documented default rather than inventing a third behaviour.
+    let follow_up_mode =
+        lca_protocol::QueueMode::parse(config.queue_follow_up_mode()).unwrap_or_default();
     Ok(Setup {
         store,
         session,
@@ -665,6 +680,7 @@ pub(crate) async fn setup(
         proposals,
         prompt_impl,
         mcp_manager,
+        follow_up_mode,
         _temp_guard: temp_guard,
         _volatile: volatile,
     })
@@ -711,6 +727,7 @@ pub async fn headless(
         proposals,
         mut prompt_impl,
         mcp_manager,
+        follow_up_mode: _,
         _temp_guard: _,
         _volatile: _,
     } = setup;
@@ -801,9 +818,15 @@ pub async fn headless(
         return exit::USAGE;
     };
     // `session-close`: the session is about to end (SRDD hook points).
-    lca_core::drive_blocking(async move {
-        close_registry.on_session_close().await;
-    });
+    //
+    // gh #268: `.await` in the surrounding async context, not
+    // `lca_core::drive_blocking`. `on_session_close` is already an `async fn`, so
+    // the blocking bridge bought nothing and cost a thread plus a nested
+    // single-thread Tokio runtime *inside a running async context* - a shape that
+    // can deadlock if the hook needs the runtime it is nested in. Awaiting keeps
+    // the guarantee the bridge was there for: the hook runs to completion before
+    // `store.close`, because the await is what drives it to the end.
+    close_registry.on_session_close().await;
     let _ = store.close(&session);
     let class = sink.error_class().map(str::to_string);
     if !json && !sink.plain.is_empty() {

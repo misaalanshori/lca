@@ -104,6 +104,13 @@ Commands (`id` optional, echoed on the response):
 | `cancel` | | `{}` (fires the turn's cancellation; a no-op when idle) |
 | `shutdown` | | `{}` (drains queued follow-ups first, then exits 0) |
 
+**Queued follow-ups drain per `queue.follow_up_mode`** (gh #268), the same rule the
+terminal interface follows: `one-at-a-time` (the default) submits one per turn end, and
+`all` hands every message still queued at a turn end over as **one joined submission**
+(joined with a blank line, exactly as `/settings`' row describes it). The setting is read
+once at startup from the user or project config, so an embedder sees the same ordering a
+user of the same session would, rather than a mode of RPC's own.
+
 Rejections (`success: false`): unknown commands, missing `message`,
 a `prompt` with no `streamingBehavior` while streaming, `images` in
 v1, prompts after `shutdown`, and malformed lines (`command:

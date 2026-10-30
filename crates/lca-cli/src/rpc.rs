@@ -94,6 +94,7 @@ pub async fn rpc(
         proposals,
         prompt_impl,
         mcp_manager,
+        follow_up_mode,
         _temp_guard: _,
         _volatile: _,
     } = setup;
@@ -518,7 +519,17 @@ pub async fn rpc(
                 // a shutdown drains them before exiting, so nothing
                 // accepted is silently dropped.
                 if !follow_ups.is_empty() {
-                    let next = follow_ups.remove(0);
+                    // gh #268: drain per `queue.follow_up_mode`, the same rule TUI
+                    // and `lca-ui`'s queue follow. `all` hands every queued message
+                    // over as one joined submission (TUI's `texts.join("\n\n")`),
+                    // so one turn answers them together; `one-at-a-time` yields them
+                    // serially, one per run end.
+                    let next = match follow_up_mode {
+                        lca_protocol::QueueMode::All => {
+                            std::mem::take(&mut follow_ups).join("\n\n")
+                        }
+                        lca_protocol::QueueMode::OneAtATime => follow_ups.remove(0),
+                    };
                     start_run!(next, Some(lca_protocol::SubmitMode::FollowUp));
                 } else if shutdown_after_run {
                     break;
@@ -529,16 +540,22 @@ pub async fn rpc(
     drop(event_tx);
     drop(response_tx);
     let _ = writer.await;
-    finish(store, &session, agent_config);
+    finish(store, &session, agent_config).await;
     exit::OK
 }
 
 /// Persist the session and run the close hooks (the one-shot path's
 /// ending, shared so shutdown cannot skip it).
-fn finish(store: SessionStore, session: &lca_session::Session, agent_config: AgentConfig) {
+///
+/// **`async` since gh #268.** It used to be a sync function that called
+/// `lca_core::drive_blocking(async { registry.on_session_close().await })` while
+/// being driven from `async fn rpc` - a thread plus a nested single-thread Tokio
+/// runtime inside a running async context, for a hook that is already `async fn`.
+/// Awaiting runs the same hook to the same completion without either, and the
+/// `store.close` after it still happens only once the teardown has finished,
+/// because an `.await` is what drives a future to the end.
+async fn finish(store: SessionStore, session: &lca_session::Session, agent_config: AgentConfig) {
     let close_registry = agent_config.extensions.clone();
-    lca_core::drive_blocking(async move {
-        close_registry.on_session_close().await;
-    });
+    close_registry.on_session_close().await;
     let _ = store.close(session);
 }
