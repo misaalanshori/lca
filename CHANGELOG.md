@@ -18,6 +18,18 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **A `hooks`-only lifecycle hook can no longer be implemented by an extension that will
+  never receive it** (gh #578). `on-session-close` is exported by exactly one world,
+  `hooks`, and the host dispatches it only to a handle that declares `hooks` — so a body
+  written on a `ui`-, `tool`-, `provider`- or `command`-only extension was dead code. The
+  trait's six hook methods were **required**, which meant the compiler forced every
+  implementor to write them: the reference `ui` extension complied and shipped a dead
+  `on_session_close` under a comment explaining it was dead, and 19 other extensions
+  carried the same 114 no-op bodies. The methods now have default bodies, so an
+  undeclared world inherits the observation no-op the dispatch filter already meant, and
+  a NFR-24 guard fails if a native implementor defines a hook without declaring `hooks`.
+  The docs now say plainly that `on_session_close` is not guaranteed to run — a crash
+  skips it too — so the teardown that always runs belongs in the guest's `Drop`.
 - **The reference `ui` extension's panel no longer leaks a shell or erases its own
   output** (gh #301). Two defects in the example every extension author copies. First,
   `on_session_close` was a no-op and `PanelSession` had no `Drop`, so each panel session

@@ -190,23 +190,28 @@ fn a_frame_with_new_output_appends_and_shows_the_tail() {
     );
 }
 
-// Verifies: `on_session_close` kills the child. Asserted against the engine's
-// handle table, not against a field the extension set, because a flag would pass
-// with the process still running.
+// Verifies (gh #578): the hook this extension used to implement is **not**
+// implemented, because it could never be called - and the trait no longer forces
+// one.
+//
+// This row replaces one that asserted `on_session_close` ended the session. That
+// assertion was true of a method the host never dispatched, which is precisely the
+// defect: a test that calls a dead hook directly proves the hook works and says
+// nothing about whether it is reachable. The honest row is that the extension's
+// declared worlds do not export it.
 #[test]
-fn on_session_close_ends_the_panel_session() {
-    let cap = sandbox("close");
-    let handle = ui_example::UiExample::new(cap.clone());
-    let _ = panel_lines(&handle);
-    let session = handle.panel_session().expect("session started");
-    assert!(handle_alive(&cap, session), "precondition: the pty is live");
-
-    // The dispatch future is a `Box::pin`ed ready future, so a test can await it
-    // without a runtime; `poll` once is enough and says so.
-    block_on(handle.on_session_close()).expect("session close");
-
-    assert!(!handle_alive(&cap, session), "the pty handle was released");
-    assert_eq!(handle.panel_session(), None, "and the extension forgot it");
+fn the_ui_extension_does_not_implement_a_hook_it_cannot_receive() {
+    let handle = ui_example::UiExample::new(sandbox("worlds"));
+    let worlds = handle.worlds();
+    assert_eq!(worlds, vec![lca_ext_abi::World::Ui], "declares ui only");
+    assert!(
+        !worlds.contains(&lca_ext_abi::World::Hooks),
+        "and therefore cannot receive any hook, `session-close` included"
+    );
+    // The inherited default is the observation no-op, so a host that did call it
+    // would get a clean answer rather than an error - the property that makes
+    // defaulting the methods safe.
+    block_on(handle.on_session_close()).expect("the default answers Ok");
 }
 
 // Verifies: `Drop` kills the child too - the abnormal path, where no session

@@ -286,34 +286,72 @@ pub mod dispatch {
         }
 
         /// `pre-turn`: observe.
-        fn on_pre_turn(&self) -> DispatchFuture<'static, Result<(), DispatchError>>;
+        ///
+        /// **The six `hooks` methods below have default bodies on purpose**
+        /// (gh #578). They are exported only by the `hooks` world
+        /// (`wit/world-hooks.wit`), and the host dispatches each one only to a
+        /// handle whose `worlds()` declares `Hooks`
+        /// (`ExtensionRegistry`'s per-hook filters). While they were *required*,
+        /// the compiler forced every implementor - including a `ui`-only handle
+        /// like the reference `ui-example` - to write a body the host could never
+        /// call. `ui-example` did exactly that and shipped a dead
+        /// `on_session_close` under a comment claiming it was "the correct half
+        /// of the contract", which is the trap: a required method reads as a live
+        /// obligation.
+        ///
+        /// Defaulted, an undeclared world simply inherits the observation no-op,
+        /// which is what the dispatch filter already means. A `hooks` implementor
+        /// overrides what it needs, exactly as the `gh #45` worlds below already
+        /// work.
+        fn on_pre_turn(&self) -> DispatchFuture<'static, Result<(), DispatchError>> {
+            Box::pin(std::future::ready(Ok(())))
+        }
 
         /// `pre-tool-use`: allow, deny, or replace (FR-CORE-10).
+        ///
+        /// The default allows, matching the dispatch filter's answer for a handle
+        /// that never declared `hooks`.
         fn on_pre_tool_use<'a>(
             &'a self,
-            call: &'a ToolCall,
-        ) -> DispatchFuture<'a, Result<HookAction, DispatchError>>;
+            _call: &'a ToolCall,
+        ) -> DispatchFuture<'a, Result<HookAction, DispatchError>> {
+            Box::pin(std::future::ready(Ok(HookAction::Allow)))
+        }
 
         /// `post-tool-use`: observe.
         fn on_post_tool_use<'a>(
             &'a self,
-            observation: &'a PostToolObservation,
-        ) -> DispatchFuture<'a, Result<(), DispatchError>>;
+            _observation: &'a PostToolObservation,
+        ) -> DispatchFuture<'a, Result<(), DispatchError>> {
+            Box::pin(std::future::ready(Ok(())))
+        }
 
         /// `post-turn-end`: observe with `ok` or `error`.
         fn on_post_turn_end<'a>(
             &'a self,
-            status: &'a str,
-        ) -> DispatchFuture<'a, Result<(), DispatchError>>;
+            _status: &'a str,
+        ) -> DispatchFuture<'a, Result<(), DispatchError>> {
+            Box::pin(std::future::ready(Ok(())))
+        }
 
         /// `attention-required`: observe a reason.
         fn on_attention_required<'a>(
             &'a self,
-            reason: &'a str,
-        ) -> DispatchFuture<'a, Result<(), DispatchError>>;
+            _reason: &'a str,
+        ) -> DispatchFuture<'a, Result<(), DispatchError>> {
+            Box::pin(std::future::ready(Ok(())))
+        }
 
         /// `session-close`: observe.
-        fn on_session_close(&self) -> DispatchFuture<'static, Result<(), DispatchError>>;
+        ///
+        /// **Not guaranteed to run** (gh #578): it fires only for a handle that
+        /// declared `hooks`, and even then a crash or `kill -9` skips it. A guest
+        /// that owns a child process must still handle its own teardown; the
+        /// reference `ui-example` does it in `Drop`, which is the expectation
+        /// `docs/extension-authoring.md` states.
+        fn on_session_close(&self) -> DispatchFuture<'static, Result<(), DispatchError>> {
+            Box::pin(std::future::ready(Ok(())))
+        }
 
         /// `message_end` replacement text (`hooks-message` world, gh
         /// #45). `None` observes. The default implements nothing.

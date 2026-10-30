@@ -518,52 +518,23 @@ mod native {
             Ok(handle_event(region, input))
         }
 
-        fn on_pre_turn(&self) -> DispatchFuture<'static, Result<(), DispatchError>> {
-            Box::pin(std::future::ready(Ok(())))
-        }
-
-        fn on_pre_tool_use<'a>(
-            &'a self,
-            _call: &'a lca_protocol::ToolCall,
-        ) -> DispatchFuture<'a, Result<lca_protocol::HookAction, DispatchError>> {
-            Box::pin(std::future::ready(Ok(lca_protocol::HookAction::Allow)))
-        }
-
-        fn on_post_tool_use<'a>(
-            &'a self,
-            _observation: &'a lca_protocol::PostToolObservation,
-        ) -> DispatchFuture<'a, Result<(), DispatchError>> {
-            Box::pin(std::future::ready(Ok(())))
-        }
-
-        fn on_post_turn_end<'a>(
-            &'a self,
-            _status: &'a str,
-        ) -> DispatchFuture<'a, Result<(), DispatchError>> {
-            Box::pin(std::future::ready(Ok(())))
-        }
-
-        fn on_attention_required<'a>(
-            &'a self,
-            _reason: &'a str,
-        ) -> DispatchFuture<'a, Result<(), DispatchError>> {
-            Box::pin(std::future::ready(Ok(())))
-        }
-
-        /// Gh #301: the ordinary teardown net - the panel's child is a real
-        /// process, so closing the session ends it rather than leaving it to the
-        /// engine's own `Drop` whenever that finally runs.
-        ///
-        /// **The dispatch is not wired for a `ui`-only extension**, and that is a
-        /// host finding rather than something this crate can fix:
-        /// `ExtensionRegistry::on_session_close` filters on `World::Hooks`, so a
-        /// handle declaring only `World::Ui` is never called. The method is here
-        /// because it is the correct half of the contract and the interface the
-        /// ABI defines; `Drop` is what actually runs (see the report).
-        fn on_session_close(&self) -> DispatchFuture<'static, Result<(), DispatchError>> {
-            self.end_panel_session();
-            Box::pin(std::future::ready(Ok(())))
-        }
+        // Gh #578: none of the six `hooks` methods is implemented here, and their
+        // absence is now the *correct* shape rather than an omission.
+        //
+        // `on-session-close` is exported only by the `hooks` world
+        // (`wit/world-hooks.wit`); this manifest declares `worlds = ["ui"]`, and
+        // the host dispatches each hook only to a handle declaring `Hooks`. So a
+        // body here could never run - which is what the previous cycle's
+        // `on_session_close` was: dead code under a comment explaining that it was
+        // dead, inherited from the trait's required-method list. The methods are
+        // defaulted now (gh #578), so the compiler stops asking for them.
+        //
+        // **`Drop` is therefore the only teardown this extension has, and that is
+        // the honest arrangement**: `on_session_close` is not guaranteed to run
+        // even for a `hooks` extension (a crash or `kill -9` skips it), so a guest
+        // owning a child process must not rely on it. `Drop` on `UiExample` ends
+        // the panel session, and `end_panel_session` is idempotent, which is what
+        // makes a second net free if one is ever added.
     }
 }
 

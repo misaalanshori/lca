@@ -65,22 +65,28 @@ fn function_body(src: &str, name: &str) -> String {
     src[open..=end].to_string()
 }
 
-// Verifies: the abnormal path is covered. `on_session_close` is an ordinary tea
-// rdown that a panic, an early return, or a session that never closes cleanly all
-// skip - and the panel child is a real process, so the second net is load-bearing
-// rather than belt-and-braces (gh #301).
+// Verifies: the abnormal path is covered, and - corrected by gh #578 - that it is
+// the **only** path this extension has.
+//
+// #301's first version of this row asserted that `on_session_close` *and* `Drop`
+// both ended the session. `Drop` does; the other half asserted the behaviour of a
+// method the host never dispatches, because `on-session-close` is a `hooks`-world
+// export and this extension declares `ui` alone. A row that calls a dead hook
+// directly proves the hook works and says nothing about whether it is reachable -
+// which is the defect #578 exists for. The assertion is now the honest one: `Drop`
+// is the net that runs, and there is no second net to keep in step.
 #[test]
-fn the_reference_extension_has_both_teardown_nets() {
+fn the_reference_extension_tears_down_in_drop() {
     let src = source("extensions/ui-example/src/lib.rs");
     let drop_body = function_body(&src, "drop");
     assert!(
         drop_body.contains("end_panel_session"),
-        "`Drop` is the second net and must end the session:\n{drop_body}"
+        "`Drop` is the net that always runs and must end the session:\n{drop_body}"
     );
-    let close_body = function_body(&src, "on_session_close");
     assert!(
-        close_body.contains("end_panel_session"),
-        "`on_session_close` is the ordinary net and must end the session:\n{close_body}"
+        !src.contains("fn on_session_close"),
+        "and the extension implements no hook, because it cannot receive one \
+         (gh #578): an `on_session_close` here would be dead code"
     );
 }
 

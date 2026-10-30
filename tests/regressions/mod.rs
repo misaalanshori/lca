@@ -39,3 +39,6 @@ mod diff_card_does_not_duplicate;
 // Gh #301: the reference ui extension must not leak a pty child or erase its panel.
 #[path = "301-panel-screen-and-pty-leak.rs"]
 mod panel_screen_and_pty_leak;
+// Gh #578: a hook is deliverable only to an extension that declares its world.
+#[path = "578-hooks-only-for-callers.rs"]
+mod hooks_only_for_callers;

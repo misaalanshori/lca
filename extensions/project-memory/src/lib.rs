@@ -488,42 +488,6 @@ mod native {
                 snapshot.as_deref(),
             )))))
         }
-
-        fn on_pre_turn(&self) -> DispatchFuture<'static, Result<(), DispatchError>> {
-            Box::pin(std::future::ready(Ok(())))
-        }
-
-        fn on_pre_tool_use<'a>(
-            &'a self,
-            _call: &'a lca_protocol::ToolCall,
-        ) -> DispatchFuture<'a, Result<lca_protocol::HookAction, DispatchError>> {
-            Box::pin(std::future::ready(Ok(lca_protocol::HookAction::Allow)))
-        }
-
-        fn on_post_tool_use<'a>(
-            &'a self,
-            _observation: &'a lca_protocol::PostToolObservation,
-        ) -> DispatchFuture<'a, Result<(), DispatchError>> {
-            Box::pin(std::future::ready(Ok(())))
-        }
-
-        fn on_post_turn_end<'a>(
-            &'a self,
-            _status: &'a str,
-        ) -> DispatchFuture<'a, Result<(), DispatchError>> {
-            Box::pin(std::future::ready(Ok(())))
-        }
-
-        fn on_attention_required<'a>(
-            &'a self,
-            _reason: &'a str,
-        ) -> DispatchFuture<'a, Result<(), DispatchError>> {
-            Box::pin(std::future::ready(Ok(())))
-        }
-
-        fn on_session_close(&self) -> DispatchFuture<'static, Result<(), DispatchError>> {
-            Box::pin(std::future::ready(Ok(())))
-        }
     }
 }
 
