@@ -63,3 +63,6 @@ mod per_flag_resource_copy;
 // Gh #268: RPC honours `queue.follow_up_mode`, and the teardown is awaited not bridged.
 #[path = "268-follow-up-mode-and-async-teardown.rs"]
 mod follow_up_mode_and_async_teardown;
+// Gh #381 gaps 1-2: a paste chip is one unit for every motion, wrap and delete path.
+#[path = "381-chip-is-one-unit.rs"]
+mod chip_is_one_unit;

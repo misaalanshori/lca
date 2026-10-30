@@ -42,38 +42,6 @@ pub enum EditorEvent {
     Exit,
 }
 
-/// Expand `[paste #N …]` markers to the content they stand for (pi's
-/// `expandPasteMarkers`). A marker whose id has no live entry, or one with
-/// no closing bracket, is left literal so a user who types the shape by hand
-/// is not surprised. Markers are produced by [`Editor::insert_paste`].
-fn expand_paste_markers(text: &str, pastes: &[String]) -> String {
-    const OPEN: &str = "[paste #";
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(start) = rest.find(OPEN) {
-        out.push_str(&rest[..start]);
-        let marker = &rest[start..];
-        let digits: String = marker[OPEN.len()..]
-            .chars()
-            .take_while(char::is_ascii_digit)
-            .collect();
-        match (digits.parse::<usize>(), marker.find(']')) {
-            (Ok(id), Some(close)) if id >= 1 && id <= pastes.len() => {
-                out.push_str(&pastes[id - 1]);
-                rest = &marker[close + 1..];
-            }
-            _ => {
-                // Not a marker this editor wrote: keep it and move past the
-                // opening bracket so the search cannot loop.
-                out.push('[');
-                rest = &marker[1..];
-            }
-        }
-    }
-    out.push_str(rest);
-    out
-}
-
 /// A multi-line prompt editor.
 pub struct Editor {
     lines: Vec<String>,
@@ -217,14 +185,14 @@ impl Editor {
     /// The buffer with paste markers expanded (pi's `getExpandedText`):
     /// what the external editor and any other full-text consumer needs.
     pub fn expanded_text(&self) -> String {
-        expand_paste_markers(&self.text(), &self.pastes)
+        atomic::expand_paste_markers(&self.text(), &self.pastes)
     }
 
     /// Clear the buffer and push the submitted text to history. Paste
     /// markers expand to their content first (pi's `submitValue`), so the
     /// model receives what the user pasted, not `[paste #1 …]`.
     pub fn submit(&mut self) -> String {
-        let text = expand_paste_markers(&self.text(), &self.pastes);
+        let text = atomic::expand_paste_markers(&self.text(), &self.pastes);
         if !text.trim().is_empty() {
             self.history.push(text.clone());
         }
@@ -366,12 +334,29 @@ impl Editor {
         self.preferred_col = None;
         self.snapshot();
         if self.cursor_col > 0 {
-            // Delete the whole cluster before the cursor (pi's snap).
-            let boundary = Self::prev_cluster_boundary(self.current(), self.cursor_col);
-            let end = self.char_to_byte(self.cursor_col);
-            let start = self.char_to_byte(boundary);
+            // A paste chip is deleted whole (gh #381 gap 2): one Backspace on a
+            // chip's `]` used to leave `[paste #1 +123 lines`, which no longer
+            // matches the marker pattern - so `expand_paste_markers` passed it to
+            // the **model** literally. Removing the span makes that unreachable
+            // rather than repaired after the fact.
+            // The span removed is the **chip** when the caret is on one, not
+            // `boundary..cursor`: from *inside* a chip, Backspace must take the whole
+            // thing rather than the characters to its left, which is what left
+            // `#1 +12 lines]` behind in the first place.
+            let line = self.current().clone();
+            let boundary = Self::atomic_boundary_left(&line, self.cursor_col);
+            let removed_chip = Self::chip_span(&line, self.cursor_col);
+            let (from, to) = match removed_chip {
+                Some((start, end)) => (start, end),
+                None => (boundary, self.cursor_col),
+            };
+            let end = self.char_to_byte(to);
+            let start = self.char_to_byte(from);
             self.current_mut().replace_range(start..end, "");
-            self.cursor_col = boundary;
+            self.cursor_col = from;
+            if removed_chip.is_some() {
+                self.renumber_pastes();
+            }
         } else if self.cursor_line > 0 {
             let current = self.lines.remove(self.cursor_line);
             self.cursor_line -= 1;
@@ -387,11 +372,23 @@ impl Editor {
         self.snapshot();
         let len = self.current().chars().count();
         if self.cursor_col < len {
-            // Delete the whole cluster after the cursor (pi's snap).
-            let boundary = Self::next_cluster_boundary(self.current(), self.cursor_col);
-            let start = self.char_to_byte(self.cursor_col);
-            let end = self.char_to_byte(boundary);
+            // A paste chip is deleted whole (gh #381 gap 2); otherwise the whole
+            // cluster (pi's snap).
+            // A chip goes whole, including when the caret is inside it (gh #381).
+            let line = self.current().clone();
+            let boundary = Self::atomic_boundary_right(&line, self.cursor_col);
+            let removed_chip = Self::chip_span(&line, self.cursor_col);
+            let (from, to) = match removed_chip {
+                Some((start, end)) => (start, end),
+                None => (self.cursor_col, boundary),
+            };
+            let start = self.char_to_byte(from);
+            let end = self.char_to_byte(to);
             self.current_mut().replace_range(start..end, "");
+            self.cursor_col = start.min(self.cursor_col);
+            if removed_chip.is_some() {
+                self.renumber_pastes();
+            }
         } else if self.cursor_line + 1 < self.lines.len() {
             let next = self.lines.remove(self.cursor_line + 1);
             self.current_mut().push_str(&next);
@@ -462,8 +459,9 @@ impl Editor {
     pub fn cursor_left(&mut self) {
         self.preferred_col = None;
         if self.cursor_col > 0 {
-            // Grapheme-snapped (pi): step over a whole cluster.
-            self.cursor_col = Self::prev_cluster_boundary(self.current(), self.cursor_col);
+            // A paste chip is one unit; otherwise grapheme-snapped (pi).
+            let line = self.current().clone();
+            self.cursor_col = Self::atomic_boundary_left(&line, self.cursor_col);
         } else if self.cursor_line > 0 {
             self.cursor_line -= 1;
             self.cursor_col = self.current().chars().count();
@@ -475,9 +473,9 @@ impl Editor {
     pub fn cursor_right(&mut self) {
         self.preferred_col = None;
         if self.cursor_col < self.current().chars().count() {
-            // Grapheme-snapped (pi): a cluster entered by a stale column
-            // is left whole.
-            self.cursor_col = Self::next_cluster_boundary(self.current(), self.cursor_col);
+            // A paste chip is one unit; otherwise grapheme-snapped (pi).
+            let line = self.current().clone();
+            self.cursor_col = Self::atomic_boundary_right(&line, self.cursor_col);
         } else if self.cursor_line + 1 < self.lines.len() {
             self.cursor_line += 1;
             self.cursor_col = 0;
@@ -1040,7 +1038,12 @@ impl Editor {
             row.end
         };
         self.cursor_line = row.line;
-        self.cursor_col = (row.start + preferred).min(limit);
+        let landed = (row.start + preferred).min(limit);
+        // A chip is one unit vertically too (gh #381 gap 1): landing inside it
+        // would put the caret on text the user never typed. Snap to the chip's
+        // start; `preferred_col` still holds the column the user was aiming at, so
+        // moving back restores it (pi's `snappedFromCursorCol`).
+        self.cursor_col = Self::snap_out_of_chip(&self.lines[row.line].clone(), landed);
     }
 
     /// The char index of the previous grapheme-cluster boundary strictly
@@ -1175,6 +1178,11 @@ fn printable_char(data: &str) -> Option<char> {
     None
 }
 
+#[path = "editor_atomic.rs"]
+mod atomic;
+#[cfg(test)]
+#[path = "editor_atomic_tests.rs"]
+mod atomic_tests;
 #[cfg(test)]
 #[path = "editor_tests.rs"]
 mod tests;

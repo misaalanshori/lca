@@ -18,6 +18,15 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **A large paste is now one unit for every cursor move and for deletion** (gh #381 gaps 1–2).
+  `[paste #1 +123 lines]` was ordinary text to the editor, so `Left` needed 21 keystrokes to
+  leave it, `Up`/`Down` could land inside it, a wrap split `paste`/`#1` across two rows, and —
+  the one with a real cost — **a single `Backspace` on the `]` left `[paste #1 +123 lines`,
+  which no longer matched the marker pattern and so was sent to the model literally** instead
+  of the pasted content. Every motion and delete path now asks the same predicate word motion
+  already used, so a chip moves, wraps and deletes as one unit, and the orphan is
+  **unreachable** rather than repaired. Deleting a chip also renumbers the survivors, so the
+  next paste cannot collide and a renumber only changes a label — never what it expands to.
 - **RPC honours `queue.follow_up_mode`, and the session-close teardown is awaited** (gh #268).
   `--mode rpc` drained queued follow-ups one at a time unconditionally, so an embedder got
   serial turns while the same session in a terminal joined them under `all` — the third

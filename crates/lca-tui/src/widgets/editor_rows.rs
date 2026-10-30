@@ -93,9 +93,22 @@ pub fn wrap_row(line: &str, width: usize) -> Vec<(usize, usize)> {
     // (char index the break falls at, row width up to and including the
     // whitespace before it) - pi's `wrapOppIndex`/`wrapOppWidth`.
     let mut opportunity: Option<(usize, usize)> = None;
+    let chars: Vec<char> = line.chars().collect();
+    // A paste chip being consumed whole: `(char index it ends at)` (gh #381 gap 1).
+    // A chip is unbreakable, exactly like a wide glyph - otherwise
+    // `[paste #1 +12 lines]` wrapped as `[paste ` / `#1 …` and the user saw two
+    // fragments of one marker.
+    let mut chip_end: Option<usize> = None;
 
     for (position, (start, grapheme)) in graphemes.iter().enumerate() {
         let grapheme_width = visible_width(grapheme);
+
+        // Inside a chip: accrue and never break, whatever the width.
+        if chip_end.is_some_and(|end| *start < end) {
+            current_width += grapheme_width;
+            continue;
+        }
+        chip_end = None;
 
         if current_width + grapheme_width > width {
             if let Some((break_at, break_width)) = opportunity
@@ -105,12 +118,36 @@ pub fn wrap_row(line: &str, width: usize) -> Vec<(usize, usize)> {
                 chunk_start = break_at;
                 current_width -= break_width;
             } else if chunk_start < *start {
-                // No viable opportunity: force-break where we are.
+                // No viable opportunity: force-break where we are. A chip wider
+                // than the row lands here and splits, which is the only honest
+                // option left.
                 rows.push((chunk_start, *start));
                 chunk_start = *start;
                 current_width = 0;
             }
             opportunity = None;
+        }
+
+        // A chip is unbreakable (gh #381 gap 1): once the caret passes `[paste #`,
+        // the inner graphemes never force a break. If the chip would overflow the
+        // current row it starts a fresh one first, exactly as a wide glyph would.
+        if chip_end.is_none()
+            && let Some(stop) = crate::engine::word::atomic_span_at(&chars, *start)
+            && stop > *start + 1
+        {
+            let chip_width: usize = line
+                .chars()
+                .skip(*start)
+                .take(stop - *start)
+                .map(|c| visible_width(&c.to_string()))
+                .sum();
+            if current_width > 0 && current_width + chip_width > width && chunk_start < *start {
+                rows.push((chunk_start, *start));
+                chunk_start = *start;
+                current_width = 0;
+                opportunity = None;
+            }
+            chip_end = Some(stop);
         }
 
         current_width += grapheme_width;
