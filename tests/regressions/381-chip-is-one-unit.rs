@@ -221,6 +221,14 @@ fn the_wrapper_treats_a_chip_as_unbreakable() {
         ),
         "and moves to a new row when the chip would overflow: {body}"
     );
+    // But a chip **wider than the pane** must fall through to the ordinary
+    // force-break: a row wider than the terminal breaks the renderer's contract.
+    // pi splits that case at grapheme granularity and keeps it atomic only for
+    // cursor and editing ("the split is purely visual for word-wrap layout").
+    assert!(
+        body.contains("if chip_width > width {"),
+        "a chip wider than the pane is split visually rather than overflowing: {body}"
+    );
     // And the whole mechanism must be reachable: a guard that cannot fail proves
     // nothing, so a condition that has been neutered (`&& false` / `|| true`) is
     // rejected outright. This is what my first version of this row missed - it

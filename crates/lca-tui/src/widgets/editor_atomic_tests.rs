@@ -157,22 +157,20 @@ fn the_column_inside_a_chip_is_restored_on_return() {
     );
 }
 
-// Verifies: gh #381 gap 1 - **a chip never wraps mid-token.**
+// Verifies: gh #381 gap 1 - **a chip never wraps mid-token when it fits the pane.**
 //
 // The wrapper broke `paste`/`#1` across rows because it treated the marker as
 // ordinary text. A chip is unbreakable, exactly like a wide glyph. Measured before
 // the fix at width 14: `["look: [paste ", "#1 +12 lines]"]`.
 //
-// The assertion is that **no rendered row contains a proper prefix or suffix of the
-// marker**: a row holding all of it is the contract, and a row holding part of it is
-// the defect. (My first version only asked whether *some* row contained the marker,
-// which passed while it was split - the row that proved nothing.)
+// Scoped to widths the marker actually fits (21 cells plus the `look: ` prefix), so
+// this row and the "wider than the pane" row below divide the contract cleanly
+// instead of one contradicting the other.
 #[test]
-fn a_chip_never_wraps_mid_token() {
+fn a_chip_that_fits_the_pane_never_wraps_mid_token() {
     let e = with_chip("look: ");
     const MARKER: &str = "[paste #1 +12 lines]";
-    // Narrow enough that the marker cannot fit on the line's remainder.
-    for width in [10u16, 12, 14, 16, 20] {
+    for width in [27u16, 30, 40, 60] {
         let rows: Vec<String> = e
             .render(width)
             .iter()
@@ -183,7 +181,7 @@ fn a_chip_never_wraps_mid_token() {
             whole, 1,
             "at width {width} exactly one row carries the whole marker: {rows:?}"
         );
-        // And no other row carries a fragment of it - a `paste` here, `#1` there.
+        // And no other row carries a fragment of it.
         for row in &rows {
             if row.contains(MARKER) {
                 continue;
@@ -196,8 +194,48 @@ fn a_chip_never_wraps_mid_token() {
             );
         }
     }
-    // The buffer text is untouched by rendering.
     assert!(e.text().contains(MARKER));
+}
+
+// Verifies: gh #381 gap 1 - **a chip wider than the pane is split visually and
+// stays atomic for editing**, which is pi's rule (`editor.ts`: "the split is purely
+// visual for word-wrap layout").
+//
+// My first version made a chip unconditionally unbreakable, which broke the
+// renderer's contract: a 21-cell marker in a 4-cell pane painted a 21-cell row. The
+// two requirements coexist - the *drawing* may split, the *editing* may not.
+#[test]
+fn a_chip_wider_than_the_pane_splits_visually_but_stays_atomic() {
+    let mut e = with_chip("look: ");
+    for width in [4u16, 6, 8, 10] {
+        let rows: Vec<String> = e
+            .render(width)
+            .iter()
+            .map(|r| r.replace("\u{1b}[0m", ""))
+            .collect();
+        for row in &rows {
+            assert!(
+                crate::engine::text::visible_width(row) <= width as usize + 1,
+                "at width {width} a row is wider than the pane (the painted caret is \
+                 allowed one extra cell): {rows:?}"
+            );
+        }
+        assert!(
+            rows.iter().any(|r| r.contains("[pas")),
+            "the marker is still drawn at width {width}: {rows:?}"
+        );
+    }
+    // Still one unit for editing, despite the visual split: motion and delete both
+    // consult `chip_span`, which never looks at the pane width.
+    e.cursor_col = 6;
+    e.cursor_right();
+    assert_eq!(
+        e.cursor_col,
+        6 + "[paste #1 +12 lines]".chars().count(),
+        "one Right crosses the whole chip at width 4 too"
+    );
+    e.backspace();
+    assert_eq!(e.text(), "look: ", "and deletion takes the whole chip");
 }
 
 // ---------------------------------------------------------------------------

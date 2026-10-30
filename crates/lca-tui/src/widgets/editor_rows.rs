@@ -129,8 +129,15 @@ pub fn wrap_row(line: &str, width: usize) -> Vec<(usize, usize)> {
         }
 
         // A chip is unbreakable (gh #381 gap 1): once the caret passes `[paste #`,
-        // the inner graphemes never force a break. If the chip would overflow the
-        // current row it starts a fresh one first, exactly as a wide glyph would.
+        // the inner graphemes never force a break, and a chip that does not fit on
+        // the current row starts a fresh one.
+        //
+        // **Unless the chip is wider than the whole pane.** pi splits that case at
+        // grapheme granularity and keeps it atomic only for cursor and editing
+        // (`editor.ts:174`, "the split is purely visual for word-wrap layout") - and
+        // it must, because a row wider than the pane breaks the renderer's contract.
+        // My first version made it unconditionally unbreakable, so a 21-cell chip in
+        // a 4-cell pane painted a 21-cell row.
         if chip_end.is_none()
             && let Some(stop) = crate::engine::word::atomic_span_at(&chars, *start)
             && stop > *start + 1
@@ -141,13 +148,19 @@ pub fn wrap_row(line: &str, width: usize) -> Vec<(usize, usize)> {
                 .take(stop - *start)
                 .map(|c| visible_width(&c.to_string()))
                 .sum();
-            if current_width > 0 && current_width + chip_width > width && chunk_start < *start {
-                rows.push((chunk_start, *start));
-                chunk_start = *start;
-                current_width = 0;
-                opportunity = None;
+            if chip_width > width {
+                // Too wide for any row: let the ordinary force-break path handle it,
+                // which is purely visual - `chip_span` still treats the marker as one
+                // unit for motion and deletion.
+            } else {
+                if current_width > 0 && current_width + chip_width > width && chunk_start < *start {
+                    rows.push((chunk_start, *start));
+                    chunk_start = *start;
+                    current_width = 0;
+                    opportunity = None;
+                }
+                chip_end = Some(stop);
             }
-            chip_end = Some(stop);
         }
 
         current_width += grapheme_width;
