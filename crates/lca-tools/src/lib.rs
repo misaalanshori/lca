@@ -33,6 +33,8 @@ pub use capabilities::serve_http::{
     self as serve_http, Bound, DEFAULT_PORT, HttpResponse, IncomingRequest, Listener,
     MAX_BODY_BYTES, PORT_ATTEMPTS, Refusal, Routed, ServeHttpNamespace, SessionToken,
 };
+#[cfg(windows)]
+pub use capabilities::set_owner_only;
 pub use capabilities::{BrowserError, CompletionError, MAX_OAUTH_FLOW_HOSTS};
 pub use capabilities::{
     BrowserOpener, Capabilities, CapabilityGrants, Denial, RESOURCE_FILE_MAX_BYTES,

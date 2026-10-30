@@ -166,3 +166,175 @@ fn the_exposure_confirmation_names_the_server_not_the_argument() {
         "the cycle form also names the server"
     );
 }
+
+// Verifies: gh #267 - **a failed write leaves the previous `mcp.json` intact.**
+//
+// This is the property the issue is about, and the earlier rows did not assert
+// it: they checked that a *successful* write lands by rename and leaves no temp
+// file, which a hand-rolled in-place `fs::write` would also pass on the happy
+// path. What matters is the unhappy one - `mcp.json` holds server configs,
+// environment variables and authentication headers, so a truncated file is a
+// config the user loses and credentials they have to re-enter.
+//
+// Fault injection, not code inspection: the target is made unreadable-for-write
+// by turning the *directory* read-only, which fails the temp-file creation
+// before anything can touch the target. The assertion is "byte-identical", not
+// "no partial file": the old content has to survive.
+#[cfg(unix)]
+#[test]
+fn a_failed_write_leaves_the_previous_mcp_json_byte_identical() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = root("failed-write");
+    let path = dir.join("data").join("mcp.json");
+    let manager = manager_with(&dir, "alpha");
+    // A distinctive body, so "intact" cannot be satisfied by an empty file.
+    let original = std::fs::read(&path).expect("read the seeded file");
+    assert!(!original.is_empty(), "the fixture has content to lose");
+
+    // Freeze the directory: the sibling temp file cannot be created, so the
+    // write fails before the rename and the target is never opened.
+    let dir_path = path.parent().expect("parent").to_path_buf();
+    std::fs::set_permissions(&dir_path, std::fs::Permissions::from_mode(0o500)).expect("chmod 500");
+    let reply = manager.act("disable", "alpha");
+    std::fs::set_permissions(&dir_path, std::fs::Permissions::from_mode(0o700))
+        .expect("chmod back");
+
+    // The write did fail - otherwise this row proves nothing about failure.
+    assert!(
+        reply.to_lowercase().contains("cannot")
+            || reply.to_lowercase().contains("denied")
+            || reply.to_lowercase().contains("error"),
+        "the frozen directory made the write fail: {reply}"
+    );
+    let after = std::fs::read(&path).expect("the target still reads");
+    assert_eq!(
+        after, original,
+        "the previous mcp.json survives a failed write byte for byte"
+    );
+    // And no temporary sibling was left behind by the failed attempt.
+    let leftovers: Vec<String> = std::fs::read_dir(&dir_path)
+        .expect("read dir")
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.contains("tmp"))
+        .collect();
+    assert!(leftovers.is_empty(), "no temp file survives: {leftovers:?}");
+}
+
+// Verifies: gh #267 - the temp file is restricted **before** the rename, so
+// there is no window in which `mcp.json` exists world-readable.
+//
+// The assertion available to a test is the mode the mode-setting step leaves on
+// the sibling: the code sets it after `write` and before `rename`, and a rename
+// does not change a file's permissions. So "the target is 0600" plus "the write
+// is a create-then-chmod on the same inode" is the strongest observable claim;
+// the pre-rename window itself cannot be sampled from a single-threaded test,
+// which is stated rather than pretended.
+#[cfg(unix)]
+#[test]
+fn the_temp_file_is_restricted_before_it_is_published() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = root("pre-rename-mode");
+    let path = dir.join("data").join("mcp.json");
+    let manager = manager_with(&dir, "alpha");
+
+    // A readable-by-group seed proves the write does not simply inherit the
+    // target's mode: the result is 0600 even though the file it replaces was not.
+    let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644));
+    manager.act("disable", "alpha");
+    let mode = std::fs::metadata(&path).expect("stat").permissions().mode() & 0o777;
+    assert_eq!(
+        mode, 0o600,
+        "the published file is owner-only even when the old one was 0644, which is \
+         only possible if the mode was set on the temp file before the rename"
+    );
+
+    // The source shape: the chmod happens between the write and the rename. A
+    // chmod *after* the rename would leave a world-readable window.
+    let source =
+        std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/config.rs"))
+            .expect("read config.rs");
+    let body = {
+        let start = source.find("fn write_json_file").expect("the helper");
+        let rest = &source[start..];
+        let end = rest.find("\n}\n").expect("its end");
+        &rest[..end]
+    };
+    let write_at = body.find("std::fs::write(&temp").expect("the temp write");
+    let chmod_at = body.find("set_permissions(&temp").expect("the temp chmod");
+    let rename_at = body.find("std::fs::rename(&temp").expect("the rename");
+    assert!(
+        write_at < chmod_at && chmod_at < rename_at,
+        "write, then restrict, then publish - a chmod after the rename is a \
+         world-readable window: {body}"
+    );
+}
+
+// Verifies: gh #267 - the confirmation prints the **parsed** server name, not
+// the raw argument, in every case where the two differ.
+//
+// The original defect printed `target` — the whole argument string — instead of
+// the `name` field it had just parsed out of it. So the row that proves the fix
+// has to be a case where those two strings differ, and there are exactly two
+// shapes available:
+//
+// 1. **the level form** `exposure <name> <level>`, where the argument is
+//    `"alpha direct"` and the name is `"alpha"`;
+// 2. **a name that collides with a level keyword** — `direct` is a legal server
+//    name and also a legal level, so `exposure direct hidden` must resolve to
+//    the *server* called `direct`, not to the server called `direct hidden`.
+//
+// **The brief asked for a server name containing a space, and that case cannot
+// exist here**: `lca_mcp::is_valid_server_name` accepts only ASCII
+// alphanumerics, `_` and `-`, so `"filesystem direct"` as a *name* is rejected at
+// parse time and the fixture would test nothing. The level-keyword collision is
+// the strongest available substitute: it is a real, loadable server whose name is
+// also the argument's last word.
+#[test]
+fn the_exposure_confirmation_prints_the_parsed_name_not_the_argument() {
+    // Shape 1: the level form. Argument `alpha direct`, name `alpha`.
+    let dir = root("parsed-name-level");
+    let manager = manager_with(&dir, "alpha");
+    assert_eq!(
+        manager.act("exposure", "alpha direct"),
+        "`alpha` exposure: direct",
+        "the level form prints the parsed name, not `alpha direct`"
+    );
+
+    // Shape 2: a server whose name *is* a level keyword. The argument is
+    // `direct hidden`; resolving by the raw string would look for a server named
+    // `direct hidden` and find nothing.
+    let dir = root("parsed-name-keyword");
+    let manager = manager_with(&dir, "direct");
+    assert_eq!(
+        manager.act("exposure", "direct hidden"),
+        "`direct` exposure: hidden",
+        "a name that collides with a level word still resolves to itself"
+    );
+    let text = std::fs::read_to_string(dir.join("data").join("mcp.json")).expect("read");
+    let parsed: serde_json::Value = serde_json::from_str(&text).expect("valid json");
+    assert_eq!(
+        parsed["mcpServers"]["direct"]["exposure"], "hidden",
+        "and the write targeted that server: {text}"
+    );
+
+    // Shape 3: a name that merely *contains* a level word, to show the split is
+    // on the last space and not on a substring.
+    let dir = root("parsed-name-substring");
+    let manager = manager_with(&dir, "codemode-tools");
+    assert_eq!(
+        manager.act("exposure", "codemode-tools codemode"),
+        "`codemode-tools` exposure: codemode",
+        "a name containing a level word is still printed whole"
+    );
+}
+
+// Verifies: gh #267 - a spaced server name is refused at parse time, which is
+// why the row above cannot use one. Pinned so the substitute is justified by
+// behaviour rather than by a comment.
+#[test]
+fn a_server_name_with_a_space_is_not_a_valid_name() {
+    assert!(!lca_mcp::is_valid_server_name("filesystem direct"));
+    assert!(lca_mcp::is_valid_server_name("filesystem-direct"));
+    assert!(lca_mcp::is_valid_server_name("direct"));
+}

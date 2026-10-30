@@ -458,8 +458,14 @@ until the folder is trusted.
 | `--description <text>` | both |
 
 A secret given with `--oauth-client-secret` is stored in the credential namespace,
-**not** in `mcp.json` — a config file is readable by anything that can read your
-home directory, and a credential store is not.
+**not** in `mcp.json`, because the credential store is where a secret belongs and
+`mcp.json` is a configuration file you are expected to edit and diff. Note that
+`mcp.json` does hold secrets when you put them there yourself — a server's `env`
+and `headers` carry tokens — so it is written **owner-only (`0600`)** and
+**atomically**: a temp file beside it, restricted before it is published, then
+renamed over the target. An interrupted write leaves the previous file intact
+rather than truncating your server configs and credentials. On Windows the file
+gets the same owner-only ACL the credential store applies.
 
 ### `remove`
 
@@ -537,10 +543,18 @@ that costs a debugging session.
 
 | Path | What |
 |---|---|
-| `~/.lca/mcp.json` | user configuration |
+| `~/.lca/mcp.json` | user configuration — written **owner-only (`0600`)** and **atomically**; see below |
 | `<project>/.lca/mcp.json` | project configuration and overrides (trusted folders only) |
 | `~/.lca/credentials/` | OAuth tokens, owner-only, `mcp` namespace |
 | `~/.lca/logs/lca.log` | the agent's own diagnostics (not per-server) |
+
+**Both `mcp.json` files are written atomically and owner-only.** They carry a
+server's `env` and `headers` by design, so the process umask must not decide who
+can read them: the write goes to a temp file beside the target, is restricted
+(`0600` on Unix, an owner-only ACL on Windows — the same call the credential store
+uses), and is then renamed over the target. An interrupted write therefore leaves
+the **previous file intact** rather than truncating your server configs and
+tokens, and there is no moment at which the file is world-readable.
 
 ## What is not here
 

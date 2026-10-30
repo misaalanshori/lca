@@ -651,8 +651,9 @@ fn to_string_with_indent(value: &serde_json::Value, indent: &str) -> Result<Stri
 /// file intact - a half-written `mcp.json` is a config the user loses.
 ///
 /// `mcp.json` carries credentials in `env` and `headers` by design, so the
-/// process umask must not decide who can read it: `0600` on Unix, an
-/// owner-only DACL on Windows. gh #418 Phase C#C4 (gh #267).
+/// process umask must not decide who can read it: `0600` on Unix, and the same
+/// owner-only DACL the credential store applies on Windows
+/// (`lca_tools::set_owner_only`). gh #418 Phase C#C4 (gh #267).
 fn write_json_file(path: &Path, value: &serde_json::Value) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|err| format!("{err}"))?;
@@ -664,12 +665,18 @@ fn write_json_file(path: &Path, value: &serde_json::Value) -> Result<(), String>
     }
     let temp = sibling_temp_path(path);
     std::fs::write(&temp, text).map_err(|err| format!("{err}"))?;
+    // Restrict **before** the rename so there is no window in which the file
+    // exists world-readable. On Unix that is `0600`; on Windows the credential
+    // store's own DACL sequence (`lca_tools::set_owner_only`), so the two
+    // owner-only files in this product agree rather than each rolling its own.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o600))
             .map_err(|err| format!("cannot restrict {temp:?}: {err}"))?;
     }
+    #[cfg(windows)]
+    lca_tools::set_owner_only(&temp).map_err(|err| format!("cannot restrict {temp:?}: {err}"))?;
     std::fs::rename(&temp, path).map_err(|err| {
         let _ = std::fs::remove_file(&temp);
         format!("{err}")

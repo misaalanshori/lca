@@ -52,6 +52,22 @@ use tls::proxied_stack;
 #[allow(unsafe_code)]
 mod windows_acl;
 
+/// Replace a file's ACL with an owner-only DACL (NFR-14, Windows).
+///
+/// Re-exported as **one** implementation rather than a copy per caller: the
+/// credential store (`write_credentials`) and `mcp.json` (`lca-mcp`'s
+/// `write_json_file`) both publish owner-only files carrying secrets, and two
+/// hand-written Win32 sequences are two chances to get the ACE wrong. Both call
+/// this, so a fix lands in both.
+///
+/// A no-op does not exist here on purpose: on Windows a file created in the user
+/// profile inherits that directory's ACL, which is usually right but is not a
+/// guarantee, so callers get a real result and decide what a failure means.
+#[cfg(windows)]
+pub fn set_owner_only(path: &std::path::Path) -> Result<(), String> {
+    windows_acl::set_owner_only(path)
+}
+
 pub use errors::{BrowserError, CompletionError};
 
 /// Lock a mutex, recovering a poisoned guard rather than panicking.

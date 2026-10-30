@@ -18,6 +18,18 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **`mcp.json` is written atomically and owner-only, and its Windows restriction is
+  real** (gh #267). The file holds server configs, `env` and `headers` — credentials by
+  design — and was persisted with an in-place `std::fs::write`, so an interrupted write
+  truncated it and the process umask decided who could read it. The write now goes to a
+  temp file beside the target, is restricted **before** it is published (`0600` on Unix;
+  on Windows the same owner-only ACL call the credential store uses), then renamed over
+  the target — so a failed write leaves the previous file byte-identical instead of
+  destroying your servers. **The Windows half was a doc comment and no code**: the fix
+  that introduced the atomic write claimed "an owner-only DACL on Windows" while having
+  only a `#[cfg(unix)]` branch; `lca_tools::set_owner_only` is now a shared public helper
+  and both callers use it. Also: `/mcp exposure <server> <level>` used to reply with the
+  whole argument (`` `filesystem direct` exposure: direct ``) instead of the server name.
 - **A narrow tab rail keeps its close button, and `0` no longer jumps to tab 1** (gh #326).
   The vertical `TabsWidget` formatted the whole row — marker, index, title, flags and the
   `×` — and truncated *that*, so past a certain width the glyph was cut away while the
