@@ -313,10 +313,24 @@ fn an_exited_session_says_so_instead_of_freezing() {
         "echo BYE301; exit"
     };
     let _ = type_and_wait(&handle, line);
+    // Wait for the pty to observe the exit, then assert. **The two facts arrive at
+    // different times**: the shell prints `BYE301` and then exits, and the read only
+    // reports the end once the console has torn the child down - which on ConPTY is
+    // markedly slower than on a unix pty. The previous window (80 x 50 ms = 4 s) was
+    // long enough on Linux and too short on `windows-latest`, whose failure showed
+    // `BYE301` present and `session ended` absent: the output had arrived, the end had
+    // not been reported yet.
+    //
+    // A bounded wait on an **asynchronous OS event** is not a settle window - it is the
+    // only correct way to observe "the child is gone", because nothing this test can do
+    // makes it happen sooner. The bound is 20 s, generous enough for a loaded CI runner
+    // and still finite, so a genuine "the end is never reported" defect fails rather
+    // than hanging.
     let mut panel = String::new();
-    for _attempt in 0..80 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while std::time::Instant::now() < deadline {
         panel = panel_lines(&handle);
-        if panel.contains("BYE301") && panel.contains("ended") {
+        if panel.contains("BYE301") && panel.contains("session ended") {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -327,7 +341,8 @@ fn an_exited_session_says_so_instead_of_freezing() {
     );
     assert!(
         panel.contains("session ended"),
-        "the panel says the session is over: {panel}"
+        "the panel says the session is over (waited 20 s for the pty to report EOF - a \
+         ConPTY teardown is slower than a unix pty's): {panel}"
     );
     assert!(
         !panel.contains("type here:"),
