@@ -73,12 +73,33 @@ fn panel_lines(handle: &dyn ExtensionDispatch) -> String {
     .join("\n")
 }
 
-/// Type a line into the panel and wait for the program to echo it back.
-fn type_and_wait(handle: &dyn ExtensionDispatch, line: &str) -> String {
+/// Whether the program has printed a prompt (or anything at all).
+///
+/// Windows' ConPTY takes noticeably longer to deliver its first bytes than a
+/// unix pty does, and `cmd.exe` prints a banner before its prompt. Typing before
+/// any of that arrives is not a defect - the write is buffered and the shell
+/// runs the line - but it makes a fixed sleep flaky, so every row that types
+/// waits for the program to speak first.
+fn program_has_spoken(handle: &dyn ExtensionDispatch) -> bool {
+    let header = ["session:", "keys:", "not available"];
+    panel_lines(handle).lines().any(|line| {
+        let line = line.trim();
+        !line.is_empty() && !header.iter().any(|h| line.starts_with(h))
+    })
+}
+
+/// Type one line and wait for it to have any visible effect.
+fn type_line(handle: &dyn ExtensionDispatch, line: &str) {
     // Start the session first: opening the panel is the invocation, and a
     // keystroke sent before it lands on nothing (the extension has no handle to
     // write to yet).
     let _ = panel_lines(handle);
+    for _attempt in 0..80 {
+        if program_has_spoken(handle) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
     handle
         .on_ui_event(
             "panel",
@@ -87,10 +108,18 @@ fn type_and_wait(handle: &dyn ExtensionDispatch, line: &str) -> String {
             },
         )
         .expect("event");
+}
+
+/// Type a line into the panel and wait for the program to echo it back.
+fn type_and_wait(handle: &dyn ExtensionDispatch, line: &str) -> String {
+    type_line(handle, line);
     let mut panel = String::new();
     for _attempt in 0..80 {
         panel = panel_lines(handle);
-        if panel.contains(line) {
+        // The echoed command and the program's own output both contain the
+        // marker; two occurrences means the shell has run it, not merely echoed
+        // the keystroke back at the terminal.
+        if panel.matches(line).count() >= 2 {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -240,7 +269,17 @@ fn an_exited_session_says_so_instead_of_freezing() {
     let _ = panel_lines(&handle);
     // Exit and leave a last line behind: the panel must show both the output and
     // the fact that the session is over.
-    let _ = type_and_wait(&handle, "echo BYE301; exit");
+    //
+    // The two shells' separators differ - `cmd.exe` reads `;` as part of the
+    // argument and echoed the whole line literally on Windows CI, so `&` is the
+    // one that runs both commands there. Written per-platform rather than as one
+    // guess, because the row is about the *panel*, not about shell syntax.
+    let line = if cfg!(windows) {
+        "echo BYE301 & exit"
+    } else {
+        "echo BYE301; exit"
+    };
+    let _ = type_and_wait(&handle, line);
     let mut panel = String::new();
     for _attempt in 0..80 {
         panel = panel_lines(&handle);

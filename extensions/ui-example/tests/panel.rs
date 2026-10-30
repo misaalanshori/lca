@@ -107,6 +107,24 @@ fn typing_into_the_panel_reaches_the_program_and_comes_back_as_data() {
 
     // Type a line into the shell: the pty echoes it, so the output the
     // next render reads contains what we sent.
+    //
+    // Wait for the program to speak first (gh #301): Windows' ConPTY takes
+    // noticeably longer to deliver its first bytes than a unix pty, and a
+    // keystroke written before then sat unread long enough for this row's window
+    // to close. Waiting for a prompt is what the row actually means by "the
+    // session is live", and it removes a platform-sized sleep race rather than
+    // papering over it with a longer one.
+    for _attempt in 0..80 {
+        let panel = panel_lines(&handle);
+        let spoken = panel.lines().any(|line| {
+            let line = line.trim();
+            !line.is_empty() && !line.starts_with("session:") && !line.starts_with("keys:")
+        });
+        if spoken {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
     let _effect = handle
         .on_ui_event(
             "panel",
