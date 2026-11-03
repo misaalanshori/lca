@@ -51,6 +51,14 @@ ignore = [
     "RUSTSEC-2026-0367",
     "RUSTSEC-2026-0368",
     "RUSTSEC-2026-0369",
+    # RUSTSEC-2026-0429 (2026-11-03): a fourth advisory in the same
+    # `ZipArchive::extract()` path - it sizes the symlink-target buffer from
+    # the central directory's declared uncompressed size before reading any
+    # entry data, so a crafted archive aborts the process. Same reasoning as
+    # the three above and verified the same way: `rg '\.extract\(' crates/`
+    # returns no production call site (only `by_index`/`by_name` in
+    # `lca-registry`), and the patch is still `zip >= 9.0.0` only.
+    "RUSTSEC-2026-0429",
     # RUSTSEC-2026-0386 (2026-10-23): `tokio::io::unix::AsyncFd`'s safe
     # constructors (`new`, `with_interest`, `try_new`, `try_with_interest`)
     # accept any `T: AsRawFd`, so safe code can register an arbitrary or
