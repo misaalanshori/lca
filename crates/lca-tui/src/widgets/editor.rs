@@ -994,27 +994,7 @@ impl Editor {
                     || (editor_rows::is_last_row_of_line(&rows, position)
                         && self.cursor_col == row.end))
             {
-                let offset = self.cursor_col - row.start;
-                let (before, cluster, after) = editor_rows::caret_split(text, offset);
-                rendered = if self.paint_caret {
-                    // Gh #371 bug 2: close reverse video with `27m`, not `0m`. A full
-                    // reset here would strip the foreground, background and
-                    // decorations of everything after the caret - ADR-0037's
-                    // channel-scoped rule, which the painted caret is the most
-                    // visible violation of, because it sits *inside* a row rather
-                    // than around one.
-                    match cluster {
-                        Some(g) => format!("{before}{CURSOR_MARKER}\x1b[7m{g}\x1b[27m{after}"),
-                        None => format!("{before}{CURSOR_MARKER}\x1b[7m \x1b[27m"),
-                    }
-                } else {
-                    // The cluster is still text: keep it, and put the
-                    // marker where the caret is.
-                    match cluster {
-                        Some(g) => format!("{before}{CURSOR_MARKER}{g}{after}"),
-                        None => format!("{before}{CURSOR_MARKER}{after}"),
-                    }
-                };
+                rendered = self.paint_caret_into_row(text, row, line);
                 cursor_placed = true;
             }
             out.push(format!("{prefix}{rendered}"));
@@ -1169,6 +1149,9 @@ fn printable_char(data: &str) -> Option<char> {
 
 #[path = "editor_atomic.rs"]
 mod atomic;
+#[cfg(test)]
+#[path = "editor_atomic_caret_tests.rs"]
+mod atomic_caret_tests;
 #[cfg(test)]
 #[path = "editor_atomic_tests.rs"]
 mod atomic_tests;

@@ -18,6 +18,22 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **The caret on a paste chip is the whole badge** (gh #381 gap 4). A paste chip is
+  one atomic unit for motion, deletion and undo (gaps 1–3), but on screen it still
+  looked like any other column, so nothing told the user that the thing under the
+  caret was one object. The caret sitting on a chip now paints the **whole marker**
+  in reverse video, the way pi merges a marker into one segment and draws that
+  segment (`segmentWithMarkers`), and it closes with `\x1b[27m` rather than a full
+  reset, so text after the chip keeps its own styling. The paint path asks the same
+  `chip_span` predicate that motion and deletion consult, so there is still one
+  notion of "where the caret is"; a chip wider than the pane paints only the cells
+  drawn on the caret's row, and with `ui.show_hardware_cursor` (or a plain theme) the
+  badge is not painted at all and the hardware cursor stays at the caret's own column.
+  The boundary belongs to the chip: at its opening `[` the badge is painted, one
+  column earlier it is not. Live testing also turned up a **pre-existing** defect
+  this work exposed — `Left` was a no-op at a chip's start (and `Right` at its end),
+  so a caret that entered a chip could only leave it by crossing the whole thing the
+  other way; both directions now step off the boundary.
 - **The release-targets CI job is green again on every push** (gh #580). It had gone
   red on every commit — including ones touching nothing in the release path — because
   the release lanes installed their compiler from **apt.llvm.org**, which failed in two

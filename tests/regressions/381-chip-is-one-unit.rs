@@ -118,22 +118,28 @@ fn every_motion_path_consults_the_one_atomic_predicate() {
 
     // And each helper's chip branch must actually *do* something: a mutation that
     // keeps the call but makes the chip arm fall through to the cluster path leaves
-    // the row above green (it did, before this assertion). The two boundary helpers
-    // are the ones the defect lived in, so their `Some` arms are pinned literally.
+    // the row above green (it did, before this assertion).
+    //
+    // The property, not the spelling (gh #381 gap 4's live finding): the chips arms
+    // must be **guarded**, because an unguarded arm makes the movement a no-op at the
+    // boundary it matches. An earlier version of this guard pinned
+    // `Some((start, _)) => start,` literally - which is exactly the stuck-`Left` bug
+    // it was meant to protect, so tightening it to the literal string locked the
+    // defect in. The `if` is the thing that matters.
     let left = function_body(&source, "fn atomic_boundary_left(");
     assert!(
-        left.contains("Some((start, _)) => start,"),
-        "left returns the chip's start on a chip: {left}"
+        left.contains("Some((start, _)) if start < col => start,"),
+        "left moves off the chip's start (an unguarded arm is a no-op there): {left}"
     );
     let right = function_body(&source, "fn atomic_boundary_right(");
     assert!(
-        right.contains("Some((start, end)) if col == start => end,"),
-        "right returns the chip's end on a chip: {right}"
+        right.contains("Some((start, end)) if col >= start && col < end => end,"),
+        "right moves off the chip's end (the mirror case): {right}"
     );
     assert!(
-        left.contains("None => Self::prev_cluster_boundary")
-            && right.contains("None => Self::next_cluster_boundary"),
-        "and the cluster snap is only the non-chip fallback"
+        left.contains("Self::prev_cluster_boundary(line, col)")
+            && right.contains("Self::next_cluster_boundary(line, col)"),
+        "and the cluster snap is only the non-chip fallback: left={left} right={right}"
     );
 }
 
@@ -404,5 +410,123 @@ fn labels_are_positions_and_renumber_keeps_them_unique() {
     assert!(
         !editor.contains("paste_counter"),
         "no counter is kept: it cannot be both unique across undo and contiguous"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// gap 4: the caret on a chip paints the whole badge
+// ---------------------------------------------------------------------------
+//
+// Gaps 1-3 made a chip one unit for motion, deletion and restore; on screen it still
+// looked like any other column, so nothing told the user the thing under the caret was
+// atomic. pi merges a marker's graphemes into one segment (`segmentWithMarkers`,
+// editor.ts:44-60) and paints that segment reversed - so the badge, not one cell, is
+// the caret.
+//
+// The behavioural rows live in `editor_atomic_tests.rs`. These pin the seam:
+
+// Verifies: gh #381 gap 4 - **the render path asks `chip_span`, it does not grow a
+// second notion of "where the caret is".**
+//
+// This is the guard the whole file exists for, one level down: the gap's own defect is
+// a caret path that does not consult the predicate. A fix that computed the chip range
+// from `atomic_span_at` directly, or re-implemented the bracket scan in `render`, would
+// pass every behavioural row and fail here - and the next chip rule would then have two
+// places to change, which is the bug class #381 is.
+#[test]
+fn the_render_path_asks_the_one_predicate() {
+    let editor = code_only(&read("crates/lca-tui/src/widgets/editor.rs"));
+    let atomic = code_only(&read("crates/lca-tui/src/widgets/editor_atomic.rs"));
+    let render = function_body(&editor, "pub fn render(&self");
+    // The painting lives in `editor_atomic.rs` (split out at the ceiling), so the two
+    // files are read together: the seam is "render delegates, the helper asks".
+    let paint = function_body(&atomic, "pub(super) fn paint_caret_into_row(");
+    assert!(
+        render.contains("paint_caret_into_row("),
+        "`render` delegates the caret to the one paint path: {render}"
+    );
+    assert!(
+        paint.contains("Self::caret_chip_span("),
+        "which asks `caret_chip_span`: {paint}"
+    );
+    // And that helper is the only place the chip geometry is derived.
+    let span = function_body(&atomic, "pub(super) fn caret_chip_span(");
+    assert!(
+        span.contains("Self::chip_span("),
+        "which asks `chip_span`, the predicate gaps 1-3 consult: {span}"
+    );
+    assert!(
+        !span.contains("atomic_span_at"),
+        "and does not re-derive it from the word predicate: {span}"
+    );
+    // Neither paint site may hold marker knowledge of its own.
+    for (name, body) in [("render", render), ("paint_caret_into_row", paint)] {
+        assert!(
+            !body.contains("atomic_span_at") && !body.contains("\"[paste #\""),
+            "`{name}` holds no marker knowledge of its own: {body}"
+        );
+    }
+}
+
+// The `27m`-not-`0m` property is guarded by #371's
+// `no_caret_closes_reverse_video_with_a_full_reset`, whose scan this cycle widened to
+// cover `editor_atomic.rs`. Two mechanisms for one property is how they drift, so this
+// file does not add a second.
+
+// Verifies: gh #381 gap 4 - **row clipping lives in the helper, so a split chip can
+// only paint the cells drawn on its row.**
+//
+// Gap 1 established that a chip wider than the pane splits *visually* only
+// (`editor.ts:174`). A reader that forgot to clip would paint a run longer than the
+// row, which is a row wider than the pane - the renderer contract the gap-1 cycle
+// already broke once.
+#[test]
+fn a_split_chip_can_only_paint_its_own_row() {
+    let atomic = code_only(&read("crates/lca-tui/src/widgets/editor_atomic.rs"));
+    let span = function_body(&atomic, "pub(super) fn caret_chip_span(");
+    assert!(
+        span.contains("start.max(row_start)") && span.contains("end.min(row_end)"),
+        "the chip span is intersected with the row's own range: {span}"
+    );
+}
+
+// Verifies: gh #381 gap 4 - **`paint_caret` gates *whether*, and the unpainted path
+// still reports the caret's own column.**
+//
+// The brief's third design call. Gating only the *painting* is not enough: the chip
+// arm also moves where the marker is emitted, so an ungated arm would put the IME
+// candidate window at the chip's first cell.
+#[test]
+fn paint_caret_gates_the_chip_arm_itself() {
+    let atomic = code_only(&read("crates/lca-tui/src/widgets/editor_atomic.rs"));
+    let body = function_body(&atomic, "pub(super) fn paint_caret_into_row(");
+    // The arm as written: `if self.paint_caret { Self::caret_chip_span(...) } else {
+    // None }`. Asserting the exact shape is right here - the property is that the
+    // span is not computed at all when nothing is painted, because the arm also
+    // decides where the marker lands.
+    let at = body
+        .find("let chip = if self.paint_caret {")
+        .unwrap_or_else(|| panic!("the chip span is gated on `paint_caret`: {body}"));
+    let arm = &body[at..];
+    let else_at = arm
+        .find("} else {")
+        .unwrap_or_else(|| panic!("the gate has an else arm: {arm}"));
+    assert!(
+        arm[..else_at].contains("Self::caret_chip_span("),
+        "the gated branch computes the chip span: {}",
+        &arm[..else_at]
+    );
+    let tail = &arm[else_at..];
+    let end = tail.find("};").expect("the arm ends");
+    // Whitespace-insensitive: the property is the *value*, not the formatting.
+    let tokens: Vec<&str> = tail[..end]
+        .split_whitespace()
+        .filter(|t| *t != "}")
+        .collect();
+    assert_eq!(
+        tokens,
+        vec!["else", "{", "None"],
+        "the ungated branch is `None`, so the marker stays at the caret's own column \
+         instead of jumping to the chip's first cell"
     );
 }

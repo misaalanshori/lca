@@ -29,7 +29,15 @@ fn read(path: &str) -> String {
 // fails here regardless of how it is spelled.
 #[test]
 fn no_caret_closes_reverse_video_with_a_full_reset() {
-    let source = read("crates/lca-tui/src/widgets/editor.rs");
+    // Gh #381 gap 4 widened this scan: the paint path now lives in
+    // `editor_atomic.rs` (split out at the 1,200-line ceiling), so a guard that read
+    // only `editor.rs` would pass while the caret's format strings moved house - the
+    // same "the guard reads a file the code left" failure the #381 chip guards hit.
+    let source = format!(
+        "{}\n{}",
+        read("crates/lca-tui/src/widgets/editor.rs"),
+        read("crates/lca-tui/src/widgets/editor_atomic.rs")
+    );
     let offenders: Vec<String> = source
         .lines()
         .enumerate()

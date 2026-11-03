@@ -198,6 +198,104 @@ impl Editor {
             })
     }
 
+    /// Paint the caret into one visual row of the buffer (gh #371 bug 2, #381 gap 4).
+    ///
+    /// Split out of `render` when that file reached the 1,200-line ceiling, and it
+    /// belongs here anyway: this is the second consumer of the chip predicate.
+    ///
+    /// **A caret on a chip is a range, not a column.** pi merges a marker's graphemes
+    /// into one segment (`segmentWithMarkers`, `editor.ts:44-60`) and draws that
+    /// segment reversed, so the badge - not one cell - is the caret, which is what
+    /// makes gaps 1-3's atomicity visible. [`Self::caret_chip_span`] asks the same
+    /// `chip_span` predicate motion and deletion consult, so there is one notion of
+    /// "where the caret is". Outside a chip this stays a one-grapheme caret.
+    ///
+    /// **`paint_caret` gates whether the span is computed at all**, not just whether
+    /// it is coloured: the span also decides where `CURSOR_MARKER` is emitted, so an
+    /// ungated arm would move the hardware cursor (and the IME candidate window) from
+    /// the caret's column to the chip's first cell.
+    ///
+    /// **The close is `27m`, never `0m`** (#371 bug 2). A full reset here would strip
+    /// the foreground, background and decorations of everything after the caret -
+    /// ADR-0037's channel-scoped rule, and the painted caret is its most visible
+    /// violation because it sits *inside* a row rather than around one.
+    pub(super) fn paint_caret_into_row(
+        &self,
+        text: &str,
+        row: &crate::widgets::editor_rows::VisualRow,
+        line: &str,
+    ) -> String {
+        use crate::engine::core::CURSOR_MARKER;
+        use crate::widgets::editor_rows;
+        let offset = self.cursor_col - row.start;
+        let chip = if self.paint_caret {
+            Self::caret_chip_span(line, self.cursor_col, (row.start, row.end))
+        } else {
+            None
+        };
+        let (before, cluster, after) = match chip {
+            // Slice by the row's own coordinates: `text` starts at `row.start`.
+            Some((from, to)) => (
+                editor_rows::slice_chars(text, 0, from - row.start),
+                Some(editor_rows::slice_chars(
+                    text,
+                    from - row.start,
+                    to - row.start,
+                )),
+                editor_rows::slice_chars(text, to - row.start, text.chars().count()),
+            ),
+            None => editor_rows::caret_split(text, offset),
+        };
+        if self.paint_caret {
+            match cluster {
+                Some(g) => format!("{before}{CURSOR_MARKER}\x1b[7m{g}\x1b[27m{after}"),
+                None => format!("{before}{CURSOR_MARKER}\x1b[7m \x1b[27m"),
+            }
+        } else {
+            // Nothing is painted: the cluster is still text, and the marker sits at
+            // the caret so the terminal's own cursor follows it.
+            match cluster {
+                Some(g) => format!("{before}{CURSOR_MARKER}{g}{after}"),
+                None => format!("{before}{CURSOR_MARKER}{after}"),
+            }
+        }
+    }
+
+    /// The span the painted caret should cover, clipped to one visual row
+    /// (gh #381 gap 4).
+    ///
+    /// Before gap 4 the caret was always one grapheme, so a caret inside
+    /// `[paste #1 +123 lines]` looked like a caret inside ordinary prose and nothing
+    /// on screen said the thing under it was atomic. pi merges a marker's graphemes
+    /// into one segment (`segmentWithMarkers`, `editor.ts:44-60`) and its renderer
+    /// paints the first such segment reversed, so the badge - not one cell - is the
+    /// caret.
+    ///
+    /// **This asks [`Self::chip_span`]**, the predicate gaps 1-3 already consult. A
+    /// second notion of "where the caret is" is exactly how these paths would
+    /// disagree, and that is the bug class the whole issue is.
+    ///
+    /// The result is clipped to `row`'s `[start, end)` because **a chip wider than the
+    /// pane splits visually only** (gap 1, `editor.ts:174`): the reverse video covers
+    /// the cells actually drawn on this row, never a phantom range past the edge.
+    ///
+    /// Returns `None` when the caret is not on a chip, in which case the render path
+    /// keeps its one-grapheme caret. The boundary belongs to the chip: `chip_span`
+    /// answers `Some` at the chip's first char, so the chip is painted from its `[`.
+    pub(super) fn caret_chip_span(
+        line: &str,
+        col: usize,
+        row: (usize, usize),
+    ) -> Option<(usize, usize)> {
+        let (start, end) = Self::chip_span(line, col)?;
+        let (row_start, row_end) = row;
+        let from = start.max(row_start);
+        let to = end.min(row_end);
+        // Nothing of the chip is drawn on this row (the caret was clipped into it by
+        // movement, or the row is empty): fall back to the ordinary caret.
+        (from < to).then_some((from, to))
+    }
+
     /// Replace the buffer **and** its paste registry (gh #381 gap 3).
     ///
     /// The companion `set_text` needs. A caller that swaps the whole buffer while
@@ -339,17 +437,26 @@ impl Editor {
     /// so combined emoji keep working.
     pub(super) fn atomic_boundary_left(line: &str, col: usize) -> usize {
         match Self::chip_span(line, col) {
-            Some((start, _)) => start,
-            None => Self::prev_cluster_boundary(line, col),
+            // **At the chip's start the caret must step past it**, not onto it.
+            // `chip_span` answers `Some((col, end))` there (the boundary belongs to
+            // the chip, so `Left` from inside lands on it), and returning `start`
+            // unconditionally made `Left` a no-op at that one column - the caret
+            // could enter a chip from the right but never leave it leftward, which a
+            // live pane showed and no existing row covered.
+            Some((start, _)) if start < col => start,
+            _ => Self::prev_cluster_boundary(line, col),
         }
     }
 
     /// The column one `Right` lands on from `col` (gh #381 gap 1).
     pub(super) fn atomic_boundary_right(line: &str, col: usize) -> usize {
         match Self::chip_span(line, col) {
-            Some((start, end)) if col == start => end,
-            Some((_, end)) => end,
-            None => Self::next_cluster_boundary(line, col),
+            // Crossing the whole chip is right in both of these cases, and only in
+            // these: at its start, and strictly inside it. **At its end** the caret
+            // has already crossed, so returning `end` again is a no-op - the mirror
+            // of the leftward case above, and equally reachable from a live pane.
+            Some((start, end)) if col >= start && col < end => end,
+            _ => Self::next_cluster_boundary(line, col),
         }
     }
 
