@@ -503,3 +503,10 @@ mod clear_on_shrink_is_wired;
 // the dispatch and the `?1004h` request as well as the guard.
 #[path = "374-fullscreen-exit-handoff.rs"]
 mod fullscreen_exit_handoff;
+
+// Gh #382: the composer's window (a cap already established by #388 gap 1, pinned here
+// from the widget's side), the autocomplete that survives a caret move, and a click on a
+// wrapped continuation row. The convergence question is the point: one cap in the
+// renderer, one refresh-or-close helper, one "last row" predicate.
+#[path = "382-composer-window-and-caret-seams.rs"]
+mod composer_window_and_caret_seams;

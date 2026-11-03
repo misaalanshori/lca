@@ -18,6 +18,19 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **The composer keeps the caret in view, completion survives a caret move, and a
+  click on a wrapped line lands on the line it hit** (gh #382). A long prompt no longer
+  pushes the transcript and footer off the screen: the composer shows at most 30% of
+  the terminal's rows (never fewer than five), follows the caret, and puts `─── ↑ 4 more
+  ───` / `─── ↓ 12 more ───` **inside** its own border so the window costs no extra
+  rows — this cap already existed from #388 gap 1, so it was pinned from the widget's
+  side rather than re-implemented. Arrow keys now **re-filter** the completion menu
+  instead of dismissing it, so stepping left from `/model` back into `/mod` narrows the
+  list, and the popup closes only when the caret leaves the token (which also fixes `Tab`
+  concatenating a stale row onto a partial command). And a click on the last cell of a
+  wrapped **continuation** row now places the caret on that row rather than one row
+  below, because a non-last visual row's end is the next row's start (`last ? len :
+  len - 1`, pi's rule).
 - **A paste chip survives the editor's three boundaries** (gh #381 gap 5, closing the
   issue). Gaps 1–4 made a chip one atomic unit for motion, deletion, undo and paint; the
   places where its text *leaves and re-enters* the editor still leaked. Recalling a

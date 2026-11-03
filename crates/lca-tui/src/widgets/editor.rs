@@ -528,7 +528,7 @@ impl Editor {
             self.cursor_line -= 1;
             self.cursor_col = self.current().chars().count();
         }
-        self.clear_suggestions();
+        self.refresh_or_close_suggestions();
     }
 
     /// Move the cursor right.
@@ -542,7 +542,7 @@ impl Editor {
             self.cursor_line += 1;
             self.cursor_col = 0;
         }
-        self.clear_suggestions();
+        self.refresh_or_close_suggestions();
     }
 
     /// Move the cursor up a VISUAL row (gh #28), keeping the sticky visual
@@ -586,7 +586,10 @@ impl Editor {
                 self.preferred_col = None;
             }
         }
-        self.clear_suggestions();
+        // Gh #382 gap 2: a move re-derives the popup. pi's `moveCursor` tail covers
+        // both axes with one statement (`editor.ts:1946-1956`), so Up/Down refreshing is
+        // the same rule as Left/Right rather than a second one.
+        self.refresh_or_close_suggestions();
     }
 
     /// Move the cursor down a VISUAL row (gh #28), keeping the sticky
@@ -617,7 +620,7 @@ impl Editor {
             self.cursor_col = self.current().chars().count();
             self.preferred_col = None;
         }
-        self.clear_suggestions();
+        self.refresh_or_close_suggestions();
     }
 
     /// Move the cursor to the line start.
@@ -688,61 +691,23 @@ impl Editor {
         self.cursor_line = visual.line;
         // A click is a horizontal move: the sticky column clears.
         self.preferred_col = None;
-        self.cursor_col = consumed.min(chars.len());
-        Some((self.cursor_line, self.cursor_col))
-    }
-
-    /// Refresh autocomplete suggestions.
-    pub fn refresh_suggestions(&mut self, force: bool) {
-        let Some(provider) = &self.provider else {
-            self.clear_suggestions();
-            return;
-        };
-        let before = self.text_before_cursor();
-        self.suggestions = provider.get_suggestions(&before, force);
-        self.suggestion_index = 0;
-    }
-
-    /// Select a suggestion by absolute index, clamped into range.
-    pub fn select_suggestion(&mut self, index: usize) {
-        if let Some(s) = &self.suggestions {
-            self.suggestion_index = index.min(s.items.len().saturating_sub(1));
-        }
-    }
-
-    /// Move the suggestion selection.
-    pub fn move_suggestion(&mut self, delta: i32) {
-        if let Some(s) = &self.suggestions {
-            let n = s.items.len() as i32;
-            if n == 0 {
-                return;
-            }
-            self.suggestion_index = ((self.suggestion_index as i32 + delta).rem_euclid(n)) as usize;
-        }
-    }
-
-    /// Accept the current suggestion.
-    pub fn accept_suggestion(&mut self) {
-        let Some(s) = self.suggestions.clone() else {
-            return;
-        };
-        let Some(item) = s.items.get(self.suggestion_index).cloned() else {
-            return;
-        };
-        // Replace the prefix with the value.
-        let prefix_chars = s.prefix.chars().count();
-        let start_col = self.cursor_col.saturating_sub(prefix_chars);
-        let start = self.char_to_byte(start_col);
-        let end = self.char_to_byte(self.cursor_col);
-        self.current_mut().replace_range(start..end, "");
-        self.cursor_col = start_col;
-        self.insert_str(&item.value);
-        // Continue completion for directories / trailing-space command names.
-        if item.value.ends_with(' ') {
-            self.clear_suggestions();
+        // Gh #382 gap 3: a **non-last** visual row's `end` is the *next* row's start,
+        // so a click on this row's last cell used to place the caret at a column that
+        // belongs to the following row - one row low, visibly. pi's rule
+        // (`editor.ts:688`): `last ? len : len - 1`.
+        //
+        // The last row keeps `len`, which is what lets a click past the end of the
+        // buffer reach the end - applying the clamp unconditionally would pin the caret
+        // one character short of it.
+        // `is_last_row_of_line` is the same predicate the wrapper and the caret use,
+        // so "last" here cannot drift from "last" there.
+        let limit = if editor_rows::is_last_row_of_line(&rows, row) {
+            visual.end
         } else {
-            self.refresh_suggestions(false);
-        }
+            visual.end.saturating_sub(1)
+        };
+        self.cursor_col = consumed.min(chars.len()).min(limit);
+        Some((self.cursor_line, self.cursor_col))
     }
 
     /// Handle a raw key sequence. Returns what happened.
@@ -1173,9 +1138,14 @@ mod atomic_tests;
 #[cfg(test)]
 #[path = "editor_seams_tests.rs"]
 mod seams_tests;
+#[path = "editor_suggestions.rs"]
+mod suggestions;
 #[cfg(test)]
 #[path = "editor_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "editor_window_tests.rs"]
+mod window_tests;
 
 #[cfg(test)]
 #[path = "popup_column_tests.rs"]

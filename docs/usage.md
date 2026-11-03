@@ -42,7 +42,13 @@ while a `/` only opens the command menu at the start of a message, so a
 url or a path you type mid-sentence never raises one. When the menu has
 descriptions, they share one column measured from the widest label, and
 rows that come from somewhere other than the agent itself say so —
-`[skill]`, `[extension: name]`, `[prompt: project]`. `!command` runs a
+`[skill]`, `[extension: name]`, `[prompt: project]`. A long prompt does not push the
+transcript off the screen: the editor shows at most 30% of the terminal's rows (never
+fewer than five) and keeps the caret's row in view, and the rows out of view are
+counted in the composer's own border — `─── ↑ 4 more ───` above, `─── ↓ 12 more ───`
+below — so the window costs no extra rows. Arrow keys move the completion menu with
+the caret rather than dismissing it: stepping back into `/mod` narrows the list, and it
+closes only when the caret leaves the token. `!command` runs a
 shell command and sends its output with your message; `!!command` runs one the model
 never sees. The card says which one you ran: `!bash …` in the accent
 color, `!!bash …` quiet, so the context boundary is visible at a glance
