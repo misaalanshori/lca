@@ -18,6 +18,18 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **Undo and draft-restore no longer strand a paste chip's content** (gh #381 gap 3). A
+  paste is stored as a marker whose *payload* lives in a registry, so any path that
+  restored one without the other left `[paste #1 …]` text that expanded to **nothing**:
+  undoing a paste-delete restored the marker with an empty registry, and restoring a
+  saved draft (a tab switch) cleared the registry outright. The undo entry now carries
+  the registry alongside the text, so undo puts both back and the payload expands
+  byte-identically. `set_text` **re-derives** the registry from the new text instead of
+  clearing it blindly — a payload survives exactly when its marker does — so a restored
+  draft keeps its chips while `/clear` still drops everything; a caller that replaces
+  the buffer while keeping its chips uses the new `set_text_with_pastes` pair. Chip
+  labels are positions kept contiguous by renumbering rather than a counter, which is
+  what makes a restored or newly pasted chip unique by construction.
 - **A large paste is now one unit for every cursor move and for deletion** (gh #381 gaps 1–2).
   `[paste #1 +123 lines]` was ordinary text to the editor, so `Left` needed 21 keystrokes to
   leave it, `Up`/`Down` could land inside it, a wrap split `paste`/`#1` across two rows, and —

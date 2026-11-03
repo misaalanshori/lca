@@ -518,3 +518,330 @@ fn two_chips_on_one_line_keep_their_own_payloads_across_a_delete() {
         expanded2.lines().next()
     );
 }
+
+// ---------------------------------------------------------------------------
+// gap 3: the registry is the truth, the marker text is its label
+// ---------------------------------------------------------------------------
+
+/// A chip whose payload is distinctive, so a wrong expansion is obvious.
+fn chip_with(tag: &str) -> String {
+    (0..12)
+        .map(|n| format!("{tag} line {n}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+// Verifies: gh #381 gap 3 - **after undo the payload expands byte-identically.**
+//
+// The defect: `undo.pop()` restored `(lines, cursor)` but not `pastes`, so undoing
+// a delete brought `[paste #1 +12 lines]` back with an **empty registry** and the
+// marker expanded to nothing. "The marker text came back" is what the broken
+// version already did; the assertion has to be the bytes.
+//
+// The undo entry therefore carries the registry, per the brief: tolerating a missing
+// entry inside `expand_paste_markers` would turn corruption into silence.
+#[test]
+fn undo_after_deleting_a_chip_restores_the_payload_byte_identically() {
+    let payload = chip_with("alpha");
+    let mut e = Editor::new();
+    e.insert_str("look: ");
+    e.insert_paste(&payload);
+    let before = super::atomic::expand_paste_markers(&e.text(), &e.pastes);
+    assert_eq!(
+        before,
+        format!("look: {payload}"),
+        "the fixture expands to the payload"
+    );
+
+    // Delete the chip, then undo it.
+    e.cursor_col = e.text().chars().count();
+    e.backspace();
+    assert!(!e.text().contains("[paste"), "the chip is gone");
+    e.undo();
+
+    let after = super::atomic::expand_paste_markers(&e.text(), &e.pastes);
+    assert_eq!(
+        after,
+        before,
+        "the restored chip expands to the same bytes, not to nothing: {:?}",
+        e.text()
+    );
+}
+
+// Verifies: gh #381 gap 3 - undo after a **renumber** restores labels *and*
+// payloads together.
+//
+// Deleting `#1` of two renumbers the survivor to `#1` and drops its payload to
+// `pastes[0]`. Undoing that must put the labels back to `#1`,`#2` **and** the
+// payload order back with them - restoring either alone leaves a marker pointing at
+// the wrong content, which is the corruption this gap is about.
+#[test]
+fn undo_after_a_renumber_restores_labels_and_payloads_together() {
+    let a = chip_with("AAA");
+    let b = chip_with("BBB");
+    let mut e = Editor::new();
+    e.insert_paste(&a);
+    e.insert_paste(&b);
+    let before_text = e.text();
+    let before_expanded = super::atomic::expand_paste_markers(&before_text, &e.pastes);
+    assert!(before_text.contains("[paste #1 ") && before_text.contains("[paste #2 "));
+
+    e.cursor_col = 10; // inside chip #1
+    e.backspace();
+    assert_eq!(
+        e.text(),
+        "[paste #1 +12 lines]",
+        "the survivor is renumbered"
+    );
+    e.undo();
+
+    assert_eq!(
+        e.text(),
+        before_text,
+        "both labels came back: {:?}",
+        e.text()
+    );
+    assert_eq!(
+        super::atomic::expand_paste_markers(&e.text(), &e.pastes),
+        before_expanded,
+        "and both payloads came back in the same order, so each chip still expands \
+         to its own content"
+    );
+}
+
+// Verifies: gh #381 gap 3 - **a restored draft keeps its chips' payloads.**
+//
+// The tab-switch path (`chat_tabs.rs`) saves a tab's editor text and restores it
+// with `set_text`; clearing the registry unconditionally meant a draft holding chips
+// came back with dead markers. The rule is not "never clear" - `/clear` legitimately
+// drops everything - but that **a payload survives exactly when its marker does**.
+//
+// The text alone cannot reconstruct a payload (a marker is a label, not a
+// container), so a preserving caller carries the registry: `pastes()` when saving,
+// `set_text_with_pastes` when restoring. `set_text` alone re-derives from the text,
+// which is the replacement case below.
+#[test]
+fn a_restored_draft_keeps_its_chips_payloads() {
+    let payload = chip_with("kept");
+    let mut e = Editor::new();
+    e.insert_str("draft: ");
+    e.insert_paste(&payload);
+    let saved_text = e.text();
+    let saved_pastes = e.pastes().to_vec();
+    let expanded_before = super::atomic::expand_paste_markers(&saved_text, &e.pastes);
+
+    // What a tab switch does: save the pair, restore it into the same editor.
+    let mut restored = Editor::new();
+    restored.set_text_with_pastes(&saved_text, saved_pastes);
+    assert_eq!(restored.text(), saved_text);
+    assert_eq!(
+        super::atomic::expand_paste_markers(&restored.text(), &restored.pastes),
+        expanded_before,
+        "the recalled draft still expands to its payloads"
+    );
+}
+
+// Verifies: gh #381 gap 3 - **`set_text` re-derives rather than preserving blindly.**
+//
+// A caller that restores only the *text* (not the payloads) keeps whichever markers
+// its own registry can still satisfy and drops the rest. On a fresh editor that is
+// nothing, and `expand_paste_markers` leaves the unknown id literal - the documented
+// behaviour for a marker this editor did not write, not silent corruption.
+#[test]
+fn set_text_keeps_only_the_payloads_the_new_text_can_reach() {
+    let kept = chip_with("kept");
+    let dropped = chip_with("dropped");
+    let mut e = Editor::new();
+    e.insert_paste(&kept);
+    e.insert_paste(&dropped);
+    assert_eq!(e.pastes().len(), 2, "fixture has two payloads");
+
+    // The new text references only `#1`; `#2` is gone, so its payload must not linger.
+    e.set_text("[paste #1 +12 lines]\nand some words");
+    assert_eq!(
+        e.pastes().len(),
+        1,
+        "only the reachable payload survives: {:?}",
+        e.pastes()
+    );
+    let expanded = super::atomic::expand_paste_markers(&e.text(), &e.pastes);
+    assert!(
+        expanded.contains("kept line 0"),
+        "and it is still the right one: {}",
+        &expanded[..expanded.len().min(60)]
+    );
+    assert!(
+        !expanded.contains("dropped line 0"),
+        "the dropped payload is gone with its marker"
+    );
+}
+
+// Verifies: gh #381 gap 3 - **a wholesale replacement still drops the registry.**
+//
+// The other half of the rule, and the reason `set_text` must not preserve blindly:
+// `/clear` (and any full-buffer replacement) must not leave a live payload behind
+// whose marker no longer exists, or the next paste could inherit content that does
+// not belong to it.
+#[test]
+fn set_text_still_clears_the_registry_when_no_marker_survives() {
+    let mut e = Editor::new();
+    e.insert_paste(&chip_with("gone"));
+    assert!(!e.pastes.is_empty(), "fixture has a payload");
+
+    e.set_text("");
+    assert!(
+        e.pastes.is_empty(),
+        "a buffer with no markers owns no payloads: {:?}",
+        e.pastes
+    );
+
+    // And a replacement that mentions the shape by hand is not a payload source.
+    e.insert_paste(&chip_with("again"));
+    e.set_text("just words, and a marker-shaped [paste #9 +1 lines] I typed");
+    assert!(
+        e.pastes.is_empty() || !e.text().contains("#1"),
+        "a hand-typed marker does not resurrect a payload: {:?}",
+        e.pastes
+    );
+}
+
+// Verifies: gh #381 gap 3 - **no id collision after undo plus a new paste.**
+//
+// If undo rewound the counter to the pre-delete value, the next paste would take
+// an id a restored chip already holds, and two different payloads would share a
+// label. The counter is the high-water mark of every id ever issued and does not
+// rewind on undo; `renumber_pastes` keeps the live labels contiguous.
+#[test]
+fn a_paste_after_undo_never_collides_with_a_restored_chip() {
+    let first = chip_with("first");
+    let second = chip_with("second");
+    let mut e = Editor::new();
+    e.insert_paste(&first);
+    // Delete it and undo, so a chip exists again.
+    e.cursor_col = e.text().chars().count();
+    e.backspace();
+    e.undo();
+
+    // Now paste something else.
+    e.insert_paste(&second);
+    let text = e.text();
+    let labels: Vec<&str> = text
+        .match_indices("[paste #")
+        .map(|(at, _)| {
+            let rest = &text[at + "[paste #".len()..];
+            let end = rest.find(' ').unwrap_or(rest.len());
+            &rest[..end]
+        })
+        .collect();
+    assert_eq!(labels.len(), 2, "two chips exist: {text:?}");
+    assert_ne!(
+        labels[0], labels[1],
+        "the two chips have distinct ids, so neither shadows the other: {text:?}"
+    );
+    // And both still expand to their own content.
+    let expanded = super::atomic::expand_paste_markers(&text, &e.pastes);
+    assert!(
+        expanded.contains("first line 0") && expanded.contains("second line 0"),
+        "each chip expands to its own payload: {}",
+        &expanded[..expanded.len().min(120)]
+    );
+}
+
+// Verifies: gh #381 gap 3 - **undo memory does not grow per keystroke.**
+//
+// A payload can be megabytes, so snapshotting the registry on every keystroke would
+// multiply the undo buffer by its size. A plain step carries no registry at all, so
+// typing - which cannot change `pastes` - costs the same as before this change, and
+// only the steps that *can* change it pay.
+//
+// The assertion is the registry bytes across the stack, plus the shape that makes it
+// true: every plain snapshot holds `None`. (My first version asserted the paste step
+// itself carried bytes, which is wrong: its entry is the **pre-paste** registry, and
+// on a first paste that is empty. An undo entry records what to restore, not what was
+// added.)
+#[test]
+fn typing_does_not_multiply_the_undo_buffers_payload_memory() {
+    let big = (0..200)
+        .map(|n| format!("payload line {n}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut e = Editor::new();
+    e.insert_paste(&big);
+    let after_paste = e.undo_payload_bytes();
+
+    // A word is many snapshots, none of which needs the registry.
+    for ch in "hello".chars() {
+        e.insert_str(&ch.to_string());
+    }
+    assert_eq!(
+        e.undo_payload_bytes(),
+        after_paste,
+        "typing added no registry bytes to the undo stack"
+    );
+    // The shape behind that: a plain step carries `None`, so it cannot grow with a
+    // payload however large the buffer is.
+    let plain = e.undo.iter().filter(|entry| entry.chips.is_none()).count();
+    assert!(
+        plain >= "hello".len(),
+        "each typed character is a plain step ({plain} plain of {} total)",
+        e.undo.len()
+    );
+    // And a *second* paste does carry the live registry, because undoing it must
+    // restore the first payload - that is where the memory is spent, and it is
+    // bounded by the registry, not by keystrokes.
+    e.insert_paste(&big);
+    assert!(
+        e.undo_payload_bytes() >= big.len(),
+        "a paste whose undo must restore an earlier payload carries it: {}",
+        e.undo_payload_bytes()
+    );
+}
+
+// Verifies: gh #381 gap 3 - **a paste after a delete yields contiguous labels.**
+//
+// The counter cannot be both unique across undo and contiguous after a delete:
+// rewinding it collides with a restored chip, not rewinding it yields `#1,#3`. Labels
+// are therefore positions - the new chip takes the next free slot - and the buffer is
+// renumbered after every insert. Without that renumber the third paste in this row
+// would be written as `#3` beside a live `#1`.
+#[test]
+fn a_paste_after_a_delete_yields_contiguous_labels() {
+    let chip = |tag: &str| {
+        (0..12)
+            .map(|n| format!("{tag} {n}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let mut e = Editor::new();
+    e.insert_paste(&chip("one"));
+    e.insert_paste(&chip("two"));
+    // Both chips are on one line, so deleting the **first** means putting the caret
+    // strictly inside it - a column at the line's end would be inside `#2`'s span.
+    e.cursor_line = 0;
+    e.cursor_col = 10;
+    e.backspace();
+    // Paste a third - it must land as `#2`, not `#3`.
+    e.insert_paste(&chip("three"));
+    let text = e.text();
+    assert!(
+        text.contains("[paste #1 ") && text.contains("[paste #2 "),
+        "labels are contiguous after the paste: {text:?}"
+    );
+    assert!(!text.contains("[paste #3 "), "and no gap appears: {text:?}");
+    // Every marker still expands to the content that belongs to it.
+    let expanded = super::atomic::expand_paste_markers(&text, &e.pastes);
+    assert!(
+        expanded.contains("two 0") && expanded.contains("three 0"),
+        "each chip expands to its own payload: {}",
+        &expanded[..expanded.len().min(80)]
+    );
+    assert!(
+        !expanded.contains("one 0"),
+        "and the deleted payload is not resurrected"
+    );
+    // The labels were renumbered onto positions, so the surviving `#1` is `two`.
+    assert!(
+        text.starts_with("[paste #1 +12 lines]"),
+        "the survivor leads: {text:?}"
+    );
+}

@@ -280,3 +280,129 @@ fn function_source<'a>(source: &'a str, signature: &str) -> &'a str {
     let end = rest.find("\n}\n").map(|at| at + 2).unwrap_or(rest.len());
     &rest[..end]
 }
+
+// ---------------------------------------------------------------------------
+// gap 3: the registry is the truth, the marker text is its label
+// ---------------------------------------------------------------------------
+
+// Verifies: gh #381 gap 3 - the undo entry carries the registry.
+//
+// `undo.pop()` used to restore `(lines, cursor)` only, so undoing a paste-delete
+// brought `[paste #1 …]` back with an **empty registry** and the marker expanded to
+// nothing. The brief is explicit that the fix is the snapshot carrying what a restore
+// needs - *not* `expand_paste_markers` learning to tolerate a missing entry, which
+// turns corruption into silence. Both halves are pinned here.
+#[test]
+fn the_undo_entry_carries_the_registry_and_expansion_stays_strict() {
+    let atomic = code_only(&read("crates/lca-tui/src/widgets/editor_atomic.rs"));
+    let entry = function_body(&atomic, "pub(super) struct UndoEntry {");
+    assert!(
+        entry.contains("chips: Option<Vec<String>>"),
+        "the undo entry carries the paste registry: {entry}"
+    );
+
+    let editor = code_only(&read("crates/lca-tui/src/widgets/editor.rs"));
+    let undo = function_body(&editor, "pub fn undo(");
+    assert!(
+        undo.contains("self.pastes = pastes"),
+        "and the restore puts it back: {undo}"
+    );
+
+    // The strictness half: an unknown id is still left literal, never silently
+    // emptied. Tolerating absence would have "fixed" the symptom by hiding it.
+    let expand = function_body(&atomic, "pub(super) fn expand_paste_markers(");
+    assert!(
+        expand.contains("out.push('[')"),
+        "an unknown marker is still left as text, not expanded to nothing: {expand}"
+    );
+}
+
+// Verifies: gh #381 gap 3 - `set_text` re-derives rather than clearing blindly.
+//
+// The brief's axis: history/draft restore needs chips preserved, a wholesale
+// replacement legitimately drops them. One blanket behaviour is wrong either way, so
+// the rule is that **a payload survives exactly when its marker does** - which gets
+// both callers right without a second code path.
+#[test]
+fn set_text_re_derives_the_registry_from_the_text() {
+    let editor = code_only(&read("crates/lca-tui/src/widgets/editor.rs"));
+    let set = function_body(&editor, "pub fn set_text(");
+    assert!(
+        set.contains("retain_live_payloads"),
+        "set_text re-derives the registry from the new text: {set}"
+    );
+    assert!(
+        !set.contains("self.pastes.clear()"),
+        "and does not clear it blindly: {set}"
+    );
+
+    let atomic = code_only(&read("crates/lca-tui/src/widgets/editor_atomic.rs"));
+    let retain = function_body(&atomic, "pub(super) fn retain_live_payloads(");
+    // Truncation, not compaction: ids are positional, so compacting would re-point
+    // `#2` at `#1`'s content - the very corruption this gap is about, reintroduced in
+    // the fix. (My first draft did exactly that and the row caught it.)
+    assert!(
+        retain.contains("pastes[..highest.min(pastes.len())].to_vec()"),
+        "survivors keep their positions, so no id is re-pointed: {retain}"
+    );
+}
+
+// Verifies: gh #381 gap 3 - a preserving caller can carry the registry.
+//
+// The text alone cannot reconstruct a payload (a marker is a label, not a
+// container), so a tab switch restoring a saved draft must hand the payloads over.
+// `set_text_with_pastes` is that pair; `set_text` alone remains the replacement path.
+#[test]
+fn a_preserving_caller_has_a_pair_to_carry_the_registry() {
+    // The pair moved to `editor_atomic.rs` at the 1,200-line ceiling, so the guard
+    // reads the whole editor surface rather than one file.
+    let editor = format!(
+        "{}\n{}",
+        code_only(&read("crates/lca-tui/src/widgets/editor.rs")),
+        code_only(&read("crates/lca-tui/src/widgets/editor_atomic.rs"))
+    );
+    assert!(
+        editor.contains("pub fn set_text_with_pastes("),
+        "the preserving entry point exists"
+    );
+    assert!(
+        editor.contains("pub fn pastes(&self) -> &[String]"),
+        "and the save side can read the registry to carry it"
+    );
+    // The preserving variant must still filter - carrying stale payloads would let a
+    // later marker inherit content that is not its own.
+    let with = function_body(&editor, "pub fn set_text_with_pastes(");
+    assert!(
+        with.contains("retain_live_payloads"),
+        "and it keeps only what the restored text reaches: {with}"
+    );
+}
+
+// Verifies: gh #381 gap 3 - labels are positions, so uniqueness needs no counter.
+//
+// A counter cannot be both unique across undo and contiguous after a delete:
+// rewinding it collides with a restored chip, and not rewinding yields `#1,#3`. The
+// resolution is that the label is the next free slot and `renumber_pastes` maps the
+// live order onto `1..n` after every change, which makes a restored or new chip
+// unique by construction.
+#[test]
+fn labels_are_positions_and_renumber_keeps_them_unique() {
+    let editor = format!(
+        "{}\n{}",
+        code_only(&read("crates/lca-tui/src/widgets/editor.rs")),
+        code_only(&read("crates/lca-tui/src/widgets/editor_atomic.rs"))
+    );
+    let paste = function_body(&editor, "fn insert_paste(");
+    assert!(
+        paste.contains("let id = self.pastes.len() + 1"),
+        "the new chip takes the next free slot: {paste}"
+    );
+    assert!(
+        paste.contains("self.renumber_pastes()"),
+        "and the buffer is renumbered after the insert: {paste}"
+    );
+    assert!(
+        !editor.contains("paste_counter"),
+        "no counter is kept: it cannot be both unique across undo and contiguous"
+    );
+}

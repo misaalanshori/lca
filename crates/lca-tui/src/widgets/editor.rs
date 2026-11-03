@@ -21,6 +21,7 @@ use crate::engine::keybindings::KeybindingsManager;
 use crate::engine::text::visible_width;
 use crate::widgets::autocomplete::{AutocompleteProvider, Suggestions};
 use crate::widgets::editor_rows;
+use atomic::UndoEntry;
 
 pub mod popup_layout;
 
@@ -56,7 +57,7 @@ pub struct Editor {
     history: Vec<String>,
     history_index: Option<usize>,
     draft: String,
-    undo: Vec<(Vec<String>, usize, usize)>,
+    undo: Vec<UndoEntry>,
     kill_ring: Vec<String>,
     pastes: Vec<String>,
     keybindings: Arc<KeybindingsManager>,
@@ -176,9 +177,21 @@ impl Editor {
         }
         self.cursor_line = self.lines.len() - 1;
         self.cursor_col = self.lines[self.cursor_line].chars().count();
-        // A new buffer owns no pastes; a stale registry would make the next
-        // marker reuse an id whose content no longer belongs to it.
-        self.pastes.clear();
+        // gh #381 gap 3: the registry is **re-derived from the text** rather than
+        // blindly cleared. A payload survives exactly when its marker does, which
+        // gets both callers right:
+        //
+        // * **preserve** (tab switch, draft restore: `chat_tabs.rs`) - the restored
+        //   text still holds the chips, so their payloads come with it. Clearing
+        //   here is what left a restored draft with dead markers.
+        // * **clear** (`/clear`, a wholesale replacement: `chat.rs`) - the new text
+        //   carries no markers, so nothing survives, and no dead payload lingers to
+        //   be inherited by a later paste.
+        //
+        // A marker whose payload is not in the current registry (hand-typed text, or
+        // a marker from another buffer) keeps no payload, which is the safe answer:
+        // `expand_paste_markers` leaves an unknown id literal by design.
+        self.pastes = atomic::retain_live_payloads(&self.text(), &self.pastes);
         self.clear_suggestions();
     }
 
@@ -251,8 +264,25 @@ impl Editor {
     }
 
     fn snapshot(&mut self) {
-        self.undo
-            .push((self.lines.clone(), self.cursor_line, self.cursor_col));
+        self.push_undo(None);
+    }
+
+    /// Snapshot including the paste registry (gh #381 gap 3).
+    ///
+    /// Called only where the registry can change - a paste, a chip delete, a
+    /// renumber - because a payload may be megabytes and most undo steps are single
+    /// keystrokes that cannot affect it. The registry bound is the `undo` cap itself.
+    fn snapshot_with_chips(&mut self) {
+        self.push_undo(Some(self.pastes.clone()));
+    }
+
+    fn push_undo(&mut self, chips: Option<Vec<String>>) {
+        self.undo.push(UndoEntry {
+            lines: self.lines.clone(),
+            cursor_line: self.cursor_line,
+            cursor_col: self.cursor_col,
+            chips,
+        });
         if self.undo.len() > 200 {
             self.undo.remove(0);
         }
@@ -271,6 +301,14 @@ impl Editor {
     pub fn insert_str(&mut self, text: &str) {
         self.coalesce_undo = false;
         self.snapshot();
+        self.insert_at_cursor(text);
+    }
+
+    /// Insert without taking a snapshot: the caller already took one that carries
+    /// the registry (gh #381 gap 3), and a second plain step would let an undo stop
+    /// *between* the marker and its payload.
+    fn insert_str_no_snapshot(&mut self, text: &str) {
+        self.coalesce_undo = false;
         self.insert_at_cursor(text);
     }
 
@@ -332,7 +370,13 @@ impl Editor {
     /// Delete the character before the cursor.
     pub fn backspace(&mut self) {
         self.preferred_col = None;
-        self.snapshot();
+        // A chip delete changes the registry, so the step carries it (gh #381 gap 3);
+        // otherwise a plain snapshot - the registry cannot have changed.
+        if self.cursor_col > 0 && self.chip_at_cursor() {
+            self.snapshot_with_chips();
+        } else {
+            self.snapshot();
+        }
         if self.cursor_col > 0 {
             // A paste chip is deleted whole (gh #381 gap 2): one Backspace on a
             // chip's `]` used to leave `[paste #1 +123 lines`, which no longer
@@ -369,7 +413,11 @@ impl Editor {
     /// Delete the character after the cursor.
     pub fn delete_forward(&mut self) {
         self.preferred_col = None;
-        self.snapshot();
+        if self.chip_at_cursor() {
+            self.snapshot_with_chips();
+        } else {
+            self.snapshot();
+        }
         let len = self.current().chars().count();
         if self.cursor_col < len {
             // A paste chip is deleted whole (gh #381 gap 2); otherwise the whole
@@ -448,10 +496,16 @@ impl Editor {
     /// Undo the last change.
     pub fn undo(&mut self) {
         self.preferred_col = None;
-        if let Some((lines, line, col)) = self.undo.pop() {
-            self.lines = lines;
-            self.cursor_line = line.min(self.lines.len() - 1);
-            self.cursor_col = col;
+        if let Some(entry) = self.undo.pop() {
+            self.lines = entry.lines;
+            self.cursor_line = entry.cursor_line.min(self.lines.len() - 1);
+            self.cursor_col = entry.cursor_col;
+            // A step that changed the registry restores it too (gh #381 gap 3).
+            // Without this the marker text came back with an empty registry and
+            // expanded to nothing - the corruption this gap is about.
+            if let Some(pastes) = entry.chips {
+                self.pastes = pastes;
+            }
         }
     }
 
@@ -905,40 +959,6 @@ impl Editor {
         }
     }
 
-    fn insert_paste(&mut self, content: &str) {
-        // The shared primitive does the tmux CSI-u decode and the
-        // CRLF/tab/non-printable normalization (TUI cycle 7, R1) so the
-        // editor and every single-line field agree on what a paste is.
-        let mut filtered = crate::widgets::paste::normalize(content);
-        // A pasted path after a word character gets a leading space.
-        if filtered.starts_with(['/', '~', '.']) {
-            let before = self.text_before_cursor();
-            if before
-                .chars()
-                .next_back()
-                .is_some_and(|c| c.is_alphanumeric() || c == '_')
-            {
-                filtered.insert(0, ' ');
-            }
-        }
-        let lines = filtered.split('\n').count();
-        if lines > 10 || filtered.chars().count() > 1000 {
-            let marker = if lines > 10 {
-                format!("[paste #{} +{} lines]", self.pastes.len() + 1, lines)
-            } else {
-                format!(
-                    "[paste #{} {} chars]",
-                    self.pastes.len() + 1,
-                    filtered.chars().count()
-                )
-            };
-            self.pastes.push(filtered);
-            self.insert_str(&marker);
-        } else {
-            self.insert_str(&filtered);
-        }
-    }
-
     /// Render the buffer at a width. The caret is *painted into the row*
     /// (pi's model, `editor.md` §5): the grapheme cluster under it in
     /// reverse video, an end-of-line caret as a reverse-video space, and
@@ -1044,37 +1064,6 @@ impl Editor {
         // start; `preferred_col` still holds the column the user was aiming at, so
         // moving back restores it (pi's `snappedFromCursorCol`).
         self.cursor_col = Self::snap_out_of_chip(&self.lines[row.line].clone(), landed);
-    }
-
-    /// The char index of the previous grapheme-cluster boundary strictly
-    /// before `col` (pi's grapheme-snapped movement: clusters are stepped over
-    /// whole, never entered).
-    fn prev_cluster_boundary(line: &str, col: usize) -> usize {
-        use unicode_segmentation::UnicodeSegmentation as _;
-        let mut boundary = 0usize;
-        let mut pos = 0usize;
-        for cluster in line.graphemes(true) {
-            let next = pos + cluster.chars().count();
-            if next >= col {
-                break;
-            }
-            boundary = next;
-            pos = next;
-        }
-        boundary
-    }
-
-    /// The char index of the next grapheme-cluster boundary after `col`.
-    fn next_cluster_boundary(line: &str, col: usize) -> usize {
-        use unicode_segmentation::UnicodeSegmentation as _;
-        let mut pos = 0usize;
-        for cluster in line.graphemes(true) {
-            pos += cluster.chars().count();
-            if pos > col {
-                return pos;
-            }
-        }
-        pos
     }
 
     /// The visible popup window into the suggestions (gh #175): pi's
