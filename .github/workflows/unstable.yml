@@ -128,10 +128,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          # Pinned, not `ubuntu-latest` (gh #580): same reason as publish.yml
+          # and the ci.yml release-targets job - a release lane's OS must not
+          # roll underneath it, and apt.llvm.org publishes no suite for the
+          # 26.04 codename every `ubuntu-latest` runner now uses.
+          - os: ubuntu-24.04
             name: linux
             targets: x86_64-unknown-linux-musl aarch64-unknown-linux-musl
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             name: windows
             targets: x86_64-pc-windows-msvc aarch64-pc-windows-msvc
           - os: macos-14
@@ -162,11 +166,21 @@ jobs:
           for target in ${{ matrix.targets }}; do rustup target add "$target"; done
       - name: LLVM19 for the MSVC build scripts
         if: runner.os == 'Linux'
+        # Same install as publish.yml, and the same gh #580 reasoning: the
+        # image is pinned above (apt.llvm.org has no suite for the 26.04
+        # codename), `--retry` covers a transient DNS blip, and the version
+        # assertion turns a future toolchain drift into one readable line
+        # rather than a C compile error in the MSVC build.
         run: |
-          curl -sSfL https://apt.llvm.org/llvm.sh -o /tmp/llvm.sh
+          set -euo pipefail
+          curl -sSfL --retry 3 --retry-delay 2 --retry-connrefused \
+            https://apt.llvm.org/llvm.sh -o /tmp/llvm.sh
           chmod +x /tmp/llvm.sh
           sudo /tmp/llvm.sh 19
           sudo apt-get install -y -q clang-19
+          installed=$(clang-19 -dumpversion)
+          echo "clang-19 $installed"
+          dpkg --compare-versions "$installed" ge 19.1.7
       - uses: taiki-e/install-action@v2
         if: runner.os == 'Linux'
         with:

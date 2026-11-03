@@ -18,6 +18,20 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **The release-targets CI job is green again on every push** (gh #580). It had gone
+  red on every commit — including ones touching nothing in the release path — because
+  the release lanes ran on `ubuntu-latest` while apt.llvm.org selected its apt suite
+  from the runner's codename. GitHub rolled that label from 24.04 (`noble`, published)
+  to 26.04 (`resolute`, which the archive never published), so the LLVM19 install step
+  died with `E: The repository '…/resolute …' does not have a Release file`, and once
+  with a transient `curl: (6) Could not resolve host`. The three release lanes
+  (`ci.yml`'s release-targets job, `publish.yml`, `unstable.yml`) now **pin
+  `ubuntu-24.04`** — a release lane whose OS rolls on its own cannot honour NFR-17's
+  reproducible builds, and a floating label is invisible in a diff and unbisectable.
+  The install step also retries the download and **asserts clang-19 is at least
+  19.1.7**, since 19.1.1 (Ubuntu's own package) breaks the MSVC build over
+  `__prefetch`; a future drift now names itself in one line instead of appearing as an
+  unreadable C error.
 - **Undo and draft-restore no longer strand a paste chip's content** (gh #381 gap 3). A
   paste is stored as a marker whose *payload* lives in a registry, so any path that
   restored one without the other left `[paste #1 …]` text that expanded to **nothing**:

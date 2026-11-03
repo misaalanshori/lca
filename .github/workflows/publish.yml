@@ -141,10 +141,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          # Pinned, not `ubuntu-latest` (gh #580): these legs produce the
+          # artifacts NFR-17 promises are reproducible, so the OS under them
+          # must not roll on its own. When `ubuntu-latest` moved 24.04 ->
+          # 26.04, apt.llvm.org published no suite for the new codename and
+          # every release build died in the LLVM19 step. Bump deliberately.
+          - os: ubuntu-24.04
             name: linux
             targets: x86_64-unknown-linux-musl aarch64-unknown-linux-musl
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             name: windows
             targets: x86_64-pc-windows-msvc aarch64-pc-windows-msvc
           # The arm mac builds both darwin targets: Apple's SDK is
@@ -171,16 +176,28 @@ jobs:
           for target in ${{ matrix.targets }}; do rustup target add "$target"; done
       - name: LLVM19 for the MSVC build scripts
         if: runner.os == 'Linux'
-        # apt.llvm.org's19 is19.1.7 - the exact version both windows
-        # exes built with locally. Ubuntu's archive ships19.1.1, whose
-        # clang-cl disagrees with xwin's intrin.h over __prefetch
-        # (wasmtime-fiber's windows.c fails to compile there and only
-        # there).
+        # 19.1.7 is not cosmetic: Ubuntu's own archive ships 19.1.1 on 24.04,
+        # and its clang-cl disagrees with xwin's intrin.h over __prefetch, so
+        # wasmtime-fiber's windows.c fails to compile there and only there
+        # (commit 3c1495d0). Hence apt.llvm.org rather than the distro.
+        #
+        # gh #580: the image above is pinned because `llvm.sh` selects its
+        # repository from the runner's codename, and `ubuntu-latest` rolling
+        # 24.04 -> 26.04 (resolute) broke every release build with
+        # `E: The repository '.../resolute ...' does not have a Release file`.
+        # `--retry` covers the transient `curl: (6) Could not resolve host`
+        # this step also produced. The version assertion names the cause here
+        # if either comes back, instead of leaving it to a C compile error.
         run: |
-          curl -sSfL https://apt.llvm.org/llvm.sh -o /tmp/llvm.sh
+          set -euo pipefail
+          curl -sSfL --retry 3 --retry-delay 2 --retry-connrefused \
+            https://apt.llvm.org/llvm.sh -o /tmp/llvm.sh
           chmod +x /tmp/llvm.sh
           sudo /tmp/llvm.sh 19
           sudo apt-get install -y -q clang-19
+          installed=$(clang-19 -dumpversion)
+          echo "clang-19 $installed"
+          dpkg --compare-versions "$installed" ge 19.1.7
       - uses: taiki-e/install-action@v2
         if: runner.os == 'Linux'
         with:

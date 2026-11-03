@@ -418,7 +418,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          # Pinned, not `ubuntu-latest` (gh #580). The release lanes build the
+          # artifacts NFR-17 promises are reproducible, so the OS under them
+          # must not roll on its own: when `ubuntu-latest` moved 24.04 -> 26.04
+          # this job went red on every push, because apt.llvm.org publishes no
+          # suite for the new codename. A floating image is invisible in a diff
+          # and unbisectable, which is exactly what made #580 cost a cycle to
+          # diagnose. Bump this deliberately, with a green run, or not at all.
+          - os: ubuntu-24.04
             name: linux+windows
             targets: x86_64-unknown-linux-musl aarch64-unknown-linux-musl x86_64-pc-windows-msvc aarch64-pc-windows-msvc
           - os: macos-14
@@ -430,11 +437,43 @@ jobs:
         run: rustup set profile minimal
       - name: LLVM19 for the MSVC build scripts
         if: runner.os == 'Linux'
+        # gh #580: the image is now pinned above, because this step selects
+        # its repository from the runner's codename and `ubuntu-latest` moved
+        # 24.04 (noble, published by apt.llvm.org) to 26.04 (resolute, not
+        # published) underneath the release lane:
+        #
+        #   E: The repository 'https://apt.llvm.org/resolute
+        #      llvm-toolchain-resolute-19 Release' does not have a Release file.
+        #
+        # A floating label is invisible in a diff and unbisectable, which is
+        # what made this cost a cycle to name rather than a minute to see.
+        #
+        # Why not the image's own archive, which has clang-19 for 26.04?
+        # Because on 24.04 it ships 19.1.1, and 19.1.7 is not cosmetic:
+        # clang-cl 19.1.1 disagrees with xwin's intrin.h over __prefetch, so
+        # wasmtime-fiber's windows.c fails to compile there and only there
+        # (commit 3c1495d0). Going to 26.04 for the newer package would move
+        # the shim off clang too - `ci/clang-shim` probes /usr/bin/clang-18,
+        # which 26.04 does not ship, and would fall back to /usr/bin/clang
+        # (clang-22). Same mismatch, different door. So: pin the image to the
+        # combination that is proven green, and assert the version.
+        #
+        # `--retry` covers the other failure this step produced, a transient
+        # `curl: (6) Could not resolve host: apt.llvm.org` on a runner with
+        # flaky DNS - a blip that fails a required job for no reason.
         run: |
-          curl -sSfL https://apt.llvm.org/llvm.sh -o /tmp/llvm.sh
+          set -euo pipefail
+          curl -sSfL --retry 3 --retry-delay 2 --retry-connrefused \
+            https://apt.llvm.org/llvm.sh -o /tmp/llvm.sh
           chmod +x /tmp/llvm.sh
           sudo /tmp/llvm.sh 19
           sudo apt-get install -y -q clang-19
+          # The assertion is the deliverable: if a future image or repo stops
+          # offering 19.1.7, this line names it in one sentence instead of
+          # surfacing later as an unreadable C error in the MSVC build.
+          installed=$(clang-19 -dumpversion)
+          echo "clang-19 $installed"
+          dpkg --compare-versions "$installed" ge 19.1.7
           echo "/usr/lib/llvm-19/bin" >> "$GITHUB_PATH"
       - uses: taiki-e/install-action@v2
         if: runner.os == 'Linux'
