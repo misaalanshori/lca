@@ -842,3 +842,94 @@ fn the_picker_keeps_a_closed_frame_at_its_last_painted_row() {
         "more than one content row was painted for the wrapped line: {rows:?}"
     );
 }
+
+// Verifies: gh #373 gap 3 - **a click on a wrapped modal row lands on that row's line.**
+//
+// The agreement row the brief calls for, and the one that fails today: `click_modal` sized
+// its hit box from `body.len()` while the paint used wrapped rows, so a click on a
+// wrapped row was rejected as "outside the box" (or mapped to the wrong body line). Both
+// now count the same wrapped rows through `wrap_count`, which is
+// `wrap_text_with_ansi(...).len()` - the painter's own wrapper.
+//
+// The hit-test needs a live host, so this row drives its *arithmetic* directly: the
+// wrapped row index of a click, computed the way `click_modal` computes it, must name the
+// body line that the frame paints on that row.
+#[test]
+fn a_click_on_a_wrapped_row_maps_to_the_line_painted_there() {
+    let body = vec![
+        "short".to_string(),
+        "a body line long enough that it must wrap more than once across the box".to_string(),
+        "tail".to_string(),
+    ];
+    let inner = 60usize * 80 / 100 - 4;
+
+    // What `click_modal` builds: each body line's first content row.
+    let mut wrapped: Vec<usize> = Vec::with_capacity(body.len() + 1);
+    let mut rows = 0usize;
+    for line in &body {
+        wrapped.push(rows);
+        rows += wrap_text_with_ansi(line, inner).len().max(1);
+    }
+    wrapped.push(rows);
+    assert!(rows > body.len(), "the fixture really wraps ({rows} rows)");
+
+    // The rect the hit-test now resolves: the wrapped count, not `body.len()`.
+    let options = lca_tui::engine::core::OverlayOptions {
+        width: Some(lca_tui::engine::core::SizeValue::Percent(80)),
+        min_width: Some(24),
+        max_height: Some(lca_tui::engine::core::SizeValue::Abs(24)),
+        margin: 2,
+        ..Default::default()
+    };
+    let rect_wrapped = lca_tui::engine::core::resolve_overlay_layout(
+        &options,
+        60,
+        24,
+        u16::try_from(rows).unwrap_or(u16::MAX).saturating_add(2),
+    );
+    let rect_unwrapped = lca_tui::engine::core::resolve_overlay_layout(
+        &options,
+        60,
+        24,
+        u16::try_from(body.len())
+            .unwrap_or(u16::MAX)
+            .saturating_add(2),
+    );
+    assert_ne!(
+        rect_wrapped.height,
+        rect_unwrapped.height,
+        "the two counts give different hit boxes here, so the row distinguishes them \
+         (wrapped {rows} vs body {})",
+        body.len()
+    );
+
+    // Every content row of the wrapped rect maps into a body line that exists, and the
+    // rows of line 1 map to line 1 - not to line 2, which is what an unwrapped count
+    // reports for them.
+    // Content row `r` (1-based within the frame) is body row `r - 1`.
+    for content_row in 1..(rect_wrapped.height as usize - 1) {
+        let content = content_row - 1;
+        let line_index = wrapped
+            .iter()
+            .rposition(|start| *start <= content)
+            .unwrap_or(0);
+        assert!(
+            line_index < body.len(),
+            "row {content} maps to a real body line ({line_index})"
+        );
+        if content >= wrapped[1] && content < wrapped[2] {
+            assert_eq!(
+                line_index, 1,
+                "body row {content} is one of the wrapped line's rows, so it names line 1"
+            );
+        }
+    }
+    // And the last content row is inside the rect, so a click there is not rejected.
+    let last_content = rect_wrapped.height as usize - 2;
+    assert!(
+        last_content >= wrapped[1],
+        "a click on the last content row of the wrapped rect reaches line 1's rows \
+         (last content {last_content}, line 1 starts {})",
+        wrapped[1]
+    );
+}

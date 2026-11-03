@@ -234,6 +234,20 @@ fn the_hit_test_counts_wrapped_rows_like_the_painter() {
         body.contains("wrap_count("),
         "the hit-test counts wrapped rows, not lines: {body}"
     );
+    // And it sizes its rect from that count, not from `body.len()`. This is the line
+    // that made the hit box smaller than the painted box.
+    assert!(
+        body.contains("wrapped_rows"),
+        "the wrapped count is computed once: {body}"
+    );
+    assert!(
+        body.contains("modal_rect(wrapped_rows"),
+        "and the rect is resolved from it, so the hit box matches the paint: {body}"
+    );
+    assert!(
+        !body.contains("modal_rect(body.len()"),
+        "not from the unwrapped line count: {body}"
+    );
     // The painter's wrapper is the same one.
     let render = read("crates/lca-ui/src/render.rs");
     assert!(

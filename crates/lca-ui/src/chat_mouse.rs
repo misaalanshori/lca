@@ -135,7 +135,19 @@ impl Chat {
     /// relative coordinates (unwrapped line, content origin).
     fn click_modal(&mut self, col: u16, row: u16, width: u16, height: u16) -> Option<ExtClick> {
         let (body, hits) = self.modal_layout(width)?;
-        let rect = Self::modal_rect(body.len(), width, height);
+        // Gh #373 gap 3: **two passes, the same shape the painter uses.** The rect first
+        // needs `inner` to wrap against, so it is resolved once from a minimal height to
+        // read the width; the wrapped rows are then counted and the rect resolved again.
+        // Sizing from `body.len()` (the unwrapped count) made the hit box smaller than
+        // the painted box - a click on a wrapped row was rejected as "outside" - which is
+        // the disagreement this row exists to remove, not just to move.
+        let inner = (Self::modal_rect(1, width, height).width as usize).saturating_sub(4);
+        let wrapped_rows: usize = body.iter().map(|line| wrap_count(line, inner).max(1)).sum();
+        // The painter trims a body that cannot fit, so the rect's content count must be
+        // the *clamped* one or the two disagree again in the tall case.
+        let budget =
+            (Self::modal_rect(usize::MAX, width, height).height as usize).saturating_sub(2);
+        let rect = Self::modal_rect(wrapped_rows.min(budget), width, height);
         let (col, row) = (col as usize, row as usize);
         let (rcol, rrow) = (rect.col as usize, rect.row as usize);
         if col < rcol || col >= rcol + rect.width as usize {
@@ -151,7 +163,6 @@ impl Chat {
         }
         // Content rows: `│ {wrapped} │` - two frame columns, then the
         // wrapped segments of each body line in order.
-        let inner = (rect.width as usize).saturating_sub(4);
         let mut wrapped: Vec<usize> = Vec::with_capacity(body.len() + 1);
         let mut rows = 0;
         for line in &body {
