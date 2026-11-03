@@ -20,18 +20,22 @@ Dates are UTC.
 ### Fixed
 - **The release-targets CI job is green again on every push** (gh #580). It had gone
   red on every commit — including ones touching nothing in the release path — because
-  the release lanes ran on `ubuntu-latest` while apt.llvm.org selected its apt suite
-  from the runner's codename. GitHub rolled that label from 24.04 (`noble`, published)
-  to 26.04 (`resolute`, which the archive never published), so the LLVM19 install step
-  died with `E: The repository '…/resolute …' does not have a Release file`, and once
-  with a transient `curl: (6) Could not resolve host`. The three release lanes
-  (`ci.yml`'s release-targets job, `publish.yml`, `unstable.yml`) now **pin
-  `ubuntu-24.04`** — a release lane whose OS rolls on its own cannot honour NFR-17's
-  reproducible builds, and a floating label is invisible in a diff and unbisectable.
-  The install step also retries the download and **asserts clang-19 is at least
-  19.1.7**, since 19.1.1 (Ubuntu's own package) breaks the MSVC build over
-  `__prefetch`; a future drift now names itself in one line instead of appearing as an
-  unreadable C error.
+  the release lanes installed their compiler from **apt.llvm.org**, which failed in two
+  independent ways: its `llvm.sh` selects the apt suite by the runner's codename, and it
+  publishes none for `resolute` (the codename `ubuntu-latest` rolled to), giving
+  `E: The repository '…/resolute …' does not have a Release file`; and the host then
+  lost DNS outright, giving `curl: (6) Could not resolve host` on all retries. The
+  compiler now comes from the image's **own archive**, which ships clang-19
+  `1:19.1.7-20ubuntu4` — the exact `19.1.7` the commit `3c1495d0` went third-party for —
+  so the lane trusts no host it does not already need. The three release lanes
+  (`ci.yml`'s release-targets job, `publish.yml`, `unstable.yml`) also **pin
+  `ubuntu-26.04`** rather than the floating `ubuntu-latest`: a lane that builds the
+  artifacts NFR-17 promises are reproducible must not have its OS roll on its own, and
+  the install step now **asserts clang-19 is at least 19.1.7** (19.1.1, Ubuntu 24.04's
+  package, breaks the MSVC build over `__prefetch`), so a future drift names itself in
+  one line instead of surfacing as an unreadable C error. `ci/clang-shim` resolves
+  `/usr/lib/llvm-19/bin/clang` explicitly for the same reason: falling back to a bare
+  `/usr/bin/clang` on a newer image would silently select a different compiler.
 - **Undo and draft-restore no longer strand a paste chip's content** (gh #381 gap 3). A
   paste is stored as a marker whose *payload* lives in a registry, so any path that
   restored one without the other left `[paste #1 …]` text that expanded to **nothing**:

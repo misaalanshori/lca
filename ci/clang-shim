@@ -28,5 +28,19 @@ for ((i = 1; i <= $#; i++)); do
       ;;
   esac
 done
-real=$(/usr/bin/clang-18 --version >/dev/null 2>&1 && echo /usr/bin/clang-18 || echo /usr/bin/clang)
+# Resolve the compiler, in preference order (gh #580). The release lanes
+# install clang-19 from the distro archive and it is the version the MSVC
+# build needs: 19.1.7's clang-cl agrees with xwin's intrin.h over
+# __prefetch, 19.1.1's does not (wasmtime-fiber's windows.c). llvm-19 comes
+# first. The clang-18 probe stays for an image that ships it without
+# /usr/lib/llvm-19, and /usr/bin/clang is the last resort rather than the
+# default: on a newer image it is clang-22, which is not what the release
+# artifacts were built with, so silently using it reintroduces the mismatch.
+real=/usr/bin/clang
+for candidate in /usr/lib/llvm-19/bin/clang /usr/bin/clang-19 /usr/bin/clang-18; do
+    if [ -x "$candidate" ]; then
+        real="$candidate"
+        break
+    fi
+done
 exec "$real" "${args[@]}"
