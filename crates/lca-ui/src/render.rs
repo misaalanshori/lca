@@ -298,12 +298,24 @@ fn overlay_box_placed(
     selected: Option<usize>,
     options: &lca_tui::engine::core::OverlayOptions,
 ) {
-    let content_height = u16::try_from(body.len())
-        .unwrap_or(u16::MAX)
-        .saturating_add(2);
-    let rect = resolve_overlay_layout(options, width, height, content_height);
-    let w = rect.width as usize;
-    let inner = w.saturating_sub(4);
+    // Gh #373 gap 3: **wrap first, then size.** The height used to come from
+    // `body.len()` - the *unwrapped* line count - while the painter drew one row per
+    // *wrapped* segment. A modal with one long line was therefore laid out three rows
+    // tall and painted seven, so the paint ran past its own rect: the bottom border
+    // could fall outside the frame entirely, and `click_modal` (which sized from the
+    // same unwrapped number) rejected clicks on rows that were visibly inside the box.
+    //
+    // This is a **convergence**, not a second implementation: the windowed caller above
+    // already did exactly this - wrap, count the rows, then resolve the rect. The rows
+    // are computed once and handed to the one painter, so the height and the paint
+    // cannot disagree.
+    //
+    // The wrap needs `inner`, which needs `w`, which needs `rect` - so the width is
+    // resolved first from a minimal height and the height re-resolved from the rows.
+    // `width` does not depend on the content height, so the second resolve agrees with
+    // the first about `w`/`inner`.
+    let provisional = resolve_overlay_layout(options, width, height, 1);
+    let inner = (provisional.width as usize).saturating_sub(4);
 
     // A full frame: pi's selectors draw complete boxes (DynamicBorder),
     // and a left-only border reads as a half-drawn frame.
@@ -316,7 +328,52 @@ fn overlay_box_placed(
             box_lines.push((index, format!("│ {wrapped}{} │", " ".repeat(pad))));
         }
     }
-    overlay_box_placed_windowed(base, &rect, title, &box_lines, theme, selected, None);
+    let (box_lines, bottom_note) = truncate_to_height(box_lines, options, width, height);
+    let content_height = u16::try_from(box_lines.len())
+        .unwrap_or(u16::MAX)
+        .saturating_add(2);
+    let rect = resolve_overlay_layout(options, width, height, content_height);
+    overlay_box_placed_windowed(
+        base,
+        &rect,
+        title,
+        &box_lines,
+        theme,
+        selected,
+        bottom_note.as_deref(),
+    );
+}
+
+/// Trim wrapped body rows to what the box can actually show, and report the
+/// shortfall for the bottom border (gh #373 gap 3).
+///
+/// Once wrapping is counted, a long body can exceed the terminal. `resolve_overlay_layout`
+/// clamps the box's *height*, but clamping the height alone leaves the extra rows to be
+/// dropped wherever the clipping lands - which is how a box ends up **without a bottom
+/// border**, the same defect one step out. So the content is trimmed here, deliberately,
+/// and the number left over is returned for the frame to report.
+///
+/// The bottom border carries a `… n more` note so the box never silently loses lines: the
+/// frame stays closed and says what is missing. Zero hidden rows means no note, which is
+/// why this returns `Option<String>`.
+fn truncate_to_height(
+    rows: Vec<(usize, String)>,
+    options: &lca_tui::engine::core::OverlayOptions,
+    width: u16,
+    height: u16,
+) -> (Vec<(usize, String)>, Option<String>) {
+    // Ask the layout for the **tallest box this terminal allows** (content = the
+    // whole screen), so the clamp is read from the one function that owns it rather
+    // than re-derived here. Two rows go to the borders.
+    let tallest = resolve_overlay_layout(options, width, height, u16::MAX);
+    let max_rows = (tallest.height as usize).saturating_sub(2);
+    if rows.len() <= max_rows {
+        return (rows, None);
+    }
+    let hidden = rows.len() - max_rows;
+    let mut kept = rows;
+    kept.truncate(max_rows);
+    (kept, Some(format!("… {hidden} more")))
 }
 
 /// Fit one frame caption (`title` or the scroll note) into the box

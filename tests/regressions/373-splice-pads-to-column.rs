@@ -143,3 +143,101 @@ fn no_caller_shortens_its_column_to_the_rows_text() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// gap 3: a modal's height comes from the rows it paints
+// ---------------------------------------------------------------------------
+//
+// `overlay_box_placed` sized the box from `body.len()` — the *unwrapped* line count —
+// while painting one row per **wrapped** segment. So a modal with one long line was
+// laid out three rows tall and painted seven: the paint ran past its own rect, the
+// bottom border fell outside the frame once the body was tall enough to be clipped, and
+// `click_modal` — which sizes its hit area from the same unwrapped number — rejected
+// clicks on rows that were visibly inside the box.
+//
+// The behavioural rows live in `crates/lca-ui/src/render_tests.rs`. These pin the shape:
+
+// Verifies: gh #373 gap 3 - **the height is computed from the painted rows, and the
+// painter receives them.**
+//
+// The failure mode this repo has hit repeatedly is "measured one thing, painted another"
+// (#384's table cells, #325's mermaid width). The guard is therefore that the height
+// expression names the **rows** collection, not `body`, so the two cannot be different
+// sets of rows.
+#[test]
+fn the_modal_height_comes_from_the_painted_rows() {
+    let source = read("crates/lca-ui/src/render.rs");
+    let body = function_body(&source, "fn overlay_box_placed(");
+    assert!(
+        body.contains("box_lines.len()"),
+        "the height is derived from the rows that will be painted: {body}"
+    );
+    assert!(
+        !body.contains("content_height = u16::try_from(body.len())"),
+        "not from the unwrapped body: {body}"
+    );
+    // And those are the rows handed to the one painter.
+    assert!(
+        body.contains("overlay_box_placed_windowed("),
+        "the same painter the windowed caller uses: {body}"
+    );
+    assert!(
+        body.contains("&box_lines"),
+        "and the wrapped rows are what it receives, so the height and the paint agree: \
+         {body}"
+    );
+}
+
+// Verifies: gh #373 gap 3 - **a body taller than the terminal is truncated with a note,
+// not silently clipped.**
+//
+// Once wrapping counts, a long body can exceed the screen. `resolve_overlay_layout`
+// clamps the *height*; if nothing else happens the extra rows are dropped wherever the
+// clip lands, which is how the box ends up **without a bottom border** — the same defect
+// one step out. So the trim is explicit and the frame reports the shortfall.
+#[test]
+fn a_tall_body_is_truncated_and_the_frame_says_how_much() {
+    let source = read("crates/lca-ui/src/render.rs");
+    let body = function_body(&source, "fn overlay_box_placed(");
+    assert!(
+        body.contains("truncate_to_height("),
+        "the rows are trimmed to the box's budget: {body}"
+    );
+    assert!(
+        body.contains("bottom_note.as_deref()"),
+        "and the shortfall reaches the bottom border: {body}"
+    );
+
+    let trim = function_body(&source, "fn truncate_to_height(");
+    assert!(
+        trim.contains("format!(\"… {hidden} more\")"),
+        "the note says how many rows are missing rather than leaving the frame open: \
+         {trim}"
+    );
+    // The budget is read from the layout that owns the clamp, not re-derived.
+    assert!(
+        trim.contains("resolve_overlay_layout("),
+        "the content budget comes from the one layout function: {trim}"
+    );
+}
+
+// Verifies: gh #373 gap 3 - **the hit-test reads the same wrapped count the paint does.**
+//
+// `click_modal` sizes its area from `modal_rect(body_len)`. The guard cannot call it
+// (it needs a live host), so it pins the seam instead: the hit-test's arithmetic wraps
+// each line and counts the segments, which is the same call the painter makes.
+#[test]
+fn the_hit_test_counts_wrapped_rows_like_the_painter() {
+    let mouse = read("crates/lca-ui/src/chat_mouse.rs");
+    let body = function_body(&mouse, "fn click_modal(");
+    assert!(
+        body.contains("wrap_count("),
+        "the hit-test counts wrapped rows, not lines: {body}"
+    );
+    // The painter's wrapper is the same one.
+    let render = read("crates/lca-ui/src/render.rs");
+    assert!(
+        render.contains("wrap_text_with_ansi(&linkify_urls(line), inner)"),
+        "the painter wraps with `wrap_text_with_ansi` over the linkified line"
+    );
+}

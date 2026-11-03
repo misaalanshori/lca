@@ -18,6 +18,17 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **A modal is as tall as the text it actually paints** (gh #373 gap 3). The box's
+  height was computed from `body.len()` — the *unwrapped* line count — while the painter
+  draws one row per **wrapped** segment, so a modal holding one long line was laid out
+  three rows tall and painted seven. The paint ran past its own rect, which meant the
+  click hit-test (sized from the same unwrapped number) rejected clicks on rows that were
+  visibly inside the box, and a body tall enough to be clipped lost its **bottom border
+  entirely**. The height now comes from the wrapped rows, and those same rows are handed
+  to the one painter — the single-pass path converged on the two-pass shape the windowed
+  picker already used rather than gaining a third. A body taller than the terminal is
+  trimmed deliberately and the bottom border reports the shortfall (`╰─ … 18 more ─╯`),
+  so a box can no longer lose lines silently or end without a frame.
 - **The composer keeps the caret in view, completion survives a caret move, and a
   click on a wrapped line lands on the line it hit** (gh #382). A long prompt no longer
   pushes the transcript and footer off the screen: the composer shows at most 30% of

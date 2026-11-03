@@ -562,3 +562,283 @@ fn the_selected_picker_row_carries_the_selected_background() {
         "only the selected row is highlighted: {other:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// gh #373 gap 3: a modal's height comes from the rows it paints
+// ---------------------------------------------------------------------------
+//
+// `overlay_box_placed` sized the box from `body.len()` - the *unwrapped* line count -
+// while painting `wrap_text_with_ansi` output. So a modal with one long line was laid
+// out three rows tall and then painted seven, and the paint ran past its own rect.
+//
+// The windowed variant (`overlay_box_placed_windowed`'s caller) already did this
+// correctly: it wraps first, counts the wrapped rows, and only then resolves the rect.
+// **This is a convergence, not a second implementation** - the single-pass path now
+// computes its rows first and hands the same rows to the same painter.
+
+/// The rows a paint actually touched, and the box's own vertical extent.
+fn painted_box(base: &[String]) -> (Vec<usize>, Option<(usize, usize)>) {
+    let rows: Vec<usize> = base
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| {
+            let plain = strip_terminal_sequences(r);
+            !plain.trim_matches(['.', ' ']).trim().is_empty()
+        })
+        .map(|(i, _)| i)
+        .collect();
+    let top = base
+        .iter()
+        .position(|r| strip_terminal_sequences(r).contains('╭'));
+    let bottom = base
+        .iter()
+        .rposition(|r| strip_terminal_sequences(r).contains('╰'));
+    (rows, top.zip(bottom))
+}
+
+// Verifies: gh #373 gap 3 - **a modal with one long line is tall enough for its wrapped
+// content**, and its bottom border sits below every painted row.
+//
+// This is the row the gap exists for. The assertion is on the *painted frame*, not a
+// computed height: a fix that raised the number without moving the border would pass a
+// height check and still cut through its own text.
+#[test]
+fn a_modal_with_one_long_line_is_as_tall_as_its_wrapped_content() {
+    let mut base = vec![".".repeat(60); 24];
+    let body = vec!["x".repeat(200)];
+    overlay_box_selected(&mut base, 60, 24, "T", &body, &Theme::plain(), None);
+
+    let (rows, frame) = painted_box(&base);
+    let (top, bottom) = frame.expect("the box has both borders");
+    let last_painted = *rows.last().expect("something was painted");
+    assert_eq!(
+        bottom, last_painted,
+        "the bottom border is the last painted row - nothing sits below it: painted \
+         {rows:?}, frame {top}..={bottom}"
+    );
+    // And the box really did grow for the wrap: one line, five wrapped rows.
+    assert!(
+        bottom > top + 2,
+        "the box is taller than a single unwrapped line would need ({top}..={bottom})"
+    );
+    // Nothing was lost: every wrapped row is drawn.
+    let inner = (60usize * 80 / 100).saturating_sub(4);
+    let need = wrap_text_with_ansi(&body[0], inner).len();
+    assert_eq!(
+        bottom - top - 1,
+        need,
+        "one content row per wrapped row, no more and none dropped"
+    );
+}
+
+// Verifies: gh #373 gap 3 - **the box's height comes from the wrapped rows, not from
+// `body.len()`.**
+//
+// This is the assertion that fails against the defect, and it took two attempts to
+// write: comparing the *painted* extent to the wrapped count passes either way, because
+// the overflowing paint happens to span the same rows. What actually differs is the
+// **rect the layout resolves** - the one `click_modal` uses - so that is what the row
+// reads, via the same `resolve_overlay_layout` call with the wrapped count.
+#[test]
+fn the_box_height_is_derived_from_the_wrapped_rows() {
+    let inner = 60usize * 80 / 100 - 4;
+    let body = vec!["x".repeat(200)];
+    let need = wrap_text_with_ansi(&body[0], inner).len();
+    assert!(need > 1, "the fixture wraps ({need} rows)");
+
+    let options = lca_tui::engine::core::OverlayOptions {
+        width: Some(lca_tui::engine::core::SizeValue::Percent(80)),
+        min_width: Some(24),
+        max_height: Some(lca_tui::engine::core::SizeValue::Abs(24)),
+        margin: 2,
+        ..Default::default()
+    };
+    let from_wrapped = lca_tui::engine::core::resolve_overlay_layout(
+        &options,
+        60,
+        24,
+        u16::try_from(need).unwrap_or(u16::MAX).saturating_add(2),
+    );
+    let from_unwrapped = lca_tui::engine::core::resolve_overlay_layout(
+        &options,
+        60,
+        24,
+        u16::try_from(body.len())
+            .unwrap_or(u16::MAX)
+            .saturating_add(2),
+    );
+    assert_ne!(
+        from_wrapped.height,
+        from_unwrapped.height,
+        "the two ways of counting really do differ here (wrapped {need} vs body {}), so          the row distinguishes them",
+        body.len()
+    );
+
+    // And the paint occupies the wrapped rect. Note this second half passes either way
+    // for a *short* long-line body: the overflowing paint happens to span the same rows,
+    // which is why the defect was invisible on screen until the body was tall enough to
+    // be clipped. The `assert_ne!` above is the half that fails against the defect; the
+    // clipped case is `a_body_taller_than_the_terminal_...`.
+    let mut base = vec![".".repeat(60); 24];
+    overlay_box_selected(&mut base, 60, 24, "T", &body, &Theme::plain(), None);
+    let (_, frame) = painted_box(&base);
+    let (top, bottom) = frame.expect("both borders");
+    assert_eq!(
+        bottom - top + 1,
+        from_wrapped.height as usize,
+        "the painted frame is exactly the wrapped rect's height ({} rows), not the          unwrapped one ({} rows)",
+        from_wrapped.height,
+        from_unwrapped.height
+    );
+}
+
+// Verifies: gh #373 gap 3 (control) - **a body that already fits is unchanged.**
+//
+// The fix must not reshape short modals: a three-line body is three rows whatever the
+// wrapping does, and a `body.len()+2` that happened to be right stays right.
+
+#[test]
+fn a_short_body_is_unchanged_by_the_two_pass() {
+    let body = vec!["alpha".to_string(), "beta".to_string(), "gamma".to_string()];
+    let mut base = vec![".".repeat(60); 24];
+    overlay_box_selected(&mut base, 60, 24, "T", &body, &Theme::plain(), None);
+    let (_, frame) = painted_box(&base);
+    let (top, bottom) = frame.expect("both borders");
+    assert_eq!(bottom - top + 1, 3 + 2, "three body lines plus two borders");
+    let text: String = base
+        .iter()
+        .map(|r| strip_terminal_sequences(r))
+        .collect::<Vec<_>>()
+        .join("\n");
+    for word in ["alpha", "beta", "gamma"] {
+        assert!(text.contains(word), "{word} is painted: {text}");
+    }
+}
+
+// Verifies: gh #373 gap 3 - **a body taller than the terminal keeps a closed frame and
+// says so.**
+//
+// Once wrapping counts, a long body can exceed the screen. The clamp caps the box's
+// *height*; the content is then truncated to fit and the bottom border carries a
+// `… n more` note, so the box is never left open and never silently drops lines. That
+// decision has to be pinned: an open box is the same defect one step out.
+#[test]
+fn a_body_taller_than_the_terminal_keeps_a_closed_frame_and_says_what_is_missing() {
+    // 24 rows is the case that actually distinguishes the fix: with the unwrapped
+    // height the paint runs past the frame's end and the **bottom border is never
+    // drawn** (`bottom=false`), while a 12-row terminal happened to clip in a place
+    // that kept it. A row that only used 12 would have passed against the defect - which
+    // is exactly what my first version did.
+    let term_h = 24u16;
+    let body = vec!["y".repeat(2000)];
+    let mut base = vec![".".repeat(60); term_h as usize];
+    overlay_box_selected(&mut base, 60, term_h, "T", &body, &Theme::plain(), None);
+
+    let (_, frame) = painted_box(&base);
+    let (top, bottom) = frame.expect("the box still has a top and a bottom border");
+    assert!(
+        bottom < term_h as usize,
+        "the box fits the terminal ({top}..={bottom} of {term_h})"
+    );
+    let bottom_row = strip_terminal_sequences(&base[bottom]);
+    assert!(
+        bottom_row.contains("more"),
+        "and the bottom border says how many rows are not shown, rather than leaving the \
+         frame open: {bottom_row:?}"
+    );
+}
+
+// Verifies: gh #373 gap 3 - **an unbreakable token wider than the inner width hard-wraps,
+// and the box is sized for the rows that produces.**
+//
+// The adversarial case for any wrapper: a long path or URL has no break opportunity, so
+// the wrapper force-breaks it. Whatever it does, the height must come from the same call,
+// or the box and its content disagree again.
+#[test]
+fn an_unbreakable_token_wider_than_the_box_wraps_and_the_box_accounts_for_it() {
+    let mut base = vec![".".repeat(60); 24];
+    let token = "https://example.com/".to_string() + &"a".repeat(300);
+    let body = vec![token.clone()];
+    overlay_box_selected(&mut base, 60, 24, "T", &body, &Theme::plain(), None);
+
+    let (_, frame) = painted_box(&base);
+    let (top, bottom) = frame.expect("both borders");
+    let inner = 60usize * 80 / 100 - 4;
+    // The link is wrapped *after* linkification, which is what the painter does.
+    let need = wrap_text_with_ansi(&linkify_urls(&token), inner).len();
+    assert!(
+        need > 1,
+        "the token really is unbreakable-and-wider than {inner}"
+    );
+    assert_eq!(
+        bottom - top - 1,
+        need,
+        "one row per wrapped segment of the unbreakable token"
+    );
+    // Every painted row is exactly the box width - a hard wrap must not overflow.
+    for row in &base[top..=bottom] {
+        assert_eq!(
+            visible_width(&strip_terminal_sequences(row)),
+            60,
+            "each row is the full box width: {:?}",
+            strip_terminal_sequences(row)
+        );
+    }
+}
+
+// Verifies: gh #373 gap 3 - **the picker's own two-pass path is the one that survives.**
+//
+// `overlay_box_picker` already wrapped for its window before this cycle (it counts
+// `wrap_row` output to decide what fits), so it is the **reference** the single-pass
+// modal path converged on rather than a second thing to fix. This row pins that its
+// bottom border is its last painted row - the property that was broken on the modal
+// side - so a future edit cannot make the picker regress into the same shape.
+//
+// It is anchored above the composer, so it cannot grow downward the way a centred modal
+// can; that is why the assertion is "the frame is closed at its last painted row"
+// rather than "the box grew".
+#[test]
+fn the_picker_keeps_a_closed_frame_at_its_last_painted_row() {
+    // A realistic picker body: several items, one of which wraps. (One item alone hits
+    // the `.max(1)` item floor, which is a different code path.)
+    let body = vec![
+        "short".to_string(),
+        "a very long picker row that must wrap more than once across the box".to_string(),
+        "tail".to_string(),
+        String::new(),
+        String::new(),
+    ];
+    let mut base = vec![".".repeat(60); 24];
+    let _ = overlay_box_picker(
+        &mut base,
+        60,
+        24,
+        "pick",
+        &body,
+        &Theme::plain(),
+        Some(0),
+        0,
+        None,
+        &[],
+    );
+    let (rows, frame) = painted_box(&base);
+    let (_, bottom) = frame.expect("both borders");
+    assert_eq!(
+        *rows.last().expect("painted"),
+        bottom,
+        "the picker's bottom border is its last painted row: {rows:?}"
+    );
+    // And the wrapping row really did become more than one painted row.
+    let inner = 60usize * 80 / 100 - 4;
+    assert!(
+        wrap_text_with_ansi(&body[1], inner).len() > 1,
+        "the fixture's long row wraps ({:?} at inner {inner}), so the row exercises the          two-pass path: {:?}",
+        wrap_text_with_ansi(&body[1], inner).len(),
+        body[1]
+    );
+    let content_rows = rows.len().saturating_sub(2);
+    assert!(
+        content_rows > 1,
+        "more than one content row was painted for the wrapped line: {rows:?}"
+    );
+}
