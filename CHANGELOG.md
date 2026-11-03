@@ -18,6 +18,17 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **The real-terminal harness no longer reports a blank pane as a correct layout**
+  (gh #489 follow-up). `wait_for_layout_width` returned success when the pane's widest
+  painted line was within the requested width — and an **unpainted** pane measures `0`, so
+  it answered "the layout fits" for an empty screen. `Tmux::resize` waits through that
+  primitive, so a row's setup could return instantly against nothing and then assert on
+  the frame it had been handed; `harness_contract`'s layout row failed on CI four
+  consecutive times with `measured 0` while green locally. A blank capture is now treated
+  as "not yet" — bounded, loud about which condition failed, and re-spawning once the way
+  `settle` does — and the row waits for its own fixture with `wait_until_painted` rather
+  than assuming it. The negative direction is unchanged: a painted 140-wide frame still
+  fails a request for 60 columns.
 - **A modal is as tall as the text it actually paints** (gh #373 gap 3). The box's
   height was computed from `body.len()` — the *unwrapped* line count — while the painter
   draws one row per **wrapped** segment, so a modal holding one long line was laid out

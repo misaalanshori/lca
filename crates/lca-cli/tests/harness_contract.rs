@@ -531,6 +531,13 @@ fn wait_for_layout_width_sees_a_layout_drawn_for_a_wider_pane() {
     // A line as wide as the pane it was drawn in, repainted so it stays put.
     session.spawn_raw("sh -c 'while :; do printf \"\\033[H\"; printf \"%0140d\\n\" 0 | tr \" \" x; sleep 0.2; done'");
     session.resize(140, 30);
+    // The fixture's own precondition has to be **waited for**, not assumed (gh #489
+    // follow-up). `logical_width` on a pane that has not painted yet reads 0, and
+    // 0 > 60 is false - so on a loaded runner this row failed on its own setup before
+    // the primitive under test ever ran. `wait_until_painted` is the primitive for
+    // exactly that, and it fails loudly (with a re-spawn attempt) if the fixture never
+    // paints, so this is a bound rather than a sleep.
+    session.wait_until_painted(std::time::Duration::from_secs(20));
     let wide = session.logical_width();
     assert!(
         wide > 60,
@@ -551,13 +558,67 @@ fn wait_for_layout_width_sees_a_layout_drawn_for_a_wider_pane() {
     let narrow = Tmux::new("layout-width-ok");
     narrow.spawn_raw("sh -c 'while :; do printf \"\\033[H\"; printf \"%060d\\n\" 0 | tr \" \" y; sleep 0.2; done'");
     narrow.resize(60, 30);
+    // Gh #489 follow-up: the same precondition, waited for. The assertion below
+    // (`logical_width() <= 60`) is satisfied by a **blank** pane too - 0 <= 60 - so
+    // without this wait the row would pass for the wrong reason on a slow runner,
+    // which is the vacuous half of the same defect.
+    narrow.wait_until_painted(std::time::Duration::from_secs(20));
     let pane = narrow.wait_for_layout_width(60);
     assert!(
-        !pane.trim().is_empty() || pane.is_empty(),
-        "it returns a frame"
+        !pane.trim().is_empty(),
+        "it returns a **painted** frame - a blank capture satisfies `<= 60` without \
+         saying anything about the layout: {pane:?}"
     );
     assert!(
         narrow.logical_width() <= 60,
         "and the frame it returns is laid out at the asked width"
+    );
+}
+
+// Verifies: gh #489 follow-up - **`wait_for_layout_width` refuses a blank pane.**
+//
+// The primitive returned a frame whose widest line was `<= cols`, and a pane that has not
+// painted has a widest line of **0** - so it answered "the layout is correct" for a screen
+// that was simply empty. That vacuity is the defect the failing row hit from the outside:
+// `resize()` waits through this primitive, so the row's setup returned instantly against
+// nothing, and its own `measured 0` assertion fired.
+//
+// A blank frame is **not** a layout that fits; it is the terminal not having come up. The
+// primitive now says so, with a bounded wait and a loud failure rather than returning
+// early. The fixture here never paints at all, so the row is proving the *failure*
+// direction on purpose - which is why it is a `catch_unwind` rather than a call.
+#[cfg(unix)]
+#[test]
+fn wait_for_layout_width_refuses_a_pane_that_never_painted() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal rows are Unix-only)");
+        return;
+    }
+    let session = Tmux::new("layout-width-blank");
+    // Paints nothing, ever: the "the shell has not started yet" condition the loaded
+    // runner produced, made deterministic.
+    session.spawn_raw("sh -c 'sleep 30'");
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        session.wait_for_layout_width_within(60, std::time::Duration::from_millis(400))
+    }));
+    assert!(
+        outcome.is_err(),
+        "a pane that never painted must not satisfy a layout request - 0 cells is not \
+         a layout that fits, it is an empty screen"
+    );
+    // And the failure names the real condition, so a reader is not sent looking for a
+    // resize bug.
+    let message = outcome
+        .err()
+        .and_then(|payload| {
+            payload
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
+        })
+        .unwrap_or_default();
+    assert!(
+        message.contains("never painted") || message.contains("empty"),
+        "the panic says the pane was blank rather than misreporting a width: {message}"
     );
 }

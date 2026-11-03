@@ -230,12 +230,38 @@ impl Tmux {
         let budget = timeout * Self::load_factor();
         let deadline = Instant::now() + budget;
         let mut last = self.capture();
+        // Gh #489 follow-up: **a blank pane is not a layout that fits.** `logical_width`
+        // of an unpainted pane is 0, and `0 <= cols` held, so this returned an empty
+        // frame and reported success - the vacuous half of the same defect. A caller
+        // (`resize`) then believed its setup was ready, and a row asserting on the frame
+        // it got measured 0. So a blank capture is treated as "not yet", exactly like an
+        // over-wide one; the two conditions differ only in what the failure says.
+        let mut painted = false;
         loop {
             let widest = self.logical_width();
-            if widest <= limit {
+            if !last.trim().is_empty() {
+                painted = true;
+            }
+            if painted && widest <= limit {
                 return last;
             }
             if Instant::now() >= deadline {
+                if !painted {
+                    // The same reason-and-remedy split `settle` uses: an empty screen is
+                    // a harness condition (the fixture never started), not a product
+                    // failure, and saying so is what keeps a reader from hunting a
+                    // resize bug.
+                    return match self.respawn_blank("a painted frame", budget) {
+                        Some(pane) if !pane.trim().is_empty() => pane,
+                        _ => panic!(
+                            "the pane never painted, so its layout cannot be checked for \
+                             {cols} columns: after {budget:?} (budget {timeout:?} x{} \
+                             load) the capture was empty, and a blank frame is an empty \
+                             screen rather than a layout that fits (gh #489).",
+                            Self::load_factor()
+                        ),
+                    };
+                }
                 panic!(
                     "the app never re-laid-out for {cols} columns: after {budget:?} \
                      (budget {timeout:?} x{} load) the widest painted line is still \
