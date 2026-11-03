@@ -530,3 +530,163 @@ fn paint_caret_gates_the_chip_arm_itself() {
          instead of jumping to the chip's first cell"
     );
 }
+
+// ---------------------------------------------------------------------------
+// gap 5: the three seams where a chip's text leaves and re-enters the editor
+// ---------------------------------------------------------------------------
+//
+// A chip's text is a **label** and the registry is the **truth**. Gaps 1-4 held that
+// for motion, deletion, undo and paint; these three are the boundaries, and each either
+// preserves both or is explicit about which one it transforms.
+//
+// The behavioural rows live in `editor_seams_tests.rs`. These pin the seams:
+
+/// The editor's and the chip module's source, comment-free, joined - the paint and
+/// registry code was split out of `editor.rs` at the ceiling, so a guard that read only
+/// one file would silently stop covering half the seam.
+fn editor_and_chip_sources() -> String {
+    format!(
+        "{}\n{}",
+        code_only(&read("crates/lca-tui/src/widgets/editor.rs")),
+        code_only(&read("crates/lca-tui/src/widgets/editor_atomic.rs"))
+    )
+}
+
+// Verifies: gh #381 gap 5 seam 1 - **the paste branch runs before any key dispatch.**
+//
+// This is the property, not a spelling: `handle_key` asks `bracketed_paste_content`
+// before it consults a single binding. A fix that filtered the `\r` inside a paste
+// somewhere downstream would pass a behavioural row and leave the next control byte in
+// a paste free to fire; ordering is what makes "a paste is a unit" true for *every*
+// byte it carries.
+#[test]
+fn the_paste_branch_precedes_every_key_binding() {
+    let source = editor_and_chip_sources();
+    let body = function_body(&source, "pub fn handle_key(&mut self");
+    let paste_at = body
+        .find("bracketed_paste_content(")
+        .unwrap_or_else(|| panic!("handle_key asks the paste primitive: {body}"));
+    let first_binding = body
+        .find("kb.matches(")
+        .unwrap_or_else(|| panic!("handle_key consults a binding too: {body}"));
+    assert!(
+        paste_at < first_binding,
+        "the paste branch is asked before any keybinding is matched, so no byte inside \
+         a paste can reach a binding: paste at {paste_at}, first binding at \
+         {first_binding}"
+    );
+    assert!(
+        body[paste_at..].contains("insert_paste("),
+        "and the paste is inserted as one unit rather than replayed as keys: {body}"
+    );
+}
+
+// Verifies: gh #381 gap 5 seam 2 - **history stores the marker form and its registry,
+// never the expanded text.**
+//
+// The defect was one line: `history.push(expanded)`. Pushing the expansion makes recall
+// rebuild the editor at payload height, which is the harm the chip exists to prevent. A
+// guard on the *entry type* is what stops that line coming back, because the two forms
+// are distinguishable there and nowhere else.
+#[test]
+fn history_entries_carry_the_marker_form_and_its_registry() {
+    let source = editor_and_chip_sources();
+    let submit = function_body(&source, "pub fn submit(&mut self");
+    assert!(
+        submit.contains("HistoryEntry {"),
+        "submit pushes a structured entry, not a bare String: {submit}"
+    );
+    assert!(
+        submit.contains("text: self.text()"),
+        "and the entry's text is the **buffer** (markers intact), not the expansion \
+         held in the local `text`: {submit}"
+    );
+    assert!(
+        submit.contains("pastes: self.pastes.clone()"),
+        "with the registry beside it, because the text alone cannot reconstruct the \
+         payloads: {submit}"
+    );
+    // The entry stores exactly two fields and no expansion: the expanded form is
+    // derived by whoever needs it, so a recall cannot accidentally be given a second
+    // copy that drifts from the first.
+    let decl = source
+        .find("pub(super) struct HistoryEntry {")
+        .unwrap_or_else(|| panic!("the entry type is declared: {source}"));
+    let body_end = source[decl..]
+        .find('}')
+        .unwrap_or_else(|| panic!("the entry type is closed"));
+    let fields = &source[decl..decl + body_end];
+    assert!(
+        fields.contains("text: String") && fields.contains("pastes: Vec<String>"),
+        "the entry holds the marker text and its registry: {fields}"
+    );
+    assert!(
+        !fields.contains("expanded"),
+        "and no third, derivable field: {fields}"
+    );
+}
+
+// Verifies: gh #381 gap 5 seam 2 - **recall restores both halves through the pair gap 3
+// built**, rather than a `set_text` that would leave dead markers.
+//
+// `set_text_with_pastes` exists precisely for a caller that holds a saved (text,
+// registry) pair. A recall that used plain `set_text` would restore the marker and lose
+// the payload - the marker would expand to nothing, which is gap 3's harm at a new seam.
+#[test]
+fn recall_restores_the_registry_with_the_text() {
+    let source = editor_and_chip_sources();
+    // Both directions: browsing back and browsing forward.
+    let occurrences = source.matches("set_text_with_pastes(").count();
+    assert!(
+        occurrences >= 3,
+        "the pair is used by recall in both directions (and defined once), so a \
+         recalled chip keeps its payload: {occurrences} use(s)"
+    );
+    // And the history recall arms are the ones that use it.
+    for signature in ["pub fn cursor_up(&mut self", "pub fn cursor_down(&mut self"] {
+        let body = function_body(&source, signature);
+        assert!(
+            body.contains("set_text_with_pastes("),
+            "{signature} restores the registry with the text: {body}"
+        );
+        assert!(
+            !body.contains("set_text(&self.history"),
+            "{signature} does not fall back to the registry-less restore: {body}"
+        );
+    }
+}
+
+// Verifies: gh #381 gap 5 seam 3 - **the `$EDITOR` handoff expands on the way out and
+// lets `set_text` re-derive on the way back.**
+//
+// The asymmetry is the design: an external editor cannot know our registry, so it gets
+// content; the buffer gets its chips back only if the returned text still carries the
+// markers, which `set_text`'s `retain_live_payloads` decides. **A returned buffer
+// without markers therefore drops the payloads** rather than shipping bytes the user
+// edited away - this issue's original harm, one seam out.
+#[test]
+fn the_editor_handoff_expands_out_and_rederives_back() {
+    let run = code_only(&read("crates/lca-ui/src/run.rs"));
+    let arm = run
+        .find("Action::ExternalEditor =>")
+        .unwrap_or_else(|| panic!("the handoff arm exists: {run}"));
+    let body = &run[arm..];
+    let end = body.find("Action::InteractiveShell").unwrap_or(body.len());
+    let body = &body[..end];
+    assert!(
+        body.contains("expanded_text()"),
+        "the editor is handed the expanded text, never a marker: {body}"
+    );
+    assert!(
+        body.contains("set_text(&edited)"),
+        "and the return goes through `set_text`, whose re-derivation is what drops a \
+         payload whose marker the edit removed: {body}"
+    );
+    // The re-derivation really is on that path (gap 3 put it there).
+    let editor = code_only(&read("crates/lca-tui/src/widgets/editor.rs"));
+    let set_text = function_body(&editor, "pub fn set_text(&mut self");
+    assert!(
+        set_text.contains("retain_live_payloads("),
+        "`set_text` re-derives the registry from the new text: {set_text}"
+    );
+}

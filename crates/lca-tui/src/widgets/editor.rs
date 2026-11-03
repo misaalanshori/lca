@@ -54,7 +54,7 @@ pub struct Editor {
     paint_caret: bool,
     /// A bare `\r` inserts a newline, not a submit (gh #367: Shift-blind terminal).
     enter_inserts_newline: bool,
-    history: Vec<String>,
+    history: Vec<atomic::HistoryEntry>,
     history_index: Option<usize>,
     draft: String,
     undo: Vec<UndoEntry>,
@@ -204,10 +204,18 @@ impl Editor {
     /// Clear the buffer and push the submitted text to history. Paste
     /// markers expand to their content first (pi's `submitValue`), so the
     /// model receives what the user pasted, not `[paste #1 …]`.
+    ///
+    /// The **history entry** keeps the marker form and its registry (gh #381 gap 5):
+    /// pushing the expanded text meant recalling a prompt with a 25-line chip rebuilt
+    /// the editor 25 lines tall, undoing the very thing the chip is for. The model
+    /// still receives the expansion - it is `submit`'s return value.
     pub fn submit(&mut self) -> String {
         let text = atomic::expand_paste_markers(&self.text(), &self.pastes);
         if !text.trim().is_empty() {
-            self.history.push(text.clone());
+            self.history.push(atomic::HistoryEntry {
+                text: self.text(),
+                pastes: self.pastes.clone(),
+            });
         }
         self.lines = vec![String::new()];
         self.cursor_line = 0;
@@ -564,7 +572,12 @@ impl Editor {
                     && idx > 0
                 {
                     self.history_index = Some(idx - 1);
-                    self.set_text(&self.history[idx - 1].clone());
+                    // Gh #381 gap 5: restore the marker form **and** its payloads -
+                    // the text alone cannot reconstruct them, so a plain `set_text`
+                    // would leave dead markers that expand to nothing.
+                    let entry = &self.history[idx - 1];
+                    let (text, pastes) = (entry.text.clone(), entry.pastes.clone());
+                    self.set_text_with_pastes(&text, pastes);
                 }
             } else {
                 // pi: top line, not browsing, caret off the start - move to
@@ -591,7 +604,9 @@ impl Editor {
         } else if let Some(idx) = self.history_index {
             if idx + 1 < self.history.len() {
                 self.history_index = Some(idx + 1);
-                self.set_text(&self.history[idx + 1].clone());
+                let entry = &self.history[idx + 1];
+                let (text, pastes) = (entry.text.clone(), entry.pastes.clone());
+                self.set_text_with_pastes(&text, pastes);
             } else {
                 self.history_index = None;
                 let draft = self.draft.clone();
@@ -1155,6 +1170,9 @@ mod atomic_caret_tests;
 #[cfg(test)]
 #[path = "editor_atomic_tests.rs"]
 mod atomic_tests;
+#[cfg(test)]
+#[path = "editor_seams_tests.rs"]
+mod seams_tests;
 #[cfg(test)]
 #[path = "editor_tests.rs"]
 mod tests;

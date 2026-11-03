@@ -39,6 +39,27 @@ impl UndoEntry {
     }
 }
 
+/// One history entry (gh #381 gap 5).
+///
+/// `submit` has always pushed the **expanded** text, which is right for the model and
+/// wrong for recall: a prompt whose chip stands for 25 lines came back as 25 lines,
+/// and a chip exists precisely so a large paste stays readable. So the entry carries
+/// both forms:
+///
+/// * `text` - the marker form, what recall puts in the buffer;
+/// * `pastes` - the registry that form needs, because **the marker is a label and the
+///   registry is the truth** (the property gaps 1-4 established).
+///
+/// The expanded form is deliberately *not* stored: recall re-derives it with
+/// `expand_paste_markers` from these two fields, which is the same function that
+/// produced it at submit time.
+pub(super) struct HistoryEntry {
+    /// The buffer as the user left it, markers intact.
+    pub(super) text: String,
+    /// The payloads those markers name. Empty for an ordinary prompt.
+    pub(super) pastes: Vec<String>,
+}
+
 /// The registry entries `text` can still reach (gh #381 gap 3).
 ///
 /// The registry is the truth and a marker is its label, so `set_text` must decide

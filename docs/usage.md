@@ -49,6 +49,22 @@ color, `!!bash …` quiet, so the context boundary is visible at a glance
 and still readable with color off. Paste an image and it rides the turn
 when the model takes vision (`/attach` does the same from a path).
 
+A large paste — more than ten lines, or over a thousand characters — is
+replaced by a chip, `[paste #1 +25 lines]`. The chip is one object: `Left`
+and `Right` cross it in a single press, `Backspace` removes all of it, and
+the caret on it highlights the whole badge. A **multi-line paste never
+submits**, whatever line endings it carries, so it is safe to paste code
+whose lines end in `\r\n`. `Up` recalls an earlier prompt with its chips
+intact rather than expanding them back into the editor, and a recalled
+prompt sends exactly the bytes the original did. `Ctrl+X Ctrl+E`
+opens the prompt in `$EDITOR`/`$VISUAL` with every chip **expanded to its
+content** — an editor has no way to know about
+the chips — and the buffer you save comes back as plain text, so editing
+inside an expanded paste replaces that paste: the old content is dropped
+rather than kept behind a label that no longer describes it. The editor's
+buffer file is created `0600` (owner-only), because a prompt can contain
+secrets.
+
 ## Follow the work
 
 Every tool call lands on the transcript as its own card with its

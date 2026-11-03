@@ -18,6 +18,21 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **A paste chip survives the editor's three boundaries** (gh #381 gap 5, closing the
+  issue). Gaps 1–4 made a chip one atomic unit for motion, deletion, undo and paint; the
+  places where its text *leaves and re-enters* the editor still leaked. Recalling a
+  prompt that contained a chip used to rebuild the editor at the payload's full height —
+  history stored the **expanded** text, so a 25-line chip came back as 25 lines, undoing
+  the very thing the chip exists for. History entries now keep the marker form and its
+  registry, so recall shows `[paste #1 +25 lines]` again and re-submitting sends
+  byte-identical content. The `$EDITOR` handoff keeps its deliberate asymmetry: the
+  editor is handed **expanded** text (it cannot know about the chips), and the returned
+  buffer re-derives the registry from what came back — so a buffer that still holds its
+  markers re-chips, while an **edited** paste loses its chip instead of shipping a
+  stale payload the user no longer sees. The handoff's buffer file is `0600`.
+  The other two seams were already correct and are now pinned by rows: a bracketed paste
+  is one engine `StdinEvent::Paste`, so a `\r` inside it is content and never a submit,
+  while a typed `Enter` still sends.
 - **The caret on a paste chip is the whole badge** (gh #381 gap 4). A paste chip is
   one atomic unit for motion, deletion and undo (gaps 1–3), but on screen it still
   looked like any other column, so nothing told the user that the thing under the
