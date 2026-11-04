@@ -668,7 +668,14 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
     for data in &startup_keys {
         chat.handle_key(data);
     }
-    let mut dirty = true;
+    // Gh #370 flaw 3: two tiers, one render decision. `dirty` is gone as a bare flag and
+    // lives on the clock, which decides *when* a frame is allowed - it is still the only
+    // thing that decides *whether* one is needed, so there is no second paint path.
+    let mut frames = crate::run_wake::FrameClock::new();
+    // The very first frame is not paced and not part of either tier: the loop has painted
+    // nothing, so the terminal (and an adopted early terminal, which may already have had
+    // keys replayed into it) needs a first full paint before any input arrives.
+    let mut first_frame = true;
     // Gh #403 gap 1: the transcript generation this loop has already
     // accounted for. The seam below resets the selection whenever the
     // *whole transcript was replaced*, which is the one state change that
@@ -682,60 +689,60 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
     let result = 'main: loop {
         // Turn lifecycle (R16: `TurnState` owns the running turn).
         if turns.reap(&mut chat) {
-            dirty = true;
+            frames.request_stream();
         }
         if turns.start(&mut chat, &runner) {
-            dirty = true;
+            frames.request_stream();
         }
         if turns.drain(&mut chat) {
-            dirty = true;
+            frames.request_stream();
         }
         if tick_permission(&mut chat) {
-            dirty = true;
+            frames.request_stream();
         }
         // R4: a background login/identity step reports back here, so a slow
         // OAuth callback never blocks the loop.
         if poll_login(&mut chat) {
-            dirty = true;
+            frames.request_stream();
         }
         // ...and the endpoint consent's second step: rows the host
         // discovered once the grant landed open the picker here (gh #31).
         if poll_pending_models(&mut chat) {
-            dirty = true;
+            frames.request_stream();
         }
         // ...and a background catalog discovery: `/model` opened
         // instantly and the rows fill the loader here (gh #232).
         if chat.poll_model_refresh() {
-            dirty = true;
+            frames.request_stream();
         }
         // ...and so does a background `/compact`: the summarization call
         // runs on its own thread and the interface keeps painting.
         if chat.poll_compact() {
-            dirty = true;
+            frames.request_stream();
         }
         // ...and a background `/mcp login`: the browser flow outlives
         // the command that started it.
         if crate::chat_commands::poll_mcp(&mut chat) {
-            dirty = true;
+            frames.request_stream();
         }
         // ...and the `/extensions` hub: catalog rows land through
         // the loader, install results post as notices (#227).
         if let Some(hub) = chat.extension_hub.as_mut() {
             if hub.poll_hub() {
-                dirty = true;
+                frames.request_stream();
             }
             if hub.tick() {
-                dirty = true;
+                frames.request_stream();
             }
         }
         if chat.poll_install() {
-            dirty = true;
+            frames.request_stream();
         }
 
         // Edge auto-scroll while a selection drag sits on a viewport edge
         // (R6).
         if screen.tick_auto_scroll() {
-            dirty = true;
+            frames.request_stream();
         }
 
         // The screen mode can change at runtime (FR-UI-21).
@@ -758,7 +765,7 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
                     chat.say(hint);
                 }
             }
-            dirty = true;
+            frames.request_stream();
         }
 
         // Gh #403 gap 1: one seam for every path that replaces the
@@ -772,13 +779,13 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
             crate::run_selection::reset_selection_if_replaced(&mut screen, &chat, seen_generation);
         if generation != seen_generation {
             seen_generation = generation;
-            dirty = true;
+            frames.request_stream();
         }
 
         // The separator's spinner animates while a turn runs (R2): one
         // frame per cadence, never while idle.
         if chat.tick() {
-            dirty = true;
+            frames.request_stream();
         }
 
         // Gh #213/#369: the tab badge and the taskbar spinner follow the
@@ -788,7 +795,12 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
         // than a new thread; it writes only while the indicator is armed.
         terminal.tick_progress();
 
-        if dirty {
+        // Gh #370 flaw 3: the clock decides **whether and when**. Input (tier 2) always
+        // releases; a stream delta (tier 1) releases at most once per
+        // `MIN_RENDER_INTERVAL`, and a delta that arrives inside that window coalesces
+        // into the frame already queued rather than being dropped.
+        let now = std::time::Instant::now();
+        if first_frame || frames.render(now) {
             let width = terminal.columns();
             let height = terminal.rows();
             if let Some(scroll) = chat.take_jump_scroll(width, height) {
@@ -816,7 +828,8 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
             screen.render(&mut terminal, viewport, document, width, height);
             // gh #209: mirror the live scroll for per-tab restores.
             chat.last_scroll = screen.scroll();
-            dirty = false;
+            frames.mark_rendered(now);
+            first_frame = false;
         }
 
         // Input (gh #400): when startup adopted a terminal that was already
@@ -837,7 +850,11 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
             None => input_helpers::drain_input(&mut || input_rx.try_recv().ok()),
         };
         let woke = if input.is_empty() {
-            wakes.wait(&mut || false)
+            // Gh #370 flaw 3: a queued tier-1 frame waits at most its remaining budget, so
+            // a stream holds ~60 FPS instead of dropping to the tick's 20. With nothing
+            // requested this is the plain tick - never shorter, because waking to check a
+            // deadline that cannot exist is a spin (the 200 ms guard).
+            wakes.wait_for(frames.next_wait(std::time::Instant::now()))
         } else {
             crate::run_wake::Woke::Input
         };
@@ -847,7 +864,7 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
             if woke != crate::run_wake::Woke::Input {
                 let (width, height) = chat.world.size;
                 if chat.poll_tooltip(width, height, screen.scroll(), std::time::Instant::now()) {
-                    dirty = true;
+                    frames.request_stream();
                 }
             }
         } else {
@@ -874,13 +891,17 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
             if exit {
                 break 'main Ok(());
             }
-            dirty = true;
+            // Tier 2: input preempts the pace. It is never paced, because the throttle
+            // exists to bound a stream nobody typed into.
+            frames.request_immediate();
         }
 
         // Resize.
         if resize_rx.try_recv().is_ok() {
             chat.world.resize(terminal.columns(), terminal.rows());
-            dirty = true;
+            // A resize is tier 2: the next pass paints at the new geometry rather than up
+            // to an interval later at the old one.
+            frames.request_immediate();
         }
     };
 

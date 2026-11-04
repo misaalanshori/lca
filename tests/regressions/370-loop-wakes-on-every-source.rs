@@ -76,9 +76,11 @@ fn the_loop_does_not_block_on_the_input_channel_alone() {
         !source.contains("early.recv_timeout(std::time::Duration::from_millis(50))"),
         "nor on the adopted early stream with the old fixed tick"
     );
-    // ...and it does wait on the wake channel.
+    // ...and it does wait on the wake channel. Flaw 3 made the timeout the scheduler's
+    // remaining budget (capped at the tick), so the call is `wait_for`; the property this
+    // guard exists for - the loop blocks on the wake channel, not on stdin - is unchanged.
     assert!(
-        source.contains("wakes.wait("),
+        source.contains("wakes.wait_for("),
         "the loop blocks on the wake channel"
     );
 }
@@ -102,23 +104,45 @@ fn every_producer_forwards_through_the_wake() {
     );
 }
 
-// Verifies: gh #370 flaw 1 - **`dirty` is still the only render decision**. The fix
-// changes when the loop wakes, not when it paints: a per-event paint or a second
-// render path would undo the point of coalescing.
+// Verifies: gh #370 flaw 1, carried through flaw 3 - **one render decision**. The fix
+// changes when the loop wakes, not when it paints: a per-event paint or a second render
+// path would undo the point of coalescing.
+//
+// Flaw 3 replaced the bare `dirty` bool with `FrameClock`, which is the same decision plus
+// *when* it is allowed - so this guard now asserts the shipped shape rather than the old
+// flag's spelling: still exactly one paint site, and every wake arm still **requests** a
+// frame (through one of the clock's two tiers) instead of painting itself.
 #[test]
-fn dirty_stays_the_only_render_decision() {
+fn there_is_still_exactly_one_render_decision() {
     let source = run_source();
-    // The loop's frame is the single `if dirty {` block.
+    // The loop's frame is the single `screen.render(` call.
     let renders = source.matches("screen.render(").count();
     assert_eq!(
         renders, 1,
         "the loop paints in exactly one place (found {renders})"
     );
-    // ...and every wake arm feeds that decision rather than painting itself.
-    let dirty_sets = source.matches("dirty = true;").count();
+    // ...and the gate is the clock's, consulted in that one place.
+    assert_eq!(
+        source.matches("frames.render(now)").count(),
+        1,
+        "the one paint site asks the clock"
+    );
+    // Every background arm requests tier 1...
+    let stream_requests = source.matches("frames.request_stream()").count();
     assert!(
-        dirty_sets >= 10,
-        "the arms set the flag instead of painting (found {dirty_sets})"
+        stream_requests >= 10,
+        "the background arms set the paced flag instead of painting (found {stream_requests})"
+    );
+    // ...and exactly one site - the input drain - requests tier 2.
+    let immediate_requests = source.matches("frames.request_immediate()").count();
+    assert_eq!(
+        immediate_requests, 2,
+        "input and resize are the only unpaced requests (found {immediate_requests})"
+    );
+    // No arm may paint directly: nothing outside the gate calls the renderer.
+    assert!(
+        !source.contains("dirty = true;"),
+        "the bare flag is gone; a reintroduced second decision would show up here"
     );
 }
 
@@ -132,18 +156,25 @@ fn the_tick_remains_finite_and_is_used_as_the_wait_floor() {
         wake.contains("pub const WAIT_TICK"),
         "the tick is a named constant, not a literal at the call site"
     );
+    // The wait blocks on a timeout the caller passes, and flaw 3's scheduler passes the
+    // clock's remaining budget. The property this guard exists for is unchanged - the wait
+    // is bounded by a *named* value derived from the tick, never an unbounded `recv()`:
+    // `wait_for` is documented to shorten the wait but never lengthen it, and
+    // `FrameClock::next_wait` returns `WAIT_TICK` whenever nothing is pending.
     assert!(
-        wake.contains("recv_timeout(WAIT_TICK)"),
+        wake.contains("recv_timeout(timeout)"),
         "and it is what the wait actually blocks on"
+    );
+    assert!(
+        wake.contains(".min(WAIT_TICK)"),
+        "the scheduler's wait is capped by the tick, so nothing waits longer than before"
     );
     // Input must be consulted before the blocking wait, or a keystroke arriving
     // between the drain and the sleep would wait out the tick.
     let input_first = wake
         .find("if input_ready()")
         .expect("the wait consults input");
-    let wait = wake
-        .find("recv_timeout(WAIT_TICK)")
-        .expect("the wait exists");
+    let wait = wake.find("recv_timeout(timeout)").expect("the wait exists");
     assert!(
         input_first < wait,
         "input is tried before the blocking wait (preemption by ordering)"
@@ -302,4 +333,112 @@ fn the_drain_does_not_distinguish_event_kinds() {
              event is handled, which is the only rule that cannot eat characters"
         );
     }
+}
+
+// ============================================================================
+// gh #370 flaw 3: the two-tier render scheduler.
+// ============================================================================
+
+// Verifies: gh #370 flaw 3 - **the two tiers are wired to the two sources**. Tier 1 (paced)
+// is what background activity requests; tier 2 (immediate) is what input and resize
+// request. The pairing is the whole design: sharing one flag would make the answer depend
+// on arrival order, and a stream delta that landed after a keystroke would be
+// indistinguishable from one that landed before.
+//
+// The behaviour rows live beside the clock (`run_wake::frame_clock_tests`); this asserts
+// the wiring, because "the clock exists but the loop uses one flag for both" is exactly the
+// half-done shape that would pass every unit row.
+#[test]
+fn the_two_tiers_are_wired_to_their_two_sources() {
+    let source = run_source();
+    let stream = source.matches("frames.request_stream()").count();
+    let immediate = source.matches("frames.request_immediate()").count();
+    assert!(
+        stream >= 10,
+        "background arms request the paced tier (found {stream})"
+    );
+    assert_eq!(
+        immediate, 2,
+        "only input and resize request the unpaced tier (found {immediate})"
+    );
+    // The input drain must be one of them, or tier 2 has no producer: the request has to
+    // sit in the same arm that handles the burst, between the drain and the arm's close.
+    let drain = source
+        .find("for data in input.drain(..)")
+        .expect("the input drain exists");
+    let after_drain = &source[drain..];
+    let request = after_drain
+        .find("frames.request_immediate()")
+        .expect("the input drain requests an immediate frame");
+    let arm_end = after_drain
+        .find("\n        }\n")
+        .unwrap_or(after_drain.len());
+    assert!(
+        request < arm_end,
+        "the tier-2 request belongs to the burst-handling arm, so no path can handle input \
+         without requesting a frame"
+    );
+}
+
+// Verifies: gh #370 flaw 3 - **the loop asks the clock before it paints, and the clock's
+// answer is what gates the paint.** A loop that kept painting on `dirty` and merely *also*
+// updated a clock would pass the unit rows and change nothing.
+#[test]
+fn the_paint_gate_consults_the_clock() {
+    let source = run_source();
+    let gate = source
+        .find("frames.render(now)")
+        .expect("the loop asks the clock");
+    let paint = source
+        .find("screen.render(&mut terminal, viewport, document, width, height)")
+        .expect("the paint exists");
+    assert!(
+        gate < paint,
+        "the clock is consulted before the paint, in the same pass"
+    );
+    // ...and the frame it releases is recorded, or every stream frame would think no
+    // interval had elapsed and the pace would never apply.
+    assert!(
+        source.contains("frames.mark_rendered(now)"),
+        "a painted frame is recorded on the clock"
+    );
+    // The wait uses the clock's remaining budget, so a queued tier-1 frame lands on its
+    // boundary instead of the tick.
+    assert!(
+        source.contains("frames.next_wait("),
+        "the wait is the clock's remaining budget"
+    );
+}
+
+// Verifies: gh #370 flaw 3 (**the docs claim**) - `docs/flows.md` promises that "the
+// renderer coalesces on a frame interval, so a fast stream does not cost one redraw per
+// token". The brief's rule is that this cycle either honours that sentence or amends it
+// with a reason; this guard asserts the sentence and the code say the same thing, in both
+// directions, so the promise can never quietly become false again.
+#[test]
+fn the_documented_coalescing_claim_is_true_of_the_code() {
+    let flows = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/flows.md"))
+        .expect("docs/flows.md is readable");
+    assert!(
+        flows.contains("The renderer coalesces on a frame interval, so a fast stream does"),
+        "the documented promise is still stated"
+    );
+    // The promise needs a real interval in the code, which is the clock's constant.
+    let wake = wake_source();
+    assert!(
+        wake.contains("pub const MIN_RENDER_INTERVAL"),
+        "the interval the sentence promises exists"
+    );
+    // ...and a real coalescing decision, which is the pace.
+    assert!(
+        wake.contains("saturating_duration_since(last) >= MIN_RENDER_INTERVAL"),
+        "and the pace is applied relative to the last frame, as the sentence describes"
+    );
+    // The doc must not still claim the *old* single-tier shape: the sentence now has to
+    // mention the input tier, because throttling everything is the mushy-keystroke bug.
+    assert!(
+        flows.contains("preempt") || flows.contains("keystroke"),
+        "the paragraph states the input-preemption half too, since throttling everything \
+         is the failure the two tiers exist to avoid"
+    );
 }

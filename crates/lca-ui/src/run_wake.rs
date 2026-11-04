@@ -102,12 +102,32 @@ impl Wakes {
     /// This is the loop's blocking point now. `input_ready` is tried **first** so a
     /// key that arrived while the loop was painting is handled before anything else
     /// - the preemption half, expressed as an ordering rather than a priority number.
+    #[cfg(test)]
     pub fn wait(&self, input_ready: &mut dyn FnMut() -> bool) -> Woke {
+        self.wait_for_with(WAIT_TICK, input_ready)
+    }
+
+    /// [`wait`](Self::wait) with an explicit timeout, for the two-tier scheduler (gh #370
+    /// flaw 3).
+    ///
+    /// The scheduler never waits *longer* than [`WAIT_TICK`]; it may wait **less** when a
+    /// tier-1 frame is queued inside its interval, so the frame lands on its own ~16 ms
+    /// boundary instead of the tick's 50. Everything else - input first, duplicate wakes
+    /// coalescing, a disconnected channel reading as a tick - is unchanged.
+    pub fn wait_for(&self, timeout: std::time::Duration) -> Woke {
+        self.wait_for_with(timeout, &mut || false)
+    }
+
+    fn wait_for_with(
+        &self,
+        timeout: std::time::Duration,
+        input_ready: &mut dyn FnMut() -> bool,
+    ) -> Woke {
         // Input first: it is never queued behind a producer.
         if input_ready() {
             return Woke::Input;
         }
-        match self.rx.recv_timeout(WAIT_TICK) {
+        match self.rx.recv_timeout(timeout) {
             // Any wake means "re-drain"; duplicates coalesce through `dirty`.
             Ok(()) => {
                 // Drain the rest so a burst of wakes costs one iteration, not N.
@@ -125,6 +145,144 @@ impl Wakes {
 impl Default for Wakes {
     fn default() -> Self {
         Self::new().1
+    }
+}
+
+/// The minimum gap between two frames driven by **background** activity (gh #370
+/// flaw 3).
+///
+/// ~60 FPS, pi's `MIN_RENDER_INTERVAL_MS = 16`. It exists because the two tiers have
+/// opposite failure directions: an unthrottled stream renders hundreds of frames a
+/// second for deltas no eye can read, while a stream throttled *together with input*
+/// makes keystrokes feel mushy. So the throttle covers the stream only, and input
+/// preempts it ([`FrameClock`]).
+///
+/// A background frame that is dropped because the interval has not elapsed **costs
+/// nothing**: the request stays pending and the next frame shows the newer state. That
+/// is the whole point - the flag coalesces N deltas into one paint, and the paint that
+/// does happen is always of the *latest* state, never a replay of a stale one.
+///
+/// This is also why there is no timer to fire: see [`FrameClock::next_wait`]. pi needs a
+/// `setTimeout` because its render is scheduled rather than looped; LCA's loop polls its
+/// producers every iteration, so the interval only has to decide whether a frame is
+/// *allowed yet*, never when to wake up for one.
+pub const MIN_RENDER_INTERVAL: std::time::Duration = std::time::Duration::from_millis(16);
+
+/// When the loop is allowed to paint (gh #370 flaw 3).
+///
+/// # Two flags, one render decision
+///
+/// Flaw 1 pinned `dirty` as the only thing that decides *whether* a frame is needed. This
+/// adds *when* it may happen, and nothing else: [`render`](Self::render) is still the one
+/// gate, and both flags feed it rather than opening a second paint path.
+///
+/// The flags are deliberately **not** one queue and not ordered against each other:
+///
+/// - [`stream_wanted`](Self::request_stream) is set by background activity - a streamed
+///   delta, a spinner tick, a tool result, a poll that found something. It is paced.
+/// - [`immediate`](Self::request_immediate) is set by a keystroke, a paste, a mouse
+///   event, or a resize. It **preempts** the pace and is never paced.
+///
+/// Two flags rather than one dirty bit plus a "was this input" parameter, because the
+/// question the loop asks is "may I paint now", and the answer differs by *why* it was
+/// asked. Sharing one queue would make the answer depend on arrival order: a stream delta
+/// that landed after a keystroke would be indistinguishable from one that landed before,
+/// and tier 2's guarantee is not about order - it is about input never waiting.
+#[derive(Debug, Default)]
+pub struct FrameClock {
+    /// The last frame this clock released, for the tier-1 pace.
+    last_render_at: Option<std::time::Instant>,
+    /// Background activity wants a frame, at most once per [`MIN_RENDER_INTERVAL`].
+    stream_wanted: bool,
+    /// Input wants a frame **now**, regardless of the interval.
+    immediate: bool,
+}
+
+impl FrameClock {
+    /// A clock that has never rendered, so the first frame is immediate.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Background activity changed something (paced).
+    pub fn request_stream(&mut self) {
+        self.stream_wanted = true;
+    }
+
+    /// Input or a resize changed something (**never** paced - this is tier 2).
+    pub fn request_immediate(&mut self) {
+        self.immediate = true;
+    }
+
+    /// Whether a frame may be painted **now**: always for input, and for background
+    /// activity only if the interval has elapsed since the last frame.
+    ///
+    /// The boundary is `>=`: an event arriving exactly at the interval is allowed
+    /// through, because rounding a legitimate 60 FPS frame down to 30 would halve the
+    /// streaming rate for no gain.
+    #[must_use]
+    pub fn render(&self, now: std::time::Instant) -> bool {
+        if self.immediate {
+            return true;
+        }
+        if !self.stream_wanted {
+            return false;
+        }
+        match self.last_render_at {
+            Some(last) => now.saturating_duration_since(last) >= MIN_RENDER_INTERVAL,
+            // Never painted: a daemon that waited 16 ms to show its first frame would
+            // look broken, and the pace only exists to bound *repeated* paints.
+            None => true,
+        }
+    }
+
+    /// Record that a frame was painted, and clear the requests it satisfied.
+    ///
+    /// Clearing **both** on an input frame is pi's `requestImmediateRender` cancel
+    /// semantic: the background frame that the pace had queued for ~16 ms later must
+    /// find nothing to do, never a redundant second repaint right after the input one.
+    /// On Windows, where timer granularity is coarse, that stray repaint is visible.
+    ///
+    /// Clearing `stream_wanted` cannot lose content: a frame composed now includes every
+    /// change that had been requested, so the request it drops was for a state that no
+    /// longer exists.
+    pub fn mark_rendered(&mut self, now: std::time::Instant) {
+        self.last_render_at = Some(now);
+        self.stream_wanted = false;
+        self.immediate = false;
+    }
+
+    /// How long the loop may wait for something new.
+    ///
+    /// **Always [`WAIT_TICK`]** - the scheduler never shortens the wait, and with one
+    /// exception that is not a compromise:
+    ///
+    /// - A pending background frame is already releasable by the time anyone asks (the
+    ///   loop paints at the top of the same iteration that set the flag), so there is
+    ///   nothing to wait *for*. The one exception: if a frame was requested and the pace
+    ///   still blocks it, the wait is shortened to the remaining budget so a stream holds
+    ///   ~60 FPS rather than dropping to the tick's 20. Producers wake the loop sooner
+    ///   with newer data, so this is a floor, not the usual path.
+    /// - With nothing requested, shortening the wait would mean waking to check a
+    ///   deadline that cannot exist - a spin, which the issue says would be worse than
+    ///   the bug. So the tick stays the floor for everything with no producer.
+    #[must_use]
+    pub fn next_wait(&self, now: std::time::Instant) -> std::time::Duration {
+        if !self.stream_wanted || self.immediate {
+            return WAIT_TICK;
+        }
+        match self.last_render_at {
+            Some(last) => {
+                let elapsed = now.saturating_duration_since(last);
+                if elapsed >= MIN_RENDER_INTERVAL {
+                    WAIT_TICK
+                } else {
+                    (MIN_RENDER_INTERVAL - elapsed).min(WAIT_TICK)
+                }
+            }
+            None => WAIT_TICK,
+        }
     }
 }
 
@@ -433,5 +591,239 @@ mod producer_tests {
             "the wake outlived the render"
         );
         assert_eq!(drain(&rx), vec![99]);
+    }
+}
+
+#[cfg(test)]
+mod frame_clock_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    /// A clock anchored at a fixed instant, so every row is deterministic: no sleeps and
+    /// no stopwatches, because a duration assertion on a shared CI box is a coin flip.
+    fn at(ms: u64) -> Instant {
+        // `Instant` cannot be constructed, so anchor once and offset from it.
+        static ANCHOR: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+        *ANCHOR.get_or_init(Instant::now) + Duration::from_millis(ms)
+    }
+
+    // Verifies: gh #370 flaw 3 (**the pacing row**) - **a burst of background events
+    // renders at most once per interval.** This is tier 1's half of the promise in
+    // `docs/flows.md`: without it a fast stream renders every delta, hundreds of frames a
+    // second for text no eye can read.
+    #[test]
+    fn a_burst_of_background_events_renders_once_per_interval() {
+        let mut clock = FrameClock::new();
+        let t0 = at(1_000);
+        // The first frame is immediate: a daemon that waited 16 ms to show anything
+        // would look broken.
+        clock.request_stream();
+        assert!(clock.render(t0), "the first frame is never paced");
+        clock.mark_rendered(t0);
+
+        // 100 deltas inside one 16 ms window.
+        let mut rendered = 0;
+        for step in 1..=100u64 {
+            let now = t0 + Duration::from_micros(step * 100); // reaches 10 ms
+            clock.request_stream();
+            if clock.render(now) {
+                rendered += 1;
+                clock.mark_rendered(now);
+            }
+        }
+        assert_eq!(
+            rendered, 0,
+            "100 deltas inside one interval cost no frame - they coalesce into the one \
+             that is already queued"
+        );
+        // The moment the interval elapses, exactly one frame is released - which is also
+        // the proof that the request survived the window it was coalesced through: a
+        // dropped request would render nothing here.
+        let after = t0 + MIN_RENDER_INTERVAL;
+        assert!(
+            clock.render(after),
+            "the interval has elapsed and the coalesced request is still pending"
+        );
+        clock.mark_rendered(after);
+        assert!(
+            !clock.render(after + Duration::from_millis(1)),
+            "and only one: nothing was requested since"
+        );
+    }
+
+    // Verifies: gh #370 flaw 3 (**the boundary row**) - **an input event paints on the
+    // next pass regardless of the interval, including at exactly the interval.** The
+    // boundary is the case a `<` instead of `<=` would break, and it is the case the
+    // brief names: rounding a legitimate frame at the boundary down to the next window
+    // halves the streaming rate for no gain.
+    #[test]
+    fn an_input_event_paints_immediately_even_exactly_at_the_interval() {
+        for offset in [
+            Duration::ZERO,
+            Duration::from_millis(1),
+            MIN_RENDER_INTERVAL - Duration::from_millis(1),
+            MIN_RENDER_INTERVAL, // exactly on the boundary
+            MIN_RENDER_INTERVAL + Duration::from_millis(1),
+        ] {
+            let mut clock = FrameClock::new();
+            let t0 = at(2_000);
+            clock.request_stream();
+            assert!(clock.render(t0));
+            clock.mark_rendered(t0);
+
+            // A keystroke at `offset` after that background frame.
+            clock.request_immediate();
+            assert!(
+                clock.render(t0 + offset),
+                "input never waits for the throttle (offset {offset:?})"
+            );
+        }
+    }
+
+    // Verifies: gh #370 flaw 3 - **input preempts a pending background render**, and this
+    // is an *ordering* claim, not a duration one: the very next pass after an input event
+    // paints, whether or not a background frame was already requested and blocked.
+    #[test]
+    fn input_preempts_a_pending_background_render() {
+        let mut clock = FrameClock::new();
+        let t0 = at(3_000);
+        clock.mark_rendered(t0); // a frame just happened
+
+        // A stream wants a frame: paced, so blocked right now.
+        clock.request_stream();
+        assert!(!clock.render(t0 + Duration::from_millis(1)), "paced out");
+
+        // A keystroke lands while that background frame is still pending.
+        clock.request_immediate();
+        assert!(
+            clock.render(t0 + Duration::from_millis(1)),
+            "the keystroke does not queue behind the pending stream frame"
+        );
+        // And painting satisfies **both**, so the paced frame does not fire redundantly
+        // a few milliseconds later (pi's cancel semantic).
+        clock.mark_rendered(t0 + Duration::from_millis(1));
+        assert!(
+            !clock.render(t0 + MIN_RENDER_INTERVAL),
+            "the input frame cancelled the streaming frame it subsumed"
+        );
+    }
+
+    // Verifies: gh #370 flaw 3 - **a stream cannot starve input either.** The two flags
+    // do not share a queue or an ordering: with background events arriving continuously
+    // and never elapsing an interval, an input event still paints on the next pass.
+    #[test]
+    fn a_continuous_stream_cannot_starve_input() {
+        let mut clock = FrameClock::new();
+        let t0 = at(4_000);
+        clock.mark_rendered(t0);
+
+        // One microsecond of stream, continuous.
+        let now = t0 + Duration::from_micros(1);
+        clock.request_stream();
+        assert!(!clock.render(now), "the stream is paced out");
+
+        // A keystroke arrives into that stream.
+        clock.request_immediate();
+        assert!(
+            clock.render(now),
+            "input paints even though the stream has work pending and the interval has \
+             not elapsed"
+        );
+    }
+
+    // Verifies: gh #370 flaw 3 - **the idle case paints nothing**, which is what keeps the
+    // 200 ms spin guard green. A clock that reported `dirty` with no request would make
+    // every idle tick compose a viewport - the spin the issue says would be worse than
+    // the bug.
+    #[test]
+    fn an_idle_clock_never_asks_for_a_frame() {
+        let mut clock = FrameClock::new();
+        let t0 = at(5_000);
+        clock.mark_rendered(t0);
+        assert!(!clock.render(t0), "nothing requested");
+        // ...and over 200 ms of ticks it stays quiet.
+        let mut frames = 0;
+        for ms in 1..=200u64 {
+            if clock.render(t0 + Duration::from_millis(ms)) {
+                frames += 1;
+                clock.mark_rendered(t0 + Duration::from_millis(ms));
+            }
+        }
+        assert_eq!(frames, 0, "200 ms of quiet paints nothing");
+    }
+
+    // Verifies: gh #370 flaw 3 - **the tick remains the wait floor when nothing is
+    // pending**, so the loop does not wake to check a deadline that cannot exist. The one
+    // exception is a queued stream frame inside its interval: the wait is then shortened to
+    // the remaining budget so a stream holds ~60 FPS instead of dropping to the tick's 20.
+    #[test]
+    fn the_wait_is_the_tick_unless_a_paced_frame_is_waiting() {
+        let mut clock = FrameClock::new();
+        let t0 = at(6_000);
+
+        // Idle: the full tick, never shorter (a shorter wait would be a spin).
+        assert_eq!(clock.next_wait(t0), WAIT_TICK, "idle waits the tick");
+
+        // A stream frame 4 ms into the interval: the remaining 12 ms.
+        clock.mark_rendered(t0);
+        clock.request_stream();
+        assert_eq!(
+            clock.next_wait(t0 + Duration::from_millis(4)),
+            MIN_RENDER_INTERVAL - Duration::from_millis(4),
+            "the queued stream frame waits only its remaining budget"
+        );
+
+        // Input pending: the tick again, because input is never paced - there is nothing
+        // to wait for and the paint happens this pass.
+        clock.request_immediate();
+        assert_eq!(
+            clock.next_wait(t0 + Duration::from_millis(4)),
+            WAIT_TICK,
+            "input has nothing to wait for"
+        );
+
+        // A releasable stream frame: the tick, because the paint happens this pass.
+        let mut second = FrameClock::new();
+        second.mark_rendered(t0);
+        second.request_stream();
+        assert_eq!(
+            second.next_wait(t0 + MIN_RENDER_INTERVAL),
+            WAIT_TICK,
+            "an elapsed interval is painted now, not waited for"
+        );
+
+        // And the wait is never longer than the tick, so the spinner and the keepalive
+        // keep their cadence.
+        assert!(clock.next_wait(t0) <= WAIT_TICK);
+    }
+
+    // Verifies: gh #370 flaw 3 - **the interval is pi's 16 ms, in one place.** The number
+    // is a decision (about 60 FPS), so it lives on a named constant with its reason rather
+    // than being re-derived at each call site.
+    #[test]
+    fn the_interval_is_sixty_fps_and_named() {
+        assert_eq!(
+            MIN_RENDER_INTERVAL.as_millis(),
+            16,
+            "pi's MIN_RENDER_INTERVAL_MS = 16, ~60 FPS"
+        );
+        // Counted over the module's **code**, which stops at the test module: the rows
+        // below legitimately spell `Duration::from_millis(16)` in their assertions, and a
+        // guard that counted them would fail on its own text.
+        let source = include_str!("run_wake.rs");
+        let code = source
+            .split("mod frame_clock_tests")
+            .next()
+            .expect("the module has a code half");
+        assert_eq!(
+            code.matches("pub const MIN_RENDER_INTERVAL").count(),
+            1,
+            "the interval is declared exactly once"
+        );
+        assert_eq!(
+            code.matches("from_millis(16)").count(),
+            1,
+            "and no other site re-derives it, so a change lands in one place"
+        );
     }
 }

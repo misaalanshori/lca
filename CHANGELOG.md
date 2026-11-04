@@ -18,6 +18,16 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **A fast stream renders at ~60 FPS, and a keystroke during it still paints immediately** (gh #370
+  flaw 3, closing #370). `docs/flows.md` promised that "the renderer coalesces on a frame interval" and
+  neither half held: waking on every streamed delta rendered **259 frames per second**, while
+  throttling everything would have made keystrokes mushy. Two tiers now: background deltas are paced to
+  one frame per 16 ms (measured **259 → 52.6 fps** during a fast stream), and input, paste, mouse and
+  resize preempt the pace and paint on the next pass (keystroke latency during that stream unchanged at
+  12.0 → 11.4 ms). A dropped background frame loses nothing — it coalesces into the frame that is
+  already queued, which shows the latest state — and an input frame cancels the paced one behind it, so
+  a keystroke never costs two repaints. The idle tick is untouched: 200 ms of quiet still paints
+  nothing.
 - **A mouse drag paints one frame, not one per cell** (gh #370 flaw 2). The interactive loop
   popped a single input event per iteration and then did a full viewport and render pass, so a
   fullscreen drag — dozens of SGR motion sequences a second — cost a complete repaint per cell. The
