@@ -519,3 +519,12 @@ mod composer_window_and_caret_seams;
 // sliced by its successor.
 #[path = "324-image-identity-and-rows.rs"]
 mod image_identity_and_rows;
+
+// Gh #270: the `/` completion list was built with positional inserts whose indices
+// collided, so the menu's order was a scramble no reader could predict - and eight
+// routed commands (`/label`, `/labels`, `/jump`, `/rename`, `/persona`, `/ext`,
+// `/marketplace`, `/quit`) were never in it at all. One ordered literal now, plus
+// the coverage direction #443's guard did not cover: every name the router answers
+// must be completable.
+#[path = "270-completion-list-coverage.rs"]
+mod completion_list_coverage;

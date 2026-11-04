@@ -3,7 +3,8 @@
 //! router refused them and all three answered `unknown command`.
 //!
 //! The three registrations are the instance; the guard in
-//! `crates/lca-cli/src/tui/commands.rs` (`command_registration_guards`) and
+//! `crates/lca-cli/src/tui/commands_registration_tests.rs`
+//! (`command_registration_guards`, split out of `commands.rs` by gh #270) and
 //! `crates/lca-ui/src/chat_commands.rs` (`help_table_guards`) are the class.
 //! This file is the NFR-24 named guard: it pins the *observable* contract
 //! those unit rows assume - that the source still has the shape the guards
@@ -60,6 +61,10 @@ fn dispatch_arms(source: &str) -> Vec<String> {
 }
 
 /// The names `HANDLED_NAMES` declares, read from source.
+///
+/// Gh #270 moved the list to `commands_list.rs` (a gate-11 split, because
+/// `commands.rs` had reached the ceiling): the declaration is the same, the file
+/// is not, so the reader is given whichever file holds it.
 fn handled_names(source: &str) -> Vec<String> {
     let start = source
         .find("pub(crate) const HANDLED_NAMES")
@@ -80,6 +85,20 @@ fn handled_names(source: &str) -> Vec<String> {
     names
 }
 
+/// `HANDLED_NAMES`, from whichever file declares it (gh #270 moved it).
+fn registration_list() -> Vec<String> {
+    for path in [
+        "crates/lca-cli/src/tui/commands_list.rs",
+        "crates/lca-cli/src/tui/commands.rs",
+    ] {
+        let source = read(path);
+        if source.contains("pub(crate) const HANDLED_NAMES") {
+            return handled_names(&source);
+        }
+    }
+    panic!("HANDLED_NAMES is declared in neither file: the guard cannot read it");
+}
+
 /// The three commands this defect is about, and the artifact each produces.
 /// Kept here so the guard names them even if the list is reorganised.
 const CASUALTIES: [(&str, &str); 3] = [
@@ -90,8 +109,7 @@ const CASUALTIES: [(&str, &str); 3] = [
 
 #[test]
 fn the_three_commands_are_registered_where_the_router_looks() {
-    let source = read("crates/lca-cli/src/tui/commands.rs");
-    let handled = handled_names(&source);
+    let handled = registration_list();
     for (name, artifact) in CASUALTIES {
         assert!(
             handled.iter().any(|entry| entry == name),
@@ -103,9 +121,8 @@ fn the_three_commands_are_registered_where_the_router_looks() {
 
 #[test]
 fn the_registration_list_and_the_dispatch_arms_agree() {
-    let source = read("crates/lca-cli/src/tui/commands.rs");
-    let handled = handled_names(&source);
-    let arms = dispatch_arms(&source);
+    let handled = registration_list();
+    let arms = dispatch_arms(&read("crates/lca-cli/src/tui/commands.rs"));
     // The reader must find arms, or this whole file would pass vacuously.
     assert!(
         arms.len() >= 10,
@@ -128,8 +145,7 @@ fn every_help_line_belongs_to_a_command_that_runs() {
     // The reverse direction of the bug: a `/help` line for a name nothing
     // answers is an advertisement for a command that cannot run.
     let ui = read("crates/lca-ui/src/chat_commands.rs");
-    let cli = read("crates/lca-cli/src/tui/commands.rs");
-    let handled = handled_names(&cli);
+    let handled = registration_list();
     let router_arms = {
         let start = ui
             .find("pub(crate) fn dispatch_command")

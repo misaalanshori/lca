@@ -11,6 +11,7 @@ mod attach;
 mod clipboard;
 mod close;
 mod commands;
+mod commands_list;
 pub(crate) use attach::stage_initial_attachments;
 pub(crate) use commands::settings_text;
 pub(crate) use model_select::OfferedCache;
@@ -81,13 +82,6 @@ pub fn collect_markdown_transformers(
 }
 
 pub(crate) use display::session_stats;
-
-/// The built-in slash slots the interface itself claims; the spec's
-/// sixth built-in, `/stats`, arrives from the native hooks extension
-/// that holds the stats source (ADR-0013).
-const BUILTIN_SLOTS: [&str; 8] = [
-    "login", "logout", "usage", "model", "compact", "attach", "paste", "session",
-];
 
 /// The session's live model: the runner reads it per turn, the
 /// status-line label follows it, and the compaction backend is moved

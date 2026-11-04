@@ -9,43 +9,9 @@ use lca_protocol::CommandEffect;
 use lca_provider::Provider as _;
 use lca_ui::UiOptions;
 
-use super::BUILTIN_SLOTS;
 use super::Ui;
+use super::commands_list::COMPLETION_NAMES;
 use super::model_select::pick_model;
-
-/// Every slash name the host's [`Ui::dispatch_command`] answers itself,
-/// without the extension registry. One list, three readers: the router's
-/// allowlist (`slash_commands`), `/help`'s description table (which must
-/// carry a line for each), and the guard that keeps the two honest
-/// (gh #443).
-///
-/// **Gh #443: this is the fix for the class, not one instance.** The
-/// router (`Chat::dispatch_command`) admits a name only when it is in
-/// `slash_commands`, so a handler that is not registered is dead code
-/// that `/help` still advertises - `/bug`, `/export`, and `/import` were
-/// exactly that, answering "unknown command" while their implementations
-/// sat unreachable. Listing them here registers them and keeps the guard
-/// (in this module's tests) able to prove no future handler is orphaned.
-///
-/// The list is deliberately *not* the same as `slash_commands()`: that
-/// one also carries extension-registered commands and `/skill:<name>`
-/// instances, which no static table can enumerate.
-pub(crate) const HANDLED_NAMES: &[&str] = &[
-    "attach",
-    "bug",
-    "compact",
-    "export",
-    "import",
-    "login",
-    "logout",
-    "model",
-    "paste",
-    "permissions",
-    "session",
-    "settings",
-    "skill",
-    "usage",
-];
 
 impl Ui {
     /// Every model this session offers: every enabled provider's list
@@ -204,51 +170,23 @@ impl Ui {
         }
     }
 
-    /// The completion list: interface-level commands first, then the
-    /// built-in slots, then every command the host handles itself, then
-    /// every extension command (sanitized).
+    /// The completion list: the fixed entries in [`COMPLETION_NAMES`]' order,
+    /// then one row per skill, then every extension command (sanitized).
+    ///
+    /// Gh #270: this used to start from `BUILTIN_SLOTS` and then insert at
+    /// hand-maintained indices, which **collided** (`insert(7, "/clone")` then
+    /// `insert(7, "/thinking")` shifted `/clone` out of place), so the order the
+    /// user saw was a scramble no reader could predict, and eight routed
+    /// commands were never in the list at all. The fixed part is one ordered
+    /// literal now; skill and extension rows are appended because only they are
+    /// dynamic.
     fn slash_commands(&self) -> Vec<String> {
-        let mut names: Vec<String> = BUILTIN_SLOTS
+        let mut names: Vec<String> = COMPLETION_NAMES
             .iter()
             .map(|name| format!("/{name}"))
             .collect();
-        // Interface-level commands: `/help` lists everything (answered
-        // by the interface itself, so it works with no extension), and
-        // `/exit`/`/quit` leave. They lead the list so completion shows
-        // them first.
-        names.insert(0, "/help".to_string());
-        names.insert(1, "/exit".to_string());
-        names.insert(2, "/hotkeys".to_string());
-        names.insert(3, "/fullscreen".to_string());
-        names.insert(4, "/theme".to_string());
-        names.insert(5, "/tree".to_string());
-        names.insert(6, "/fork".to_string());
-        names.insert(7, "/clone".to_string());
-        names.insert(8, "/reload".to_string());
-        names.insert(7, "/thinking".to_string());
-        names.insert(8, "/resume".to_string());
-        names.insert(9, "/settings".to_string());
-        names.insert(10, "/grants".to_string());
-        names.insert(11, "/trust".to_string());
-        names.insert(12, "/permissions".to_string());
-        names.insert(13, "/scoped-models".to_string());
-        names.insert(14, "/mcp".to_string());
-        names.insert(15, "/changelog".to_string());
-        // gh #75: pi's `/name` completes like the `/rename` it names.
-        names.insert(16, "/name".to_string());
-        // gh #43: the skill command plus one entry per skill, so
-        // `/skill:name` completes and forwards to the host.
-        names.push("/skill".to_string());
-        // #227: the Extension Hub completes like any host command.
-        names.push("/extensions".to_string());
-        // Gh #443: whatever the host itself answers, the router must
-        // admit. Derived from `HANDLED_NAMES` rather than hand-pasted, so
-        // a handler and its registration cannot drift apart again - the
-        // guard in this module's tests fails on any name the dispatcher
-        // answers that this list does not contain.
-        for name in HANDLED_NAMES {
-            names.push(format!("/{name}"));
-        }
+        // Gh #43: one entry per skill, so `/skill:name` completes and forwards
+        // to the host.
         for skill in lca_tools::skills::collect(&crate::skills_roots(&self.cwd, &self.flags)) {
             names.push(format!("/skill:{}", skill.name));
         }
@@ -1006,111 +944,6 @@ mod subst_tests {
         let text = super::settings_text(&config, None, None, None, None);
         assert!(text.contains("model = ******** [user file]"), "{text}");
         assert!(!text.contains("s3cr3t"), "the secret never prints: {text}");
-    }
-}
-
-/// Guards for gh #443: the router's allowlist, the host's dispatch arms,
-/// and `/help`'s description table must all agree.
-///
-/// The bug these exist for: `slash_commands` was doing double duty as the
-/// autocomplete list *and* the router's allowlist, so a handled-but-
-/// unlisted name was dead code that `/help` still advertised, and a
-/// listed-but-unhandled name fell through to the extension dispatcher and
-/// silently did nothing. Both directions are checked here.
-#[cfg(test)]
-mod command_registration_guards {
-    use super::HANDLED_NAMES;
-
-    /// The host's dispatch arms, read from the source so the guard cannot
-    /// be satisfied by editing the very list it checks. A helper rather
-    /// than a line-by-line grep because `cargo fmt` reflows the match.
-    fn dispatch_arms() -> Vec<String> {
-        let source = include_str!("commands.rs");
-        let start = source
-            .find("fn dispatch_command(self: &Arc<Self>")
-            .expect("the host dispatcher exists");
-        let body = &source[start..];
-        let end = body.find("\n    }\n").expect("the dispatcher has a body");
-        let mut arms = Vec::new();
-        for line in body[..end].lines() {
-            let trimmed = line.trim();
-            // Guard arms (`name if name == "skill" || name.starts_with("skill:")`)
-            // are matched by a condition rather than a literal at the head,
-            // so read the quoted names out of the condition too. Without
-            // this the scanner reports `/skill` as having no arm at all.
-            if trimmed.starts_with("name if ") && trimmed.contains("=>") {
-                for (index, part) in trimmed.split('"').enumerate() {
-                    if index % 2 == 1 && !part.contains(' ') && !part.ends_with(':') {
-                        arms.push(part.to_string());
-                    }
-                }
-                continue;
-            }
-            if !trimmed.starts_with('"') || !trimmed.contains("=>") {
-                continue;
-            }
-            // `"attach" => ...` and the group `"login" | "logout" | "usage" =>`
-            for (index, part) in trimmed.split('"').enumerate() {
-                if index % 2 == 1 && !part.contains(' ') {
-                    arms.push(part.to_string());
-                }
-            }
-        }
-        arms.sort();
-        arms.dedup();
-        arms
-    }
-
-    // Verifies: gh #443 - every name the host answers is registered, so the
-    // router admits it. Red before the fix: `bug`, `export`, and `import`
-    // answered `unknown command` because they were in the dispatcher and in
-    // `/help` but missing from `slash_commands`.
-    #[test]
-    fn every_handled_command_is_registered() {
-        // The three gh #443 casualties specifically, so the regression
-        // names them even if someone trims the list later.
-        for name in ["bug", "export", "import"] {
-            assert!(
-                HANDLED_NAMES.contains(&name),
-                "/{name} must be registered: it has a dispatch arm and a /help line"
-            );
-        }
-        for name in HANDLED_NAMES {
-            assert!(
-                !name.is_empty() && !name.starts_with('/'),
-                "/{name} is registered without a leading slash"
-            );
-        }
-    }
-
-    // Verifies: gh #443 - a name with no dispatch arm does not get
-    // registered, because a listed-but-unhandled name falls through to the
-    // extension dispatcher and silently does nothing (the converse bug).
-    #[test]
-    fn every_registered_name_has_a_dispatch_arm() {
-        let arms = dispatch_arms();
-        for name in HANDLED_NAMES {
-            assert!(
-                arms.iter().any(|arm| arm == name),
-                "/{name} is registered but the host dispatcher has no arm for it; \
-                 a listed-but-unhandled name does nothing silently. Arms seen: {arms:?}"
-            );
-        }
-    }
-
-    // Verifies: gh #443 - the guard's own reader works, so the two rows
-    // above cannot pass vacuously on an empty arm list. If the dispatcher
-    // is ever rewritten into a shape this scanner cannot read, this fails
-    // loudly instead of the guards silently checking nothing.
-    #[test]
-    fn the_arm_reader_finds_the_dispatch_arms() {
-        let arms = dispatch_arms();
-        for expected in ["attach", "bug", "export", "import", "login", "usage"] {
-            assert!(
-                arms.iter().any(|arm| arm == expected),
-                "the arm reader missed /{expected}; arms seen: {arms:?}"
-            );
-        }
     }
 }
 

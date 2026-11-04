@@ -307,7 +307,8 @@ mod tests {
 #[cfg(test)]
 #[cfg(test)]
 mod ui_tests {
-    use super::super::{BUILTIN_SLOTS, adopt_login_identity, live_cells};
+    use super::super::commands_list::BUILTIN_SLOTS;
+    use super::super::{adopt_login_identity, live_cells};
 
     // Verifies: E5 - the status label names the preset identity, not the
     // extension, when the login stored one.

@@ -298,10 +298,12 @@ their own `/`-commands to the same menu.
 | `/labels` | list every bookmark |
 | `/login` | sign in to a provider |
 | `/logout` | clear the provider's stored key |
+| `/marketplace` | the extension hub, pi's spelling (`/extensions` is the same) |
 | `/mcp` | manage MCP servers (status, reconnect, enable, exposure, login) |
 | `/model` | list or switch the session's model |
 | `/name <name>` | rename this session (`/rename` is the same) |
 | `/paste` | paste the clipboard image to the next message |
+| `/quit` | leave the interface (`/exit` is the same) |
 | `/permissions` | manage allow/deny rules (session, project, global) |
 | `/persona` | apply a named bundle of model, thinking, tools, and instructions |
 | `/reload` | re-run discovery without restarting |

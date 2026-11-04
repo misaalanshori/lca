@@ -24,9 +24,11 @@ and anything undeclared is refused and recorded. At runtime:
   trust is refused at load.
 - `/grants` and `/permissions` show what is allowed; `allow`/`deny`
   rules carve the standing policy per scope and host.
-- `/yolo` drops the per-action prompts for a run and says so in the
-  footer (`[YOLO]`); it never widens what is granted, only how
-  often you are asked.
+- `--yolo` (or `permissions.mode = "yolo"`, or the `/settings` row)
+  drops the per-action prompts and says so in the footer (`[YOLO]`); it
+  never widens what is granted, only how often you are asked. There is no
+  `/yolo` *command* - gh #270's issue text listed one because of this
+  line, which claimed a command the tree never had.
 
 A first request to an undeclared host offers a one-time ad hoc
 grant (`allow` persists it for the project); headless runs exit 4

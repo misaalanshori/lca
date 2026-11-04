@@ -18,6 +18,18 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **Typing `/` now offers every command, in a readable order** (gh #270). The completion list was
+  built by `names.insert(n, …)` at hand-maintained indices, and the indices collided — `insert(7,
+  "/clone")` was followed by `insert(7, "/thinking")`, shifting `/clone` out of place — so the menu's
+  order was a scramble no reader could predict from the source. Worse, eight routed and documented
+  commands (`/label`, `/labels`, `/jump`, `/rename`, `/persona`, `/ext`, `/marketplace`, `/quit`) were
+  never inserted at all, so typing `/` could not reach them. The fixed half of the list is one ordered
+  literal now, grouped interface → session → content → model/config → integrations → identity →
+  attachments → diagnostics → leaving, with each alias beside its canonical spelling. The coverage
+  direction #443's guard missed is now a guard: every name the router answers must be completable, and
+  every completable name must run. (`/yolo`, `/new`, `/close` and `/tab` from the issue do not exist
+  as commands in this tree — yolo is a setting, tabs are keys — and `docs/security.md` claimed each
+  other's vocabulary; that is fixed too.)
 - **A fast stream renders at ~60 FPS, and a keystroke during it still paints immediately** (gh #370
   flaw 3, closing #370). `docs/flows.md` promised that "the renderer coalesces on a frame interval" and
   neither half held: waking on every streamed delta rendered **259 frames per second**, while
