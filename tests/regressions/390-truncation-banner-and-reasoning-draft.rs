@@ -235,3 +235,45 @@ fn the_extension_adapter_forwards_the_reasoning_type() {
         "the Rust-side ABI enum carries it (no WIT declaration, so this is additive)"
     );
 }
+
+// Verifies: gh #390 gap 1 - **the cut survives the WASM boundary.** Most providers are
+// delivered through the subscription kit, and the WIT stream has no truncation case,
+// so a guest re-encodes `Truncated` as the ABI's reserved `vendor-event` and the host
+// maps it back. Without both halves the interface would receive a truncated answer as
+// a complete one for every extension-delivered provider - the same defect this cycle
+// fixes, one hop away.
+//
+// Source-level because the two halves live in different crates (a guest compiled for
+// `wasm32-wasip2` and the host that maps its events); the behavioural pair is the
+// wire decoder's own rows plus the turn's.
+#[test]
+fn the_truncation_survives_the_guest_boundary() {
+    let kind = read("crates/lca-protocol/src/stream.rs");
+    assert!(
+        kind.contains("pub const TRUNCATED_KIND"),
+        "the vendor-event kind is a named constant, not a literal in ten guests"
+    );
+    // Every guest that maps the stream must re-encode it. The subscription kit is the
+    // shared one (most providers), so it is asserted first and separately.
+    for guest in [
+        "crates/lca-subscription/src/wasm.rs",
+        "extensions/llama/src/wasm_provider.rs",
+        "extensions/conformance/src/provider_world.rs",
+    ] {
+        let source = read(guest);
+        assert!(
+            source.contains("P::Truncated =>"),
+            "{guest} must re-encode the truncation, or its providers lose it"
+        );
+    }
+    // ...and the host must map it back, or the round trip preserves nothing.
+    let host = read("crates/lca-ext-host/src/host_imports.rs");
+    assert!(
+        host.contains("TRUNCATED_KIND =>"),
+        "the host maps the vendor event back to `Truncated`"
+    );
+    assert!(
+        host.contains("P::Truncated"),
+        "and the mapping produces the real variant, not another vendor event"
+    );
+}

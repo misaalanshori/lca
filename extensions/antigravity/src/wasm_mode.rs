@@ -186,6 +186,15 @@ fn to_wit_event(event: lca_protocol::StreamEvent) -> WasmEvent {
         P::ToolCallEnd { call_id } => WasmEvent::ToolCallEnd(call_id),
         P::Usage { usage } => WasmEvent::Usage(to_wit_usage(&usage)),
         P::Error { message, retryable } => WasmEvent::Error((message, retryable)),
+        // Gh #390 gap 1: the WIT stream has no truncation case, so a guest carries
+        // it through the reserved escape hatch the ABI documents for exactly this
+        // ("every vendor concept that lacks a case travels through vendor-event
+        // until it earns one at a major version"). A provider extension that only
+        // forwards (`llama`, the subscription kit) then reports the cut as the host
+        // does, rather than losing it at the boundary.
+        P::Truncated => {
+            WasmEvent::VendorEvent((lca_protocol::TRUNCATED_KIND.to_string(), String::new()))
+        }
         P::VendorEvent { kind, payload } => WasmEvent::VendorEvent((kind, payload.to_string())),
     }
 }

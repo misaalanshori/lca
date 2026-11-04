@@ -39,7 +39,7 @@ pub use record::{
     ToolSource, branch_point_record, branch_summary_record, is_previous_summary,
     session_info_record,
 };
-pub use stream::{StreamEvent, THINKING_SIGNATURE_KIND};
+pub use stream::{StreamEvent, THINKING_SIGNATURE_KIND, TRUNCATED_KIND};
 pub use tool::{
     ImageContent, ToolAnnotations, ToolCall, ToolExposure, ToolNamespace, ToolResult,
     ToolResultStatus, ToolSpec,

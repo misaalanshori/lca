@@ -176,6 +176,12 @@ fn to_wit_event(event: lca_protocol::StreamEvent) -> WasmEvent {
         P::ToolCallEnd { call_id } => WasmEvent::ToolCallEnd(call_id),
         P::Usage { usage } => WasmEvent::Usage(to_wit_usage(&usage)),
         P::Error { message, retryable } => WasmEvent::Error((message, retryable)),
+        // Gh #390 gap 1: carried through the ABI's reserved escape hatch, because the
+        // WIT stream has no truncation case; `host_imports` maps it back so the cut
+        // is not lost at this boundary.
+        P::Truncated => {
+            WasmEvent::VendorEvent((lca_protocol::TRUNCATED_KIND.to_string(), String::new()))
+        }
         P::VendorEvent { kind, payload } => WasmEvent::VendorEvent((kind, payload.to_string())),
     }
 }

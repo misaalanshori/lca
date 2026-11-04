@@ -531,6 +531,16 @@ pub(super) fn from_wit_event(event: wit_completion::StreamEvent) -> lca_protocol
             usage: from_wit_usage(usage),
         },
         wit_completion::StreamEvent::Error((message, retryable)) => P::Error { message, retryable },
+        // Gh #390 gap 1: a guest re-encodes `P::Truncated` as a vendor event, since
+        // the WIT stream has no case for it. Undo that here so the cut survives the
+        // boundary - otherwise every provider delivered through the subscription kit
+        // would report a truncated answer as a complete one, which is the exact
+        // defect this cycle fixes, one hop away.
+        wit_completion::StreamEvent::VendorEvent((kind, _))
+            if kind == lca_protocol::TRUNCATED_KIND =>
+        {
+            P::Truncated
+        }
         wit_completion::StreamEvent::VendorEvent((kind, payload)) => P::VendorEvent {
             kind,
             payload: serde_json::from_str(&payload).unwrap_or(serde_json::Value::String(payload)),
