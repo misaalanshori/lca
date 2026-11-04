@@ -86,10 +86,9 @@ pub struct Chat {
     pub editor: Editor,
     /// The footer data (cwd, session).
     pub footer: Footer,
-    /// The document the last `viewport` composed (gh #374 gap 1): written there,
-    /// taken by [`Chat::take_document`]. One `sections` walk serves both the
-    /// frame and the fullscreen exit dump; see `take_document` for why it is not
-    /// simply recomposed.
+    /// The document the last `viewport` composed (gh #374 gap 1), taken by
+    /// [`Chat::take_document`]: one `sections` walk serves both the frame and the
+    /// fullscreen exit dump.
     pub(crate) document: std::cell::RefCell<Vec<String>>,
     /// The keybinding registry: app actions are looked up here.
     ///
@@ -872,10 +871,9 @@ impl Chat {
         &self.theme_setting
     }
 
-    /// Whether the theme currently follows terminal detection.
-    ///
-    /// A `system` theme is rebuilt from the OSC 11 answer, so re-applying it by
-    /// name on reload would drop a background the terminal already reported.
+    /// Whether the theme currently follows terminal detection: a `system` theme is
+    /// rebuilt from the OSC 11 answer, so re-applying it by name on reload would drop a
+    /// background the terminal already reported.
     pub(crate) fn theme_follows_detection(&self) -> bool {
         self.theme_auto
     }
@@ -1176,6 +1174,9 @@ mod chat_toast_scrollback_tests;
 #[cfg(test)]
 #[path = "chat_command_guards.rs"]
 mod command_guards;
+#[cfg(test)]
+#[path = "chat_image_crop_tests.rs"]
+mod image_crop_tests;
 #[cfg(test)]
 #[path = "chat_meter_tests.rs"]
 mod meter_tests;

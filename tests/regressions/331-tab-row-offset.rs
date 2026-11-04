@@ -231,7 +231,13 @@ fn every_window_reader_delegates_to_the_one_function() {
     }
     // And `viewport` - the renderer whose arithmetic was already right - reads it too,
     // so the frame and the hit-test cannot disagree again.
-    let start = source.find("pub fn viewport(").expect("viewport exists");
+    // Gh #324 gap 3 moved the window read one level down: `viewport` delegates to
+    // `viewport_for_protocol`, which is where `transcript_window` is called. The
+    // property is unchanged - the renderer and the hit-test share one window function -
+    // so the guard follows the body that reads it.
+    let start = source
+        .find("pub fn viewport_for_protocol(")
+        .expect("viewport_for_protocol exists");
     let body = &source[start..];
     let body = &body[..body.find("\n    }\n").unwrap_or(body.len())];
     assert!(

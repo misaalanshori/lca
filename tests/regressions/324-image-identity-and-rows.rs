@@ -338,3 +338,149 @@ fn a_probe_invalidates_the_frames_laid_out_against_the_estimate() {
         "a non-reply never reaches the apply path: {handle}"
     );
 }
+
+// ===========================================================================
+// Gap 3 - a scrolled-past image is cropped to the band the window shows
+// ===========================================================================
+
+// Verifies: gh #324 gap 3 - **the crop is a placement, not a re-encode.** The row that
+// matters most in this gap: the id is unchanged (gap 1 hashes payload and cell scale,
+// deliberately not the crop) and no base64 comes back, so scrolling past an image costs
+// bytes rather than a re-upload. A fix that cropped by re-encoding would pass the band
+// rows and fail this one.
+#[test]
+fn the_crop_rewrites_the_placement_and_not_the_identity() {
+    let image = read("crates/lca-tui/src/widgets/image/crop.rs");
+    let crop = function_body(&image, "pub fn crop_kitty_line_px(");
+    assert!(
+        crop.contains("\"\\x1b_Ga=p,q=2,"),
+        "the crop emits a placement (`a=p`), not a transmission: {crop}"
+    );
+    assert!(
+        crop.contains("i={id}") && !crop.contains("encode_kitty"),
+        "with the same id and no encoder call: {crop}"
+    );
+    assert!(
+        !crop.contains("base64"),
+        "and no payload path at all: {crop}"
+    );
+    // The id must not be derived here: it comes from the line it rewrites.
+    assert!(
+        !crop.contains("kitty_image_id"),
+        "the id is read, never recomputed - a recompute is how a crop would change it: {crop}"
+    );
+}
+
+// Verifies: gh #324 gap 3 - **both edges are computed from different variables.** The
+// brief names this specifically: top-clipped uses `sourceY`, bottom-clipped uses
+// `sourceEnd`, and an implementation that derived one from the other would still pass
+// single-edge rows.
+#[test]
+fn the_two_edges_use_separately_named_extents() {
+    let image = read("crates/lca-tui/src/widgets/image/crop.rs");
+    let crop = function_body(&image, "pub fn crop_kitty_line_px(");
+    assert!(crop.contains("source_y"), "the top edge: {crop}");
+    assert!(crop.contains("source_end"), "the bottom edge: {crop}");
+    assert!(
+        crop.contains("div_ceil"),
+        "the far edge rounds up, so consecutive bands tile instead of gapping: {crop}"
+    );
+    assert!(
+        crop.contains("u64::from(px_h) * u64::from(hidden_rows)) / u64::from(rows)"),
+        "the near edge floors: {crop}"
+    );
+}
+
+// Verifies: gh #324 gap 3 - **the window tells the crop what it can see**, and the
+// arithmetic lives in one function both edges share. Without this the renderer sees a
+// fragment and cannot recover the band.
+#[test]
+fn the_window_reports_the_band_it_shows() {
+    let image = read("crates/lca-tui/src/widgets/image/crop.rs");
+    let band = function_body(&image, "pub fn clip_band(");
+    assert!(
+        band.contains("window_start") && band.contains("window_end"),
+        "the band is derived from both window edges: {band}"
+    );
+    assert!(
+        band.contains("saturating_sub(block_start)"),
+        "hidden rows are the distance from the window's start: {band}"
+    );
+    assert!(
+        band.contains("return None"),
+        "a block outside the window reports nothing, so no zero-row placement is emitted: {band}"
+    );
+}
+
+// Verifies: gh #324 gap 3 - **the crop runs before the placement cache.** Gap 1's cache
+// rewrites a header into a no-payload `a=p` form, and a cropped header *is* a placement;
+// cropping afterwards would have nothing to parse. Measured: getting this order wrong
+// made every image vanish from the frame for every scroll position, which is why the
+// render exposes a stage instead of a boolean.
+#[test]
+fn the_crop_runs_before_the_placement_cache() {
+    let render = read("crates/lca-ui/src/chat_render.rs");
+    assert!(
+        render.contains("RowStage::BeforePlacements"),
+        "the sections render stops before the cache so the header is still an a=T block"
+    );
+    assert!(
+        render.contains("crop_image_blocks(&transcript"),
+        "the crop is applied to that stage"
+    );
+    let after_crop = render
+        .find("crop_image_blocks(&transcript")
+        .expect("the crop call");
+    let placements = render
+        .find("apply_placements(&mut transcript)")
+        .expect("the cache call");
+    assert!(
+        after_crop < placements,
+        "and the cache runs afterwards, on whatever the crop left"
+    );
+}
+
+// Verifies: gh #324 gap 3 - **a top-clipped block's placement moves onto its first
+// visible row.** The sequence lives on the header, so if the header is above the window
+// the slice cuts it away and the band shows nothing - the image vanishes instead of
+// being cropped. This is the bug that measurement found, and pi solves it the same way
+// (`paintBox` places the cropped sequence on the scroll view's first row).
+#[test]
+fn a_top_clipped_placement_moves_onto_the_first_visible_row() {
+    let render = read("crates/lca-ui/src/chat_render.rs");
+    let crop = function_body(&render, "fn crop_image_blocks(");
+    assert!(
+        crop.contains("row < start"),
+        "the header above the window is recognised: {crop}"
+    );
+    assert!(
+        crop.contains("start.min(transcript.len()"),
+        "and the placement is written on the window's first row instead: {crop}"
+    );
+}
+
+// Verifies: gh #324 gap 3 - **the halfblock/placeholder path keeps its own clipping.**
+// It is text rows; routing it through pixel arithmetic would be a category error, and
+// most terminals get exactly this path.
+#[test]
+fn the_placeholder_path_stays_text() {
+    let crop_src = read("crates/lca-tui/src/widgets/image/crop.rs");
+    let crop = function_body(&crop_src, "pub fn crop_kitty_line_px(");
+    assert!(
+        crop.contains("kitty_image_control(line)?"),
+        "the crop is a kitty-only operation: {crop}"
+    );
+    // The placeholder lives in `image.rs`; the crop in its own module (gate 11 split).
+    let image = read("crates/lca-tui/src/widgets/image.rs");
+    let placeholder = function_body(&image, "pub fn render_image_placeholder(");
+    assert!(
+        !placeholder.contains("source_y") && !placeholder.contains("\x1b_G"),
+        "the placeholder has no pixel geometry and no graphics sequence: {placeholder}"
+    );
+    // And `render_image`'s None arm is still the placeholder.
+    let render_fn = function_body(&image, "pub fn render_image(");
+    assert!(
+        render_fn.contains("ImageProtocol::None => render_image_placeholder"),
+        "the None arm is untouched: {render_fn}"
+    );
+}

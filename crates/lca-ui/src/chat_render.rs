@@ -69,6 +69,81 @@ pub struct ScrollbarGeometry {
     pub thumb_height: u16,
 }
 
+/// Crop every kitty image block that straddles either edge of the window
+/// `[start, end)` (gh #324 gap 3).
+///
+/// Returns the document with those blocks' header rows rewritten into placements for
+/// the visible band. Blocks fully inside the window are untouched, so a frame that
+/// crops nothing emits exactly the bytes it did before.
+///
+/// `pixel_heights` maps a document row to the picture's true pixel height, for blocks
+/// whose header row is present; a header that has scrolled above the window has no
+/// entry and the crop falls back to the grid-derived height, which is a cell row
+/// imprecise and still far better than drawing the whole picture for a one-row band.
+/// A block the window had to crop: its document row and its rewritten line.
+pub(crate) struct CroppedBlock {
+    /// The document row whose line changed.
+    pub(crate) row: usize,
+    /// The placement it now carries.
+    pub(crate) line: String,
+}
+
+/// Crop every kitty image block that straddles either edge of the window
+/// `[start, end)` (gh #324 gap 3).
+///
+/// Returns **only the blocks whose line changed**, so a frame that crops nothing
+/// allocates nothing. The caller applies them in place; an earlier version returned a
+/// copy of the whole document, which cost a clone per frame and measurably slowed a
+/// real-terminal row on a long transcript.
+pub(crate) fn crop_image_blocks(
+    transcript: &[String],
+    pixel_heights: &std::collections::HashMap<usize, u32>,
+    start: usize,
+    end: usize,
+) -> Vec<CroppedBlock> {
+    let mut out = Vec::new();
+    for (row, rows) in pixel_heights
+        .keys()
+        .filter_map(|row| {
+            lca_tui::widgets::image::kitty_reserved_rows(transcript.get(*row)?)
+                .map(|rows| (*row, rows))
+        })
+        .filter(|(row, rows)| {
+            lca_tui::widgets::image::clip_band(*row, *rows, start, end)
+                .is_some_and(|(hidden, visible)| hidden != 0 || visible != *rows)
+        })
+    {
+        let Some((hidden, visible)) = lca_tui::widgets::image::clip_band(row, rows, start, end)
+        else {
+            continue;
+        };
+        let Some(cropped) = lca_tui::widgets::image::crop_kitty_line_px(
+            &transcript[row],
+            hidden,
+            visible,
+            pixel_heights.get(&row).copied(),
+        ) else {
+            continue;
+        };
+        // Where the placement has to go: the sequence lives on the header, so a
+        // top-clipped block's placement moves onto its first **visible** row or the
+        // slice cuts it away and the band shows nothing.
+        if hidden > 0 && row < start {
+            out.push(CroppedBlock {
+                row,
+                line: String::new(),
+            });
+            out.push(CroppedBlock {
+                row: start.min(transcript.len().saturating_sub(1)),
+                line: cropped,
+            });
+        } else {
+            out.push(CroppedBlock { row, line: cropped });
+        }
+    }
+    out
+}
+
 /// The scrollbar for a transcript of `content` rows in a `window`-row
 /// window scrolled `from_bottom` rows up, at `width` - pi's own math
 /// (`getScrollbarGeometry`): thumb height `round(track^2 / content)`
@@ -137,7 +212,30 @@ impl Chat {
     /// what does not: the dock (a blank row, the separator, the notice,
     /// the queued messages, the popup, the editor, the footer).
     pub(crate) fn sections(&self, width: u16) -> (Vec<String>, Vec<String>) {
-        let mut transcript = self.transcript.render(width, &self.theme);
+        self.sections_for_protocol(width, lca_tui::widgets::image::detect_image_protocol())
+    }
+
+    /// [`Self::sections`] for an explicit image protocol (gh #324 gap 3).
+    ///
+    /// The protocol is a parameter for the same reason the transcript's is (gap 1):
+    /// the kitty path is the one under test, and a box whose tmux has no graphics can
+    /// only assert it by naming it. `sections` keeps the detected protocol, so the
+    /// product path is unchanged.
+    pub(crate) fn sections_for_protocol(
+        &self,
+        width: u16,
+        protocol: lca_tui::widgets::image::ImageProtocol,
+    ) -> (Vec<String>, Vec<String>) {
+        // The crop is applied **before** the placement cache, because that cache
+        // rewrites a header into a no-payload `a=p` form (gap 1) and a cropped header
+        // *is* a placement - cropping afterwards would have nothing left to parse, and
+        // cropping first means one rewrite per frame rather than two.
+        let mut transcript = self.transcript.render_for_protocol_at(
+            width,
+            &self.theme,
+            protocol,
+            crate::transcript::RowStage::BeforePlacements,
+        );
 
         // Extension footer regions (FR-UI-1) ride with the fixed part of
         // the frame: they are status, not history.
@@ -555,13 +653,33 @@ impl Chat {
     /// it. One composition serves both, so the frame and the dump cannot disagree
     /// and neither is rendered twice.
     pub fn viewport(&self, width: u16, height: u16, scroll: u16) -> Vec<String> {
+        self.viewport_for_protocol(
+            width,
+            height,
+            scroll,
+            lca_tui::widgets::image::detect_image_protocol(),
+        )
+    }
+
+    /// [`Self::viewport`] for an explicit image protocol (gh #324 gap 3).
+    ///
+    /// Named for the same reason `sections_for_protocol` is: the crop is a
+    /// kitty placement concern, and only a caller that names the protocol can assert
+    /// it on a terminal without graphics. The product path is `viewport`, unchanged.
+    pub fn viewport_for_protocol(
+        &self,
+        width: u16,
+        height: u16,
+        scroll: u16,
+        protocol: lca_tui::widgets::image::ImageProtocol,
+    ) -> Vec<String> {
         if !self.screen_mode {
             let mut lines = self.render(width);
             self.compose_overlays_bottom_anchored(&mut lines, width, height);
             self.paint_toasts_at_bottom(&mut lines, width, height);
             return lines;
         }
-        let (transcript, dock) = self.sections(width);
+        let (transcript, dock) = self.sections_for_protocol(width, protocol);
         // Gh #374 gap 1: record the whole document on the way past, so the alt
         // screen's exit hands back everything the user could scroll through -
         // without a second `sections` walk (which measured 9.2 ms per frame on a
@@ -598,6 +716,29 @@ impl Chat {
         let from_bottom = (scroll as usize).min(content.saturating_sub(window));
         let end = content - from_bottom;
         let start = end.saturating_sub(window);
+        // Gh #324 gap 3: an image block that straddles an edge of this window is
+        // **cropped to the visible band** before the slice is taken, because after
+        // the slice the block is a fragment - its header may be gone entirely (top
+        // clip) or the tail of its reserve may be gone (bottom clip), and neither is
+        // recoverable. The crop is a *placement* for the texture the terminal already
+        // holds: the id is unchanged (gap 1 hashes payload and scale, deliberately not
+        // the crop) and no base64 is re-sent, so scrolling past an image is cheap.
+        //
+        // It runs on the transcript's `BeforePlacements` stage so the header is still
+        // an `a=T` block to parse; the crop's own output is a placement, so the final
+        // stage has nothing left to rewrite for a cropped block.
+        let image_heights = self.transcript.image_blocks();
+        // The common case is "no image straddles an edge", so the crop returns an empty
+        // vector rather than a copy of the document: a per-frame clone of a 400-row
+        // transcript was measurable (and made a real-terminal row flaky under load).
+        let cropped_blocks = crop_image_blocks(&transcript, &image_heights, start, end);
+        let mut transcript = transcript;
+        for block in cropped_blocks {
+            transcript[block.row] = block.line;
+        }
+        if protocol == lca_tui::widgets::image::ImageProtocol::Kitty {
+            self.transcript.apply_placements(&mut transcript);
+        }
         let mut lines: Vec<String> = transcript[start..end].to_vec();
         // Pad the window so the dock sits at the bottom of the frame no
         // matter how short the transcript is.

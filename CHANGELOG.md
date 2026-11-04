@@ -18,6 +18,16 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **A partly visible image is cropped to the band on screen** (gh #324 gap 3). Fullscreen
+  slices the transcript by whole rows, so an image straddling the viewport edge was
+  placed in full: its top scrolled away showed the picture's beginning, its bottom cut
+  off bled past the edge, and an image taller than the viewport was wrong on both sides.
+  The window now emits a placement carrying the visible pixel sub-rectangle (`y`/`h`)
+  for the texture the terminal already holds — the image id is unchanged and no base64
+  is re-sent, so scrolling past an image is a few dozen bytes rather than a re-upload.
+  A block whose header has scrolled off the top has its placement moved onto its first
+  visible row; without that the image vanished instead of being cropped. iTerm2 has no
+  source rectangle, so a straddling iTerm2 image is unchanged.
 - **Inline images are sized from the terminal's real cell size, not a 9×18 guess**
   (gh #324 gap 2). `CSI 16 t` is now sent in the startup query and its
   `CSI 6;h;w t` reply — parsed since long before this, but never asked for, so no

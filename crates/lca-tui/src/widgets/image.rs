@@ -39,6 +39,9 @@
 //! everything else gets the placeholder. `/attach` is the path that has
 //! bytes today; the ladder renders wherever they exist.
 
+mod crop;
+pub use crop::{clip_band, crop_kitty_line, crop_kitty_line_px};
+
 /// What is known about one image without decoding it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageInfo {
@@ -536,13 +539,29 @@ pub fn kitty_placement(line: &str) -> Option<String> {
     // turns a side-by-side into a byte comparison rather than a field-by-field
     // argument. Measured against pi 1.3.0: `\x1b_Ga=p,q=2,C=1,c=12,r=6,i=4242\x1b\\`.
     let (id, cols, rows) = kitty_image_control(line)?;
-    let cursor = if kitty_params(line)?.split(',').any(|p| p == "C=1") {
+    let params = kitty_params(line)?;
+    // A line that is **already** a placement carries a visible-band slice
+    // (`y`/`h`, gh #324 gap 3) that a bare `c`/`r` placement would throw away - the
+    // image would be re-placed in full at the cropped block's size, which is both the
+    // wrong pixels and the wrong geometry. Rebuilding from the parsed fields is what
+    // lost them; carrying the source rectangle across is what keeps it.
+    let mut slice = String::new();
+    for key in ["y", "h"] {
+        if let Some(param) = params
+            .split(',')
+            .find(|p| p.split_once('=').is_some_and(|(k, _)| k == key))
+            && let Some((_, value)) = param.split_once('=')
+        {
+            slice.push_str(&format!("{key}={value},"));
+        }
+    }
+    let cursor = if params.split(',').any(|p| p == "C=1") {
         "C=1,"
     } else {
         ""
     };
     Some(format!(
-        "\x1b_Ga=p,q=2,{cursor}c={cols},r={rows},i={id}\x1b\\"
+        "\x1b_Ga=p,q=2,{cursor}{slice}c={cols},r={rows},i={id}\x1b\\"
     ))
 }
 
@@ -581,8 +600,16 @@ fn kitty_image_control(line: &str) -> Option<(u32, u32, u32)> {
 /// transmission puts `m=1` continuations after the header).
 fn kitty_params(line: &str) -> Option<&str> {
     let start = line.find("\x1b_G")? + 3;
-    let end = line[start..].find(';')? + start;
-    Some(&line[start..end])
+    let rest = &line[start..];
+    // A transmission is `...,m=0;payload`; a **placement** has no payload and so no
+    // `;` at all. Ending only at the semicolon made every placement unreadable, which
+    // is how the crop first lost its `y`/`h`: the line it had just written could not be
+    // parsed back. Both forms end at the APC terminator when the semicolon is absent.
+    let end = match rest.find(';') {
+        Some(at) => at,
+        None => rest.find("\x1b\\").unwrap_or(rest.len()),
+    };
+    Some(&rest[..end])
 }
 
 /// How many rows a kitty image line reserves, from its own `r=`.

@@ -74,7 +74,9 @@ fn the_toast_painter_takes_a_screen_not_a_document() {
 #[test]
 fn the_scrollback_path_slices_the_frame_before_painting_toasts() {
     let source = render_source();
-    let viewport = function_body(&source, "pub fn viewport(");
+    // Gh #324 gap 3 moved both branches one level down into `viewport_for_protocol`
+    // (`viewport` delegates to it). The branches themselves are unchanged.
+    let viewport = function_body(&source, "pub fn viewport_for_protocol(");
     // The scrollback branch is the `if !self.screen_mode` one.
     let plain = viewport
         .find("if !self.screen_mode {")
@@ -127,7 +129,9 @@ fn start_of_offset(body: &str) -> usize {
 #[test]
 fn the_fullscreen_path_paints_its_frame_directly() {
     let source = render_source();
-    let viewport = function_body(&source, "pub fn viewport(");
+    // Gh #324 gap 3 moved both branches one level down into `viewport_for_protocol`
+    // (`viewport` delegates to it). The branches themselves are unchanged.
+    let viewport = function_body(&source, "pub fn viewport_for_protocol(");
     let tail = viewport
         .rfind("self.paint_toasts(&mut lines, width)")
         .expect("the fullscreen path paints its frame directly");

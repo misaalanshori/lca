@@ -223,9 +223,15 @@ fn the_interface_sets_the_document_on_every_fullscreen_frame() {
 #[test]
 fn the_document_rides_the_frame_composition_instead_of_a_second_walk() {
     let source = production_source("crates/lca-ui/src/chat_render.rs");
-    let viewport = function_body(&source, "pub fn viewport(&self, width: u16, height: u16");
+    // Gh #324 gap 3 moved the walk one level down: `viewport` delegates to
+    // `viewport_for_protocol`, which is where the single `sections_for_protocol` call
+    // lives. The property this pins is unchanged - **one walk per frame, and the
+    // document is recorded from it** - so it now reads the body that actually walks.
+    let viewport = function_body(&source, "pub fn viewport_for_protocol(");
     assert_eq!(
-        viewport.matches("self.sections(width)").count(),
+        viewport
+            .matches("self.sections_for_protocol(width, protocol)")
+            .count(),
         1,
         "one sections walk per frame: {viewport}"
     );

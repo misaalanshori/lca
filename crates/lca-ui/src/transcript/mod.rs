@@ -342,18 +342,6 @@ impl Transcript {
         &self.keybindings
     }
 
-    /// The render-cache epoch (gh #324 gap 2).
-    ///
-    /// Exposed to tests only: the cell-size probe's whole claim is that it drops the
-    /// frames that were laid out against the estimate, and "the cache was
-    /// invalidated" is not observable from the rendered rows when the new grid
-    /// happens to produce the same text. Reading the epoch is the direct question.
-    #[cfg(test)]
-    #[must_use]
-    pub fn cache_epoch_for_test(&self) -> u64 {
-        self.cache_epoch
-    }
-
     /// Drop every cached frame and bump the epoch, so nothing rendered under the
     /// previous inputs can be served again.
     fn invalidate_cache(&mut self) {
@@ -1112,6 +1100,22 @@ impl Transcript {
         theme: &Theme,
         protocol: lca_tui::widgets::image::ImageProtocol,
     ) -> Vec<String> {
+        self.render_for_protocol_at(width, theme, protocol, RowStage::Final)
+    }
+
+    /// [`Self::render_for_protocol`] stopped at a chosen stage (gh #324 gap 3).
+    ///
+    /// The placement cache rewrites a kitty header into a no-payload `a=p` form
+    /// (gap 1), and a **cropped** header is itself a placement. So the crop has to run
+    /// before the cache, not after: afterwards there is no `a=T` block left to parse,
+    /// and cropping first does one rewrite per frame instead of two.
+    pub fn render_for_protocol_at(
+        &self,
+        width: u16,
+        theme: &Theme,
+        protocol: lca_tui::widgets::image::ImageProtocol,
+        stage: RowStage,
+    ) -> Vec<String> {
         let mut cache = self.cache.borrow_mut();
         if cache.len() != self.entries.len() {
             cache.resize(self.entries.len(), None);
@@ -1145,7 +1149,7 @@ impl Transcript {
             out.extend(lines.iter().cloned());
             cache[i] = Some((width, self.cache_epoch, lines, thinking_rows));
         }
-        if protocol == lca_tui::widgets::image::ImageProtocol::Kitty {
+        if stage == RowStage::Final && protocol == lca_tui::widgets::image::ImageProtocol::Kitty {
             self.uploaded_images.borrow_mut().substitute(&mut out);
         }
         out
@@ -1153,11 +1157,14 @@ impl Transcript {
 }
 
 mod compaction_card;
+mod image_blocks;
+pub use image_blocks::RowStage;
 mod measure;
 pub use compaction_card::Card;
 pub use measure::image_label;
 mod nested;
 mod startup_header;
+pub use RowStage as TranscriptStage;
 pub use nested::{COLLAPSED_CHILDREN, ChildCall, ChildStatus};
 mod preview;
 mod render;
