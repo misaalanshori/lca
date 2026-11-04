@@ -30,6 +30,9 @@ pub(super) struct CallResponse {
     pub(super) calls: Vec<ToolCall>,
     pub(super) protocol_errors: Vec<ProtocolError>,
     pub(super) usage: Usage,
+    /// The provider reported that it hit its output-token limit (gh #390 gap 1),
+    /// so this response is a prefix of what the model was producing.
+    pub(super) truncated: bool,
 }
 
 /// Why one completion call did not produce a response.
@@ -226,6 +229,35 @@ impl Agent<'_> {
                 response.usage.cost_cache_write = priced.cost_cache_write;
             }
             accumulate_usage(&mut turn_usage, &response.usage);
+            // Gh #390 gap 1: **a truncation outranks everything else**, and it
+            // ends the turn here - before any tool call runs.
+            //
+            // Two things were wrong without this. The half-streamed call's
+            // arguments are a JSON prefix (`{"path": "a.txt", "content": "hel`),
+            // so running it either fails on the parse or, worse, runs against a
+            // value the model never finished writing; and because nothing marked
+            // the response as cut, the loop re-requested and re-attempted the
+            // same incomplete call - a live session showed the same
+            // `write a.txt error` card repeating until it was interrupted.
+            //
+            // It also comes *before* `reject_incomplete`: the open-call protocol
+            // error is a *consequence* of the cut, not an independent fault, and
+            // reporting both would be the double-report this issue warns about.
+            if response.truncated {
+                if let Err(outcome) = self.persist_response(&response, sink).await {
+                    return outcome;
+                }
+                sink.on_event(TurnEvent::TurnEnded {
+                    status: TurnStatus::Ok,
+                    stop_reason: StopReason::Length,
+                });
+                return TurnOutcome {
+                    status: TurnStatus::Ok,
+                    stop_reason: StopReason::Length,
+                    usage: turn_usage,
+                    error: None,
+                };
+            }
             if let Err(outcome) = self.reject_incomplete(&response, sink, &turn_usage) {
                 return outcome;
             }
@@ -754,7 +786,13 @@ impl Agent<'_> {
                 text: response.text.clone(),
             });
         }
-        for call in &response.calls {
+        // Gh #390 gap 1: a **truncated** response's calls are not recorded.
+        // Their arguments are the prefix the model managed to stream, so the
+        // JSON is incomplete; persisting one would put a half-written call in the
+        // session log, where a resume would replay it and offer to run it. The
+        // text is kept - that is the usable part - and the turn reports `Length`
+        // so the user knows something was cut.
+        for call in response.calls.iter().filter(|_| !response.truncated) {
             blocks.push(ContentBlock::ToolCall {
                 call_id: call.call_id.clone(),
                 name: call.name.clone(),
@@ -821,7 +859,20 @@ impl Agent<'_> {
                 format!("cannot update the session metadata: {err}"),
             ));
         }
-        for (index, call) in response.calls.iter().enumerate() {
+        // Gh #390 gap 1: **no `ToolCall` record for a truncated response.**
+        //
+        // The blocks above already omit them, but this loop writes the records the
+        // resume path replays - so filtering only the blocks would leave the
+        // half-written call in the log, and a resume would offer to run arguments
+        // that are an invalid JSON prefix. Two writers, one rule; the first version
+        // of this fix filtered one and a row caught the other, which is why the
+        // guard below reads the *records* rather than the assistant block.
+        for (index, call) in response
+            .calls
+            .iter()
+            .enumerate()
+            .filter(|_| !response.truncated)
+        {
             // Gh #128: the record names who owns the tool - an
             // extension-registered name records `Extension`, the same
             // `tool_owner` question dispatch asks below.

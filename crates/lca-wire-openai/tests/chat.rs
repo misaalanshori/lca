@@ -323,3 +323,67 @@ fn a_tool_image_splits_into_a_following_user_message() {
     assert_eq!(wire.len(), 1, "no image means no synthetic message");
     assert_eq!(wire[0]["role"], "tool");
 }
+
+// ============================================================================
+// gh #390 gap 1: an unbudgeted `length` finish is a truncation, not a quiet end.
+// ============================================================================
+
+// Verifies: gh #390 gap 1 - **an ordinary chat turn that the endpoint's own limit
+// cut now says so.** Gh #169 deliberately kept this quiet because no budget of
+// *ours* could be named; the consequence was that a response cut mid-tool-call was
+// indistinguishable from a complete one, and the half-streamed call was then
+// re-attempted in a loop. The cut is reported as `Truncated` - a fact, not an
+// error - so the host can end the turn as `Length` without inventing a failure or
+// a retry.
+#[test]
+fn an_unbudgeted_length_finish_reports_a_truncation() {
+    let events = events_of(length_body());
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, StreamEvent::Truncated)),
+        "the cut is reported: {events:?}"
+    );
+    // ...and it stays a *fact*: no error is invented where no number of ours
+    // exists, so a script does not see a crashed turn for a usable partial answer.
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, StreamEvent::Error { .. })),
+        "no error envelope for an unbudgeted cut: {events:?}"
+    );
+    // The partial text still arrives: the usable part is not thrown away.
+    let text: String = events
+        .iter()
+        .filter_map(|event| match event {
+            StreamEvent::TextDelta { delta } => Some(delta.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(text, "partial");
+}
+
+// Verifies: gh #390 gap 1 - **a budgeted cut reports both**: the truncation fact
+// (so the turn ends as `Length`) *and* the gh #169 failure that names the budget
+// we set (a summarization that we capped is a failure of that request, not a
+// surprise). One signal would have lost one of the two meanings.
+#[test]
+fn a_budgeted_length_finish_reports_the_cut_and_the_cap() {
+    let mut events = Vec::new();
+    let mut decoder = SseDecoder::default().with_max_tokens(Some(4096));
+    decoder.feed(length_body().as_bytes(), &mut |event| events.push(event));
+    decoder.finish(&mut |event| events.push(event));
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, StreamEvent::Truncated)),
+        "the truncation fact: {events:?}"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            StreamEvent::Error { message, .. } if message.contains("4096")
+        )),
+        "and the cap that named it: {events:?}"
+    );
+}

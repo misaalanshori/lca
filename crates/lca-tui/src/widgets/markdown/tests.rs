@@ -1,10 +1,10 @@
 use super::*;
 
-fn plain() -> MarkdownTheme {
+pub(super) fn plain() -> MarkdownTheme {
     MarkdownTheme::default()
 }
 
-fn strip(lines: &[String]) -> Vec<String> {
+pub(super) fn strip(lines: &[String]) -> Vec<String> {
     lines
         .iter()
         .map(|l| crate::engine::text::strip_terminal_sequences(l))

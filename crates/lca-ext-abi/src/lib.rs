@@ -184,16 +184,29 @@ pub mod dispatch {
     /// Boxed future bound for dispatch calls, tied to the handle's life.
     pub type DispatchFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-    /// Whose markdown a pre-parse transform sees (gh #12): pi's
-    /// `MarkdownTransformContext["messageType"]`, Rust-side only.
-    /// Reasoning runs render as plain wrapped lines rather than parsed
-    /// markdown, so there is no thinking variant.
+    /// Whose markdown a pre-parse transform sees (gh #12, gh #390 gap 2):
+    /// pi's `MarkdownTransformContext["messageType"]`, Rust-side only.
+    ///
+    /// `AssistantThinking` is pi's `assistant-thinking`: a **reasoning run**,
+    /// which is the model drafting to itself rather than the answer it stands
+    /// behind. A transformer that produces an artefact (mermaid, and anything
+    /// similar later) skips that type, so a diagram sketched in reasoning is not
+    /// drawn twice.
+    ///
+    /// Additive and ABI-internal: no `wit/` declaration carries this type (the
+    /// WIT export ships with the first third-party-shaped consumer), so a new
+    /// variant breaks no guest. Every in-tree adapter is forced to handle it by
+    /// the compiler, which is the guard that matters - a `_ =>` arm is what would
+    /// silently mislabel a reasoning run as an answer.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum MarkdownMessageType {
         /// A user prompt's markdown.
         User,
         /// An assistant answer's markdown.
         Assistant,
+        /// A reasoning run's markdown (gh #390 gap 2): pi's
+        /// `assistant-thinking`.
+        AssistantThinking,
     }
 
     /// What a pre-parse markdown transform sees alongside the source

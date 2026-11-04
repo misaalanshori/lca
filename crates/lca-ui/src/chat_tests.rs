@@ -1173,3 +1173,7 @@ mod hardware_cursor_tests;
 // Gh #333: a tab switch closes every transient overlay.
 #[path = "overlay_registry_tests.rs"]
 mod overlay_close_tests;
+
+#[cfg(test)]
+#[path = "chat_truncation_tests.rs"]
+mod truncation_tests;

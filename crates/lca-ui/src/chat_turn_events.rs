@@ -12,6 +12,23 @@ use crate::chat::Chat;
 use crate::state::TurnStatusLine;
 use crate::transcript::ToolStatus;
 
+/// What a truncated turn says (gh #390 gap 1).
+///
+/// Two jobs, and the second is why it is longer than pi's line: pi prints
+/// `Response was truncated before completion.` and stops. That states the fact but
+/// leaves a user with no next step, which AGENTS.md's error-copy rule forbids - the
+/// message must say what to DO. The two remedies are the two things that actually
+/// help: give the model room (raise `max_tokens`, or ask for less in one message),
+/// or make the context smaller so its next attempt has budget to finish in
+/// (`/compact`). A third possibility - "the tool call may not have run" - is
+/// covered by the wording rather than a separate sentence, because the banner is
+/// appended after whatever did execute and the user can see the call's own card.
+///
+/// Punctuation-free at the start, like every other notice: the transcript styles
+/// the whole line in the error role already.
+pub const TRUNCATED_NOTICE: &str = "\u{2717} the response was truncated at the model's output \
+limit before it finished; raise `max_tokens` or run /compact to leave room for the rest";
+
 impl Chat {
     /// Apply one turn event to the state in hand (gh #462).
     ///
@@ -162,6 +179,10 @@ impl Chat {
                     text: match (status, stop_reason) {
                         (TurnStatus::Ok, StopReason::Stop) => "done".to_string(),
                         (TurnStatus::Ok, StopReason::Cancelled) => "cancelled".to_string(),
+                        // Gh #390 gap 1: the status line says the answer was
+                        // cut, so a reader who did not scroll to the banner still
+                        // sees it.
+                        (_, StopReason::Length) => "done: truncated".to_string(),
                         (TurnStatus::Error, StopReason::IterationLimit) => {
                             "stopped: iteration limit".to_string()
                         }
@@ -169,6 +190,25 @@ impl Chat {
                         (TurnStatus::Ok, _) => "done".to_string(),
                     },
                 });
+                // Gh #390 gap 1: **the truncation banner**, and it is
+                // unconditional on the reason - which is the whole fix.
+                //
+                // A truncation is a fact about the turn, not about what it
+                // produced: the response is a prefix of what the model was
+                // writing, so the user needs to know whatever else happened. The
+                // shape this replaces made the banner's presence depend on the
+                // *absence* of tool calls, which meant the case where a call was
+                // cut mid-stream - the one where the previewed work may never have
+                // run - was the one that said nothing. pi's rule is the same and
+                // for the same reason (`assistant-message.ts`: a `length` stop
+                // appends the line before the `!hasToolCalls` branch).
+                //
+                // Exactly once: this is the `TurnEnded` handler, the single place
+                // a turn ends, and the copy names the remedy rather than only the
+                // fact (AGENTS.md's error-copy rule).
+                if stop_reason == StopReason::Length {
+                    self.transcript.push_error(TRUNCATED_NOTICE);
+                }
                 // The tab's title resolves from its own session, which is the
                 // tab the turn ran in (gh #209/#462).
                 if let Some(id) = self.tabs.get(owner).map(|tab| tab.session_id.clone())

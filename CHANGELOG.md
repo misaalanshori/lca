@@ -18,6 +18,24 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **A truncated answer now says so, instead of reading like a complete one** (gh #390 gap 1).
+  When the model hit its output-token limit, the wire's `finish_reason: "length"` had no
+  representation in the protocol at all — an ordinary chat turn ended as a silent "done", a
+  tool call cut mid-arguments was treated as runnable (its JSON was a prefix), and because
+  nothing marked the response as cut, the turn **re-requested and re-attempted the same
+  incomplete call in a loop** (observed live: the same `write a.txt error` card repeating).
+  Now: `StopReason::Length` / `StreamEvent::Truncated` carry the fact from both wire kits
+  (OpenAI's `length`, Anthropic's `max_tokens`), the turn ends before any call runs, the
+  half-written call is neither dispatched nor recorded, and a red banner names the remedy —
+  `max_tokens` or `/compact` — **unconditionally on the reason**, including with tool calls
+  present, which is the case pi shows it for and the case that used to stay silent. The
+  status line reads `done: truncated`; headless reports `stop_reason: length` at exit 0.
+- **A diagram drafted in reasoning stays a draft** (gh #390 gap 2). A ```` ```mermaid ````
+  fence in a thinking run rendered as a second copy of the answer's diagram. The rule is now
+  per message *type* (`MarkdownMessageType::AssistantThinking`, pi's `assistant-thinking`)
+  rather than per content, so the reasoning run shows the fence as source. The double render
+  was not reachable before this change — reasoning renders through plain wrapping, not the
+  markdown pipeline — so this is prevention for the shape that would have introduced it.
 - **Typing `/` now offers every command, in a readable order** (gh #270). The completion list was
   built by `names.insert(n, …)` at hand-maintained indices, and the indices collided — `insert(7,
   "/clone")` was followed by `insert(7, "/thinking")`, shifting `/clone` out of place — so the menu's

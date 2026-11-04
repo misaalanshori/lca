@@ -25,6 +25,17 @@ pub enum StopReason {
     Cancelled,
     /// A provider error after the retry limit (FR-CORE-7) or a rejection.
     Error,
+    /// The model was cut off at its output-token limit (gh #390 gap 1): pi's
+    /// `length`, the wire crates' `finish_reason: "length"` /
+    /// `stop_reason: "max_tokens"`.
+    ///
+    /// A truncation is **a fact about the turn, not about what it produced**, so
+    /// it is reported whatever else happened. That is the point of giving it its
+    /// own case: the earlier shape folded it into "the turn ended normally",
+    /// which is indistinguishable from a complete answer - and when the cut fell
+    /// mid-tool-call the half-streamed call was then re-attempted in a loop,
+    /// because nothing downstream could see that the response had been cut.
+    Length,
 }
 
 /// What one turn produced.

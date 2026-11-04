@@ -1078,3 +1078,68 @@ fn finished_cards_render_their_recorded_duration() {
 // 1,200-line ceiling.
 #[path = "render_diff_tests.rs"]
 mod diff_body_tests;
+
+// ============================================================================
+// gh #390 gap 2: a diagram drafted in reasoning is never drawn twice.
+// ============================================================================
+
+/// The transcript a model produces when it drafts a diagram in its reasoning and
+/// then commits to it in the answer.
+/// A **single-node** diagram on purpose: one drawing is one `┌` row, so counting
+/// them counts diagrams rather than boxes. (A two-node flowchart draws two boxes,
+/// and a row that counted them would fail on a correct render - the first version
+/// of this row did exactly that.)
+fn drafting_turn() -> Transcript {
+    let mut t = Transcript::new();
+    t.append_reasoning("I will draw it first:\n```mermaid\nflowchart TD\n  A[Only]\n```");
+    t.append_text("Here it is:\n```mermaid\nflowchart TD\n  A[Only]\n```");
+    t.finish_assistant();
+    t
+}
+
+// Verifies: gh #390 gap 2 (**the receipt, and the honesty check**) - **the
+// transcript draws the diagram exactly once**, and the reasoning run shows it as
+// source.
+//
+// This row is also the answer to the brief's question. Reasoning renders through
+// `wrap_text_with_ansi` rather than `render_markdown`, so the double-render was
+// **not reachable** before this change - the guard at the block renderer is
+// prevention, not a fix for a live bug. What this row pins is the observable the
+// prevention protects: however the reasoning run is rendered, the art box appears
+// once, in the answer. If reasoning is ever routed through `render_markdown` (the
+// shape pi uses, and the shape the new `AssistantThinking` type exists for), this
+// row keeps holding it to one drawing.
+#[test]
+fn a_diagram_drafted_in_reasoning_is_drawn_once() {
+    let lines = strip(&drafting_turn().render(60, &plain()));
+    let boxes = lines.iter().filter(|line| line.contains('┌')).count();
+    assert_eq!(
+        boxes, 1,
+        "the diagram is drawn exactly once, in the answer: {lines:?}"
+    );
+    // ...and the reasoning run's copy is the source the model drafted.
+    let reasoning_rows: Vec<&String> = lines
+        .iter()
+        .filter(|line| line.starts_with("  ") && line.contains("flowchart"))
+        .collect();
+    assert!(
+        !reasoning_rows.is_empty(),
+        "the draft is visible in the reasoning run as source: {lines:?}"
+    );
+}
+
+// Verifies: gh #390 gap 2 - **the message type is what reaches the block
+// renderer.** The transcript's answer path passes `Assistant`, which is the
+// control for the skip: a skip wired to the wrong branch (or to "any message
+// that has reasoning") would leave an answer without a diagram.
+#[test]
+fn the_answer_path_still_asks_for_art() {
+    let mut t = Transcript::new();
+    t.append_text("```mermaid\nflowchart TD\n  A[Only]\n```");
+    t.finish_assistant();
+    let lines = strip(&t.render(60, &plain()));
+    assert!(
+        lines.iter().any(|line| line.contains('┌')),
+        "a diagram in the answer is drawn: {lines:?}"
+    );
+}

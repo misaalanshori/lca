@@ -11,16 +11,42 @@
 
 use std::sync::Arc;
 
-/// Whose markdown is being rendered (gh #12): pi's
-/// `MarkdownTransformContext["messageType"]`. Reasoning runs render as
-/// plain wrapped lines rather than parsed markdown, so there is no
-/// thinking variant - transforms see user and assistant sources only.
+/// Whose markdown is being rendered (gh #12, gh #390 gap 2): pi's
+/// `MarkdownTransformContext["messageType"]`.
+///
+/// # Why thinking is a message type and not a flag
+///
+/// A ```` ```mermaid ```` fence inside a reasoning run is a *draft* the model is
+/// sketching to itself; the same fence in the answer is the artefact. pi draws
+/// that line through the message type (`assistant-thinking` skips the mermaid
+/// transformer) rather than through a content sniff, and the distinction
+/// generalises: any transformer that should not fire on reasoning asks the type,
+/// and every one of them answers the same way. A content check ("does this look
+/// like a draft?") is a heuristic that would be wrong in both directions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MarkdownMessageType {
     /// A user prompt's markdown.
     User,
     /// An assistant answer's markdown.
     Assistant,
+    /// A reasoning run's markdown (gh #390 gap 2): pi's
+    /// `assistant-thinking`. Transforms that produce artefacts - mermaid, and
+    /// anything similar later - are skipped for this type, because reasoning is
+    /// the model thinking aloud, not the answer it stands behind.
+    AssistantThinking,
+}
+
+impl MarkdownMessageType {
+    /// Whether this type is a reasoning run (pi's `assistant-thinking`).
+    ///
+    /// One predicate rather than `matches!(..)` scattered through the pipeline:
+    /// a second thinking-shaped type would otherwise be added to some call sites
+    /// and missed at others, and the artefact transforms are exactly where a miss
+    /// is visible.
+    #[must_use]
+    pub fn is_reasoning(self) -> bool {
+        matches!(self, MarkdownMessageType::AssistantThinking)
+    }
 }
 
 /// What a pre-parse transform sees alongside the source (gh #12): pi's

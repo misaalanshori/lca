@@ -320,6 +320,24 @@ their own `/`-commands to the same menu.
 | `/trust` | trust the project folder |
 | `/usage` | show the provider's usage, when it has one |
 
+### A truncated answer
+
+When the model hits its output-token limit mid-answer, the turn says so — a red line
+naming what happened and what to do about it:
+
+```
+✗ the response was truncated at the model's output limit before it finished;
+  raise `max_tokens` or run /compact to leave room for the rest
+```
+
+It appears **whatever else the turn produced**, including when the cut landed in the
+middle of a tool call: that is the case where the previewed work may never have run.
+A response cut mid-call does not run that call, is not recorded in the session, and is
+not retried — a half-streamed argument string is not a value the model finished
+writing. The status line reads `done: truncated`, and in headless mode the envelope's
+`stop_reason` is `length` with exit code 0, because a partial answer is a partial
+answer, not a failed run.
+
 ### Permission rules
 
 `/permissions deny read muffin-recipe.txt` refuses any read of that file, and

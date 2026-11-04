@@ -70,6 +70,10 @@ impl Agent<'_> {
                     format!("input {} output {}", usage.input, usage.output),
                 ),
                 StreamEvent::Error { message, .. } => ("error", message.clone()),
+                // Gh #390 gap 1: `hooks-stream` observers see the cut too, so an
+                // observer that logs turn shapes does not record a truncated
+                // answer as a complete one.
+                StreamEvent::Truncated => ("truncated", String::new()),
                 StreamEvent::VendorEvent { kind, payload } => {
                     ("vendor-event", format!("{kind} {payload}"))
                 }
@@ -200,6 +204,10 @@ impl Agent<'_> {
         // the transcript order replay resends).
         let mut signature: Option<String> = None;
         let mut acc = ToolCallAccumulator::default();
+        // Gh #390 gap 1: set when the provider reported an output-limit stop.
+        // Carried out on `CallResponse` so the turn can end as `Length` rather
+        // than as a normal stop that merely happened to have a half-streamed call.
+        let mut truncated = false;
         let mut usage = Usage::default();
         let mut failure: Option<(String, &'static str, bool)> = None;
         // Gh #45's stream observation buffers the normalized events
@@ -252,6 +260,13 @@ impl Agent<'_> {
                         failure = Some((message, "transport", retryable));
                         break;
                     }
+                    // Gh #390 gap 1: the provider says it hit its output limit.
+                    // Not a failure - the partial answer is usable - but it is
+                    // kept so the turn can report `StopReason::Length`.
+                    Some(StreamEvent::Truncated) => {
+                        stream_log.push(StreamEvent::Truncated);
+                        truncated = true;
+                    }
                     Some(StreamEvent::VendorEvent { kind, payload }) => {
                         stream_log.push(StreamEvent::VendorEvent { kind: kind.clone(), payload: payload.clone() });
                         tracing::debug!(%kind, %payload, "vendor event");
@@ -290,6 +305,10 @@ impl Agent<'_> {
                             StreamEvent::Error { message, retryable } => {
                                 stream_log.push(StreamEvent::Error { message: message.clone(), retryable });
                                 failure = Some((message, "transport", retryable));
+                            }
+                            StreamEvent::Truncated => {
+                                stream_log.push(StreamEvent::Truncated);
+                                truncated = true;
                             }
                             StreamEvent::VendorEvent { kind, payload } => {
                                 stream_log.push(StreamEvent::VendorEvent { kind: kind.clone(), payload: payload.clone() });
@@ -348,6 +367,7 @@ impl Agent<'_> {
             calls,
             protocol_errors,
             usage,
+            truncated,
         })
     }
 }

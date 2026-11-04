@@ -32,7 +32,14 @@ pub fn exit_code(outcome: &TurnOutcome, needed_approval: bool, error_class: Opti
                 Some(_) => exit::ABORTED,
                 None => exit::INTERNAL,
             },
-            StopReason::Stop => exit::OK,
+            // Gh #390 gap 1: a truncation is a **completed** turn as far as exit
+            // codes go - the script got an answer, it was simply cut. It is not
+            // an abort (the user did nothing) and not a provider failure (the
+            // provider behaved), so it maps to `OK` and the *envelope* carries
+            // `stop_reason: "length"` for a script that wants to know. Making it
+            // an error code would break every existing `set -e` script on a
+            // long answer, which is a worse failure than the one being fixed.
+            StopReason::Stop | StopReason::Length => exit::OK,
         },
     }
 }
@@ -332,6 +339,9 @@ fn stop_reason_name(reason: StopReason) -> &'static str {
         StopReason::IterationLimit => "iteration-limit",
         StopReason::Cancelled => "cancelled",
         StopReason::Error => "error",
+        // Pi's own name for the value (`finish_reason: "length"`), so a script
+        // reading the envelope matches what the provider said.
+        StopReason::Length => "length",
     }
 }
 

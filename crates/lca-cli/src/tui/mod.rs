@@ -70,6 +70,13 @@ pub fn collect_markdown_transformers(
                             lca_ui::MarkdownMessageType::Assistant => {
                                 lca_ext_abi::MarkdownMessageType::Assistant
                             }
+                            // Gh #390 gap 2: a reasoning run is forwarded as
+                            // itself, not folded into `Assistant` - an extension
+                            // that registers an artefact transformer needs the
+                            // same distinction the built-in mermaid path uses.
+                            lca_ui::MarkdownMessageType::AssistantThinking => {
+                                lca_ext_abi::MarkdownMessageType::AssistantThinking
+                            }
                         },
                         is_streaming: context.is_streaming,
                         available_width: context.available_width,

@@ -536,12 +536,18 @@ impl AnthropicStream {
                 {
                     out.push(StreamEvent::Usage { usage: mapped });
                 }
-                if value
+                if let Some(reason) = value
                     .get("delta")
                     .and_then(|delta| delta.get("stop_reason"))
                     .and_then(|reason| reason.as_str())
-                    .is_some()
                 {
+                    // Gh #390 gap 1: Anthropic spells the output-token cut
+                    // `max_tokens`, and it is the same fact the OpenAI kits call
+                    // `length` - so it produces the same signal, which the turn
+                    // reports as `StopReason::Length`.
+                    if reason == "max_tokens" {
+                        out.push(StreamEvent::Truncated);
+                    }
                     // A stopped message closes whatever is still open, the
                     // same way the other kits close forgotten calls.
                     for open in self.open.drain(..) {

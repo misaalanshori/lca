@@ -233,6 +233,42 @@ impl TurnBuilder {
         self
     }
 
+    /// A tool call that **closes** with a partial argument string - the real
+    /// truncation shape (gh #390 gap 1).
+    ///
+    /// This is what a truncated wire stream produces: the call is opened, some
+    /// argument bytes arrive, and the provider's end-of-stream (or `[DONE]`) closes
+    /// it. So the host sees a **closed** call whose `arguments` are an invalid JSON
+    /// prefix - which is exactly what makes it dangerous, because a closed call is
+    /// a runnable one. [`Self::open_tool_call`] is the different shape (a call that
+    /// never closes), which the accumulator reports as a protocol error.
+    pub fn closed_tool_call_with_partial_arguments(
+        mut self,
+        name: &str,
+        arguments_prefix: &str,
+    ) -> Self {
+        let call_id = format!("call-{}", self.events.len());
+        self.events.push(Step::Event(StreamEvent::ToolCallStart {
+            call_id: call_id.clone(),
+            name: name.to_string(),
+        }));
+        self.events.push(Step::Event(StreamEvent::ToolCallArgDelta {
+            call_id: call_id.clone(),
+            delta: arguments_prefix.to_string(),
+        }));
+        self.events
+            .push(Step::Event(StreamEvent::ToolCallEnd { call_id }));
+        self
+    }
+
+    /// The provider reported an output-token truncation (gh #390 gap 1): the
+    /// stream's own `Truncated` fact, exactly what a wire kit emits for
+    /// `finish_reason: "length"` / `stop_reason: "max_tokens"`.
+    pub fn truncated(mut self) -> Self {
+        self.events.push(Step::Event(StreamEvent::Truncated));
+        self
+    }
+
     /// An error event, retryable or not (FR-CORE-6 needs both).
     pub fn error(mut self, message: &str, retryable: bool) -> Self {
         self.events.push(Step::Event(StreamEvent::Error {

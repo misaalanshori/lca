@@ -212,7 +212,17 @@ impl SseDecoder {
             // off as an answer; unbudgeted chat turns carry no number of
             // ours to name and end as they always did.
             Some("length") => {
+                // Gh #390 gap 1: **always** report the cut, budgeted or not.
+                // Gh #169 had this fire only when the request carried our own
+                // `max_tokens`, which meant an ordinary chat turn that the
+                // *endpoint's* default limit cut left no trace at all - and a
+                // response cut mid-tool-call then looked like a normal end.
+                emit(StreamEvent::Truncated);
                 if let Some(budget) = self.max_tokens {
+                    // A budget **we** set is a different story: the caller asked
+                    // for a bounded generation (a summarization), so the cap is a
+                    // failure of that request rather than a surprise, and it names
+                    // the number that cut it.
                     emit(StreamEvent::Error {
                         message: format!(
                             "generation hit the token cap (max_tokens {budget}) before \

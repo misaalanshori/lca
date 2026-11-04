@@ -65,6 +65,21 @@ pub enum StreamEvent {
         /// Whether the host should retry (FR-CORE-6).
         retryable: bool,
     },
+    /// The provider stopped because the response hit its output-token limit
+    /// (gh #390 gap 1): the wire's `finish_reason: "length"` /
+    /// `stop_reason: "max_tokens"`.
+    ///
+    /// Deliberately **not** an `Error`: a truncation is not a failure, so a
+    /// retry would produce the same cut and an error envelope would make a
+    /// script treat a usable partial answer as a crashed turn. It is a fact
+    /// about *why* the stream ended, and the turn reports it as
+    /// `StopReason::Length`.
+    ///
+    /// This is why the signal needed a variant at all: before it, a `length`
+    /// finish left no trace the host could see for an ordinary chat turn, so a
+    /// response cut mid-tool-call looked like a normal end and the half-streamed
+    /// call was re-attempted in a loop.
+    Truncated,
     /// Reserved vendor-specific event: kind string plus JSON payload.
     VendorEvent {
         /// Vendor-defined kind.
@@ -85,6 +100,10 @@ impl StreamEvent {
             StreamEvent::ToolCallEnd { .. } => "tool-call",
             StreamEvent::Usage { .. } => "usage",
             StreamEvent::Error { .. } => "error",
+            // The headless envelope's own kind (gh #390 gap 1). A script that
+            // only knows the pre-existing kinds can ignore it; one that wants to
+            // detect a cut answer now can.
+            StreamEvent::Truncated => "truncated",
             StreamEvent::VendorEvent { .. } => "vendor-event",
         }
     }

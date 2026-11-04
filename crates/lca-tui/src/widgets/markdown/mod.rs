@@ -283,9 +283,19 @@ fn render_blocks(
             // above has already consumed the block, so `i` is past it.
             // Gh #82: the mode gates the art - off keeps the fence
             // raw, final waits for the settled message.
+            //
+            // Gh #390 gap 2: a fence inside a **reasoning run** stays raw too.
+            // Reasoning is the model drafting to itself, so a diagram there is a
+            // sketch, not the answer - and drawing it both in the thinking run and
+            // again in the answer shows the same picture twice. pi draws this line
+            // per message *type* (`assistant-thinking` skips the transformer), not
+            // per content, so the rule is stated once here and holds for any
+            // transformer that should not fire on reasoning.
+            let reasoning = options.message_type.is_reasoning();
             let mermaid_art = match options.mermaid {
                 MermaidMode::Off => None,
                 MermaidMode::Final if options.streaming => None,
+                _ if reasoning => None,
                 _ => crate::widgets::mermaid::render(&body.join("\n")),
             };
             if lang.eq_ignore_ascii_case("mermaid")
@@ -993,6 +1003,8 @@ impl Markdown {
     }
 }
 
+#[cfg(test)]
+mod mermaid_reasoning_tests;
 #[cfg(test)]
 mod table_tests;
 #[cfg(test)]

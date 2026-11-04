@@ -528,3 +528,10 @@ mod image_identity_and_rows;
 // must be completable.
 #[path = "270-completion-list-coverage.rs"]
 mod completion_list_coverage;
+
+// Gh #390: a `length` stop had no representation in the protocol at all, so a
+// truncated answer was silent, a call cut mid-arguments looked runnable, and the
+// turn re-attempted it in a loop. And a diagram drafted in reasoning is source, not
+// a second drawing (pi skips mermaid for `assistant-thinking`).
+#[path = "390-truncation-banner-and-reasoning-draft.rs"]
+mod truncation_and_reasoning_draft;
