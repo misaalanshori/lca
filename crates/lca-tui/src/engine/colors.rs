@@ -130,6 +130,31 @@ pub fn parse_osc11_background_color(data: &str) -> Option<RgbColor> {
 /// proves nothing, because the `OSC 11` answer could still be in flight behind it.
 pub const TERMINAL_COLOR_QUERY: &str = "\x1b]11;?\x07\x1b[?996n\x1b[c";
 
+/// The cell-size query, sent **before** [`TERMINAL_COLOR_QUERY`]'s `DA1` sentinel
+/// (gh #324 gap 2).
+///
+/// `CSI 16 t` asks the terminal for its character cell in pixels; the answer is
+/// `CSI 6 ; height ; width t`, which [`super::core::parse_capability_reply`] has
+/// parsed since before this query existed - and which nothing ever sent, so no
+/// terminal ever answered. That is the defect: a parser with no producer.
+///
+/// **It must precede the sentinel.** Terminals answer in order, so `DA1` arriving
+/// means everything before it has been answered or ignored; putting the cell query
+/// after `DA1` would make its answer arrive in the same "late grace" window as a
+/// stray, which is exactly what that window exists to reject. `terminal_cell_query`
+/// composes the two in the right order.
+pub const TERMINAL_CELL_QUERY: &str = "\x1b[16t";
+
+/// The full startup query: the cell size first, then the colour query with its
+/// `DA1` sentinel last.
+///
+/// One constant rather than two writes at the call site, because the ordering is
+/// load-bearing and a call site that emitted them separately would be free to get
+/// it backwards. See [`TERMINAL_CELL_QUERY`].
+pub fn startup_query() -> String {
+    format!("{TERMINAL_CELL_QUERY}{TERMINAL_COLOR_QUERY}")
+}
+
 /// Whether this input is the `DA1` sentinel that closes [`TERMINAL_COLOR_QUERY`].
 ///
 /// The reply is `CSI ? <params> c` with at least one parameter (`ESC [ ? 1 ; 2 c`
@@ -147,6 +172,30 @@ pub fn is_device_attributes_report(data: &str) -> bool {
         && body.bytes().any(|b| b.is_ascii_digit())
 }
 
+/// Whether the input is a **cell-size** reply (`CSI 6 ; h ; w t`), gh #324 gap 2.
+///
+/// Kept beside [`is_device_attributes_report`] because it has to be recognized by
+/// the same dispatcher: a reply the reader does not classify as a reply falls
+/// through to the composer and the user's next keystrokes contain `\x1b[6;16;8t`.
+/// That is the failure mode a "wire the consumer" fix would have shipped, since
+/// `is_startup_query_reply` never included this shape.
+pub fn is_cell_size_report(data: &str) -> bool {
+    let Some(body) = data
+        .strip_prefix("\x1b[6;")
+        .and_then(|s| s.strip_suffix('t'))
+    else {
+        return false;
+    };
+    let mut parts = body.split(';');
+    let (Some(height), Some(width), None) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    !height.is_empty()
+        && !width.is_empty()
+        && height.bytes().all(|b| b.is_ascii_digit())
+        && width.bytes().all(|b| b.is_ascii_digit())
+}
+
 /// Whether the input is a capability reply the startup query can elicit.
 ///
 /// One recogniser for the three replies, so the *late* path and the *startup* path
@@ -157,6 +206,7 @@ pub fn is_startup_query_reply(data: &str) -> bool {
     is_osc11_background_color_response(data)
         || parse_terminal_color_scheme_report(data).is_some()
         || is_device_attributes_report(data)
+        || is_cell_size_report(data)
 }
 
 /// Parse a DEC color-scheme report (`CSI ? 997 ; 1 n` dark / `; 2 n` light),
@@ -332,5 +382,58 @@ mod tests {
                 "{typed:?} must reach the interface as input"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod cell_query_tests {
+    use super::*;
+
+    // Verifies: gh #324 gap 2 - **the cell query is sent, and before the sentinel.**
+    // The defect this closes was a parser with no producer: `CellSize` had been
+    // parsed since `core.rs` grew it, and no terminal was ever asked, so no answer
+    // could arrive. The ordering matters for the same reason the colour query's
+    // does - terminals answer in order, and `DA1` is what proves the replies before
+    // it are in.
+    #[test]
+    fn the_startup_query_asks_for_the_cell_size_before_the_sentinel() {
+        let query = startup_query();
+        let cell = query
+            .find(TERMINAL_CELL_QUERY)
+            .unwrap_or_else(|| panic!("the cell query is in the startup write: {query:?}"));
+        let sentinel = query
+            .find("\x1b[c")
+            .unwrap_or_else(|| panic!("the sentinel is there: {query:?}"));
+        assert!(
+            cell < sentinel,
+            "the cell query precedes the DA1 sentinel: {query:?}"
+        );
+        // The sentinel is still the very last byte, so the window still closes on
+        // it (gh #379 gap 1's property, unchanged).
+        assert!(query.ends_with("\x1b[c"), "the sentinel is last: {query:?}");
+        // And the colour query is unchanged inside it.
+        assert!(
+            query.contains(TERMINAL_COLOR_QUERY),
+            "the colour query is carried whole: {query:?}"
+        );
+    }
+
+    // Verifies: gh #324 gap 2 - the reply is recognized as a reply. Without this the
+    // query would be sent and its answer would fall through to the composer, so the
+    // user's next keystrokes would contain `\x1b[6;16;8t`.
+    #[test]
+    fn a_cell_size_report_is_recognized_as_a_startup_reply() {
+        assert!(is_cell_size_report("\x1b[6;16;8t"));
+        assert!(is_cell_size_report("\x1b[6;18;9t"));
+        assert!(is_startup_query_reply("\x1b[6;16;8t"));
+        // Not a reply: other `CSI … t` reports, a missing field, a negative
+        // (sign-prefixed) number, trailing junk.
+        assert!(!is_cell_size_report("\x1b[6;16t"));
+        assert!(!is_cell_size_report("\x1b[6;16;8;1t"));
+        assert!(!is_cell_size_report("\x1b[7;16;8t"));
+        assert!(!is_cell_size_report("\x1b[6;-1;8t"));
+        assert!(!is_cell_size_report("\x1b[6;;8t"));
+        assert!(!is_cell_size_report("\x1b[16t"));
+        assert!(!is_cell_size_report(""));
     }
 }

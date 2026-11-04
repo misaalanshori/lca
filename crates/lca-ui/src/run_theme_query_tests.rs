@@ -173,3 +173,166 @@ fn a_silent_terminal_still_gets_a_theme_without_waiting() {
         "listening, but not waiting - a reply would refine the theme"
     );
 }
+
+// ============================================================================
+// gh #324 gap 2 - the cell-size probe reaches the renderer
+// ============================================================================
+
+// Verifies: gh #324 gap 2 - **a `CellSize` reply changes the scale, and the frames
+// laid out against the estimate are dropped.** The second half is the point: an
+// image's kitty id hashes its cell scale (gap 1), so a probe that moved the grid
+// without invalidating the cache would leave the terminal displaying a texture whose
+// geometry no longer matches its placement. The row asserts the scale *and* that the
+// transcript re-renders, because a wiring that only stored the value would pass a
+// scale assertion and still show a distorted image.
+#[test]
+fn a_cell_size_reply_installs_the_scale_and_drops_the_estimate_frames() {
+    lca_tui::widgets::image::clear_cell_pixels();
+    let (mut chat, mut screen, mut term) = autotheme_chat();
+    assert_eq!(
+        lca_tui::widgets::image::current_cell_pixels(),
+        lca_tui::widgets::image::DEFAULT_CELL_PIXELS,
+        "nothing has probed yet, so the estimate is in force"
+    );
+
+    // Render once at the estimate, so there is a cached frame to invalidate.
+    let _ = chat.render(80);
+    let epoch_before = chat.transcript.cache_epoch_for_test();
+
+    // A 22-pixel-tall cell: no terminal this box has, which is the point.
+    super::viewport_keys_tests::press("\x1b[6;22;9t", &mut chat, &mut screen, &mut term);
+
+    assert_eq!(
+        lca_tui::widgets::image::current_cell_pixels(),
+        (9.0, 22.0),
+        "the reply's own dimensions are installed (width, height)"
+    );
+    assert_ne!(
+        chat.transcript.cache_epoch_for_test(),
+        epoch_before,
+        "and the estimate's frames are invalidated, so the image is re-rendered \
+         with a new id rather than silently re-scaled"
+    );
+    lca_tui::widgets::image::clear_cell_pixels();
+}
+
+// Verifies: gh #324 gap 2 - **the reply is classified as a reply, and is consumed
+// before any component sees it.** A query whose answer reaches the composer is
+// worse than no query, and the recogniser is the half a "wire the consumer" fix
+// misses.
+//
+// The assertion is deliberately about **what the composer receives**, not about it
+// being empty: an unknown CSI is also swallowed by the editor, so
+// `editor.text() == ""` passes whether or not the reply was classified. I measured
+// that - removing `is_cell_size_report` from `is_startup_query_reply` left the empty
+// assertion green. Typing a character after the sequence is what tells the two
+// apart: consumed-as-reply means the composer got only the character.
+#[test]
+fn a_cell_size_reply_is_consumed_before_it_reaches_the_composer() {
+    lca_tui::widgets::image::clear_cell_pixels();
+    let (mut chat, mut screen, mut term) = autotheme_chat();
+    let result =
+        super::viewport_keys_tests::press("\x1b[6;22;9t", &mut chat, &mut screen, &mut term);
+    assert!(
+        matches!(result, InputResult::Continue),
+        "the reply is consumed as a reply, not dispatched as input"
+    );
+    super::viewport_keys_tests::press("x", &mut chat, &mut screen, &mut term);
+    assert_eq!(
+        chat.editor.text(),
+        "x",
+        "the composer received the keystroke and not the reply bytes: {:?}",
+        chat.editor.text()
+    );
+    assert_eq!(
+        lca_tui::widgets::image::current_cell_pixels(),
+        (9.0, 22.0),
+        "and the reply was applied, not merely dropped"
+    );
+    lca_tui::widgets::image::clear_cell_pixels();
+}
+
+// Verifies: gh #324 gap 2 - **no probe is not no image.** A terminal that never
+// answers keeps the named estimate and still draws, which is the fallback the brief
+// requires: the probe improves the picture, it does not gate it.
+#[test]
+fn without_a_reply_the_estimate_still_renders_an_image() {
+    lca_tui::widgets::image::clear_cell_pixels();
+    let (mut chat, _screen, _term) = autotheme_chat();
+    chat.transcript.push_image(
+        lca_tui::widgets::image::ImageInfo::new("image/png", &png_bytes(60, 110)),
+        png_bytes(60, 110),
+    );
+    chat.transcript.invalidate();
+    let rows = chat.transcript.render_for_protocol(
+        60,
+        &chat.theme,
+        lca_tui::widgets::image::ImageProtocol::Kitty,
+    );
+    assert!(
+        rows.iter().any(|r| r.contains("\x1b_G")),
+        "the image is still placed without a probe: {rows:?}"
+    );
+    assert_eq!(
+        lca_tui::widgets::image::current_cell_pixels(),
+        lca_tui::widgets::image::DEFAULT_CELL_PIXELS,
+        "and the estimate is what it used"
+    );
+}
+
+/// A PNG header carrying real dimensions, for the rows above.
+fn png_bytes(width: u32, height: u32) -> Vec<u8> {
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    png.extend_from_slice(&[0, 0, 0, 13]);
+    png.extend_from_slice(b"IHDR");
+    png.extend_from_slice(&width.to_be_bytes());
+    png.extend_from_slice(&height.to_be_bytes());
+    png.extend_from_slice(&[0; 12]);
+    png
+}
+
+// Verifies: gh #324 gap 2 - **the re-render carries a new id.** The scale is part of
+// a kitty image's identity, so a probe must produce a different `i=` in the emitted
+// bytes - a new upload - rather than re-placing a texture whose geometry no longer
+// matches. Asserting the id rather than "the rows changed" is what makes this the
+// pin the brief asks for: the rows can differ for a dozen reasons, the id only for
+// the reason under test.
+#[test]
+fn the_re_render_after_a_probe_emits_a_new_image_id() {
+    lca_tui::widgets::image::clear_cell_pixels();
+    let (mut chat, mut screen, mut term) = autotheme_chat();
+    let bytes = png_bytes(60, 110);
+    chat.transcript.push_image(
+        lca_tui::widgets::image::ImageInfo::new("image/png", &bytes),
+        bytes.clone(),
+    );
+    chat.transcript.invalidate();
+
+    let id_of = |chat: &crate::chat::Chat| -> Option<u32> {
+        let rows = chat.transcript.render_for_protocol(
+            60,
+            &chat.theme,
+            lca_tui::widgets::image::ImageProtocol::Kitty,
+        );
+        rows.iter().find_map(|row| {
+            let at = row.find(",i=")? + 3;
+            row[at..]
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .collect::<String>()
+                .parse()
+                .ok()
+        })
+    };
+
+    let before = id_of(&chat).expect("the estimate frame places the image");
+    super::viewport_keys_tests::press("\x1b[6;22;9t", &mut chat, &mut screen, &mut term);
+    let after = id_of(&chat).expect("the probed frame places it too");
+    assert_ne!(
+        before, after,
+        "a new cell scale is a new upload: the id moved with the grid"
+    );
+    // And the grid really moved, so the id change is attributable.
+    assert_eq!(lca_tui::widgets::image::current_cell_pixels(), (9.0, 22.0));
+    lca_tui::widgets::image::clear_cell_pixels();
+}

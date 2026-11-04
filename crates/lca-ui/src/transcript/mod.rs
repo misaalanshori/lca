@@ -342,6 +342,18 @@ impl Transcript {
         &self.keybindings
     }
 
+    /// The render-cache epoch (gh #324 gap 2).
+    ///
+    /// Exposed to tests only: the cell-size probe's whole claim is that it drops the
+    /// frames that were laid out against the estimate, and "the cache was
+    /// invalidated" is not observable from the rendered rows when the new grid
+    /// happens to produce the same text. Reading the epoch is the direct question.
+    #[cfg(test)]
+    #[must_use]
+    pub fn cache_epoch_for_test(&self) -> u64 {
+        self.cache_epoch
+    }
+
     /// Drop every cached frame and bump the epoch, so nothing rendered under the
     /// previous inputs can be served again.
     fn invalidate_cache(&mut self) {

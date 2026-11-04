@@ -18,6 +18,16 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **Inline images are sized from the terminal's real cell size, not a 9×18 guess**
+  (gh #324 gap 2). `CSI 16 t` is now sent in the startup query and its
+  `CSI 6;h;w t` reply — parsed since long before this, but never asked for, so no
+  terminal ever answered — installs the actual cell in pixels. Images on a retina
+  panel or a 10×22 font were being stretched or squashed against the guess, and the
+  row reservation with them. A probe that moves the grid re-renders the images: the
+  cell scale is part of an image's identity, so a new scale is a new upload rather
+  than a silent re-stretch. The grid itself is chosen by least distortion rather than
+  rounding up (`ceil` can make a picture 9% taller than it asks for). A terminal that
+  never answers keeps the 9×18 estimate, now named and documented as an estimate.
 - **Inline images no longer overwrite each other or the row beneath them** (gh #324
   gap 1). The kitty encoder hardcoded `i=1`, so a second transcript image replaced the
   first one's texture, and `render_image` returned a **single** line for an image `rows`

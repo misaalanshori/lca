@@ -201,3 +201,140 @@ fn the_width_vocabulary_covers_the_cursor_movements_a_reserve_needs() {
         );
     }
 }
+
+// ===========================================================================
+// Gap 2 - the cell-size probe: sent, recognised, consumed, and it re-renders
+// ===========================================================================
+
+// Verifies: gh #324 gap 2 - **the query exists.** The gap's premise was a parser
+// with no producer: `CellSize` had been parsed since `core.rs` grew it and nothing
+// ever sent `CSI 16 t`, so no terminal could answer. A consumer wired to a reply
+// nobody asks for is dead code, which is the defect class this guard exists for.
+#[test]
+fn the_cell_size_query_is_actually_sent() {
+    let colors = read("crates/lca-tui/src/engine/colors.rs");
+    assert!(
+        colors.contains("\"\\x1b[16t\""),
+        "the query constant is the real sequence"
+    );
+    assert!(
+        colors.contains("fn startup_query()")
+            && colors.contains("{TERMINAL_CELL_QUERY}{TERMINAL_COLOR_QUERY}"),
+        "and the startup query puts the cell query first, the sentinel last"
+    );
+    let run = read("crates/lca-ui/src/run.rs");
+    assert!(
+        run.contains("colors::startup_query()"),
+        "the loop writes it"
+    );
+    assert!(
+        !run.contains("\"\\x1b[16t\""),
+        "and not as an inline literal, so the ordering cannot drift at the call site"
+    );
+}
+
+// Verifies: gh #324 gap 2 - **the reply is classified as a reply.** Sending a query
+// whose answer falls through to the composer is worse than not sending it: the
+// user's next message would contain the escape bytes.
+#[test]
+fn the_cell_size_reply_is_recognised_and_consumed() {
+    let colors = read("crates/lca-tui/src/engine/colors.rs");
+    assert!(
+        colors.contains("pub fn is_cell_size_report("),
+        "there is a recogniser for the reply shape"
+    );
+    let startup = function_body(&colors, "pub fn is_startup_query_reply(");
+    assert!(
+        startup.contains("is_cell_size_report(data)"),
+        "and the one recogniser every consumer shares includes it: {startup}"
+    );
+    let theme_query = read("crates/lca-ui/src/theme_query.rs");
+    assert!(
+        theme_query.contains("apply_cell_size_report(chat, data)"),
+        "the dispatcher applies it"
+    );
+}
+
+// Verifies: gh #324 gap 2 - **the estimate is named, and the probed value replaces
+// it.** A hardcoded 9x18 that nobody calls an estimate is how the gap survived; the
+// constant has to be public, `DEFAULT_`-named, documented as an estimate, and
+// overridable.
+#[test]
+fn the_estimate_is_named_and_the_probe_replaces_it() {
+    let image = read("crates/lca-tui/src/widgets/image.rs");
+    assert!(
+        image.contains("pub const DEFAULT_CELL_PIXELS"),
+        "the fallback is a named constant"
+    );
+    assert!(
+        image.contains("It is an estimate, and it is named as one"),
+        "and the doc says what it is, not what it is not"
+    );
+    assert!(
+        image.contains("pub fn current_cell_pixels()"),
+        "the renderer reads the live value"
+    );
+    assert!(
+        image.contains("pub fn probe_cell_pixels("),
+        "and a probe installs it"
+    );
+    // The render path must go through the live value, not the constant.
+    let cell = function_body(&image, "fn image_cell_size(info: &ImageInfo");
+    assert!(
+        cell.contains("current_cell_pixels()"),
+        "image_cell_size asks for the live scale: {cell}"
+    );
+    assert!(
+        !cell.contains("DEFAULT_CELL_PIXELS"),
+        "and does not reach for the estimate behind the probe's back: {cell}"
+    );
+}
+
+// Verifies: gh #324 gap 2 - **the grid is chosen by least distortion**, and the
+// metric is pi's: `max(count/ideal, ideal/count)`, comparing `ceil` against
+// `ceil - 1`. A `ceil`-only implementation would pass every other row in this file.
+#[test]
+fn the_grid_choice_is_a_distortion_comparison() {
+    let image = read("crates/lca-tui/src/widgets/image.rs");
+    let helper = function_body(&image, "fn choose_less_distorted_cell_count(");
+    assert!(
+        helper.contains("/ ideal).max(ideal /"),
+        "the metric is symmetric (a ratio and its reciprocal weigh the same): {helper}"
+    );
+    assert!(
+        helper.contains("(upper - 1)"),
+        "it compares ceil against ceil - 1: {helper}"
+    );
+    let cell = function_body(&image, "fn image_cell_size_with(");
+    assert!(
+        cell.contains("choose_less_distorted_cell_count("),
+        "and the cell-size calculation calls it on the binding axis: {cell}"
+    );
+}
+
+// Verifies: gh #324 gap 2 - **a probe that changes the scale invalidates the cached
+// frames.** The scale is part of a kitty image's identity, so storing the new value
+// without dropping the old frames leaves the terminal holding a texture stretched to
+// the previous geometry. This is the "silent re-scale" the brief names.
+#[test]
+fn a_probe_invalidates_the_frames_laid_out_against_the_estimate() {
+    // The apply path lives in `theme_query.rs` - the module that owns the reply
+    // lifecycle. It moved there because `chat.rs` is at gate 11's ceiling.
+    let theme_query = read("crates/lca-ui/src/theme_query.rs");
+    let apply = function_body(&theme_query, "fn apply_cell_size_report(");
+    assert!(
+        apply.contains("probe_cell_pixels("),
+        "the reply installs the scale: {apply}"
+    );
+    assert!(
+        apply.contains("transcript.invalidate()"),
+        "and drops the estimate's frames: {apply}"
+    );
+    // The lifecycle guard is the caller's: `handle_reply` refuses every reply kind
+    // outside the window, so a child process's `CSI 6;...t` cannot reflow.
+    let handle = function_body(&theme_query, "pub fn handle_reply(");
+    assert!(
+        handle.contains("if !is_startup_query_reply(data)"),
+        "a non-reply never reaches the apply path: {handle}"
+    );
+}

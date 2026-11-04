@@ -652,14 +652,15 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
         chat.world.options.workspace.to_string_lossy()
     ));
     chat.world.resize(terminal.columns(), terminal.rows());
-    // R10 + gh #379 gap 1: ask for the background and the colour-scheme
-    // preference, then close with a `DA1` sentinel. Terminals answer `DA1`
-    // whether or not they understand `OSC 11` and answer in order, so its
-    // arrival proves the colour replies are answered or absent - which is what
-    // lets the theme stop listening instead of waiting out a timeout on a
-    // terminal that ignores colours. The sentinel is **last** by construction;
-    // see `colors::TERMINAL_COLOR_QUERY` and the row that pins the ordering.
-    terminal.write(lca_tui::engine::colors::TERMINAL_COLOR_QUERY);
+    // R10 + gh #379 gap 1 + gh #324 gap 2: ask for the cell size, then the
+    // background and the colour-scheme preference, then close with a `DA1`
+    // sentinel. Terminals answer `DA1` whether or not they understand `OSC 11` and
+    // answer in order, so its arrival proves the replies before it are answered or
+    // absent - which is what lets the theme stop listening instead of waiting out a
+    // timeout on a terminal that ignores colours. The sentinel is **last** by
+    // construction, and `startup_query` composes the cell query in front of it so a
+    // call site cannot get that order backwards.
+    terminal.write(&lca_tui::engine::colors::startup_query());
 
     let mut turns = TurnState::new(prompt_tx, prompt_rx, dialog_rx, waker.clone());
     // Gh #400: keystrokes that arrived during the load are the first thing the

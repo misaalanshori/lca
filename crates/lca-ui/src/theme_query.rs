@@ -91,8 +91,8 @@ impl ThemeQuery {
 /// palette while still letting a slow link's late answer in.
 pub fn handle_reply(chat: &mut crate::chat::Chat, data: &str) -> bool {
     use lca_tui::engine::colors::{
-        is_device_attributes_report, is_startup_query_reply, parse_osc11_background_color,
-        parse_terminal_color_scheme_report,
+        is_cell_size_report, is_device_attributes_report, is_startup_query_reply,
+        parse_osc11_background_color, parse_terminal_color_scheme_report,
     };
     if is_device_attributes_report(data) {
         chat.close_theme_query();
@@ -107,8 +107,39 @@ pub fn handle_reply(chat: &mut crate::chat::Chat, data: &str) -> bool {
         chat.apply_terminal_background(rgb);
     } else if let Some(scheme) = parse_terminal_color_scheme_report(data) {
         chat.apply_detected_scheme(scheme);
+    } else if is_cell_size_report(data) {
+        apply_cell_size_report(chat, data);
     }
     true
+}
+
+/// Apply a `CSI 6 ; h ; w t` cell-size answer (gh #324 gap 2).
+///
+/// Three things have to happen together, which is why this is one function: the
+/// scale is installed, the cached transcript frames are dropped (they were laid out
+/// against the estimate), and the images re-render from the new grid. Dropping the
+/// cache is what makes it a **re-render rather than a silent re-scale** - an image's
+/// kitty id hashes its cell scale (gap 1), so the new frame derives a new id and
+/// re-uploads, instead of leaving the terminal holding a texture stretched to the
+/// old geometry.
+///
+/// A probe outside the query's lifetime is ignored, like every other reply: an
+/// `OSC 11` from `ls` must not repaint, and a `CSI 6;...t` from a child process must
+/// not reflow the transcript.
+///
+/// Lives here rather than as a `Chat` method because this module owns the reply
+/// lifecycle and `chat.rs` is at gate 11's ceiling.
+fn apply_cell_size_report(chat: &mut crate::chat::Chat, data: &str) {
+    let Some(lca_tui::engine::core::CapabilityReply::CellSize { height, width }) =
+        lca_tui::engine::core::parse_capability_reply(data)
+    else {
+        return;
+    };
+    // The probe moved the image grid, so every frame laid out against the estimate
+    // is stale by construction.
+    if lca_tui::widgets::image::probe_cell_pixels(width, height) {
+        chat.transcript.invalidate();
+    }
 }
 
 #[cfg(test)]

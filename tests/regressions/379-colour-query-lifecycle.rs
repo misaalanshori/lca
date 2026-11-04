@@ -116,13 +116,23 @@ fn the_query_closes_with_the_sentinel_after_the_colour_asks() {
 #[test]
 fn the_loop_writes_the_shared_query_constant() {
     let source = run_source();
+    // Gh #324 gap 2 moved the write site to `startup_query()`, which composes the
+    // cell query in front of `TERMINAL_COLOR_QUERY`. The property this pins is
+    // unchanged - **the loop writes a shared constant, not a literal**, so the
+    // ordering binds on the write site - and the ordering itself is still pinned by
+    // the rows above, which read `TERMINAL_COLOR_QUERY` directly.
     assert!(
-        source.contains("colors::TERMINAL_COLOR_QUERY"),
-        "the startup write must use the shared constant so its ordering is pinned"
+        source.contains("colors::startup_query()")
+            || source.contains("colors::TERMINAL_COLOR_QUERY"),
+        "the startup write must use a shared constant so its ordering is pinned"
     );
     assert!(
         !source.contains("\"\\x1b]11;?\\x07\\x1b[?996n\""),
         "the old inline query (no sentinel) must be gone"
+    );
+    assert!(
+        !source.contains("\"\\x1b[16t\""),
+        "and the cell query is not inlined at the call site either (gh #324 gap 2)"
     );
 }
 
