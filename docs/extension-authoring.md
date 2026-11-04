@@ -723,6 +723,25 @@ The second test is the one authors skip and should not. It covers the revoked-gr
 
 Tests run offline. The fake host refuses network calls unless a test opts in with a recorded response.
 
+## What a user sees when your extension crashes
+
+A guest that traps is disabled for the session (FR-EXT-3), and the message the user reads names the extension, says what class of failure it was, and gives them a command that runs:
+
+```
+`word-count` crashed while running. To keep working without it, run
+`lca ext disable word-count` (or `lca --no-extensions` for one run); a fresh
+install often fixes it: `lca ext install word-count`.
+```
+
+The crash is classified from `wasmtime::Trap`'s own variant, never by reading the message text, and the runtime's words are not shown: a trap payload can carry a memory address, a module path or one of your constants, and that is not something a user needs in their scrollback. The raw text is kept for `LCA_DEBUG` and the session record.
+
+Two consequences for you as an author:
+
+- **A `panic!` in the guest arrives as "crashed while running".** That is the truthful description of an `unreachable`, and it is what tells the user to disable your extension rather than the agent.
+- **A host-side failure is not blamed on you.** If the agent's own glue breaks mid-call the message says so and asks for `/bug`, because telling someone to disable an innocent extension is worse than telling them nothing.
+
+If you write a test that asserts your error text reaches the user, it will not: the message is the host's, built from the class. Assert your extension's *behaviour* (a `result` with an error, a `GuestReason`) rather than a trap, which carries no guest-authored text by design.
+
 ## Building both ways
 
 The same source compiles two ways. The component build is what third parties publish. The native build is for extensions that ship inside the agent binary, where there is no marshaling and no sandbox.

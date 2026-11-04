@@ -18,6 +18,17 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **A crash inside an extension now names it, and tells you what to do** (gh #403 gap 5). When a
+  guest trapped, the message a user saw was `conformance: extension trapped: wasm trap: wasm
+  `unreachable` instruction executed` — the runtime's vocabulary, no remedy, and a guest-internal
+  detail in the scrollback. The trap is now classified from `wasmtime::Trap`'s own variant (never by
+  reading the message text, the substring-guessing #151 removed) and rendered where the extension's
+  name is in scope: `` `conformance` crashed while running. To keep working without it, run `lca ext
+  disable conformance` (or `lca --no-extensions` for one run); a fresh install often fixes it: `lca
+  ext install conformance`. `` A **host** panic is its own class and says the agent crashed, not the
+  extension — blaming a guest for LCA's bug sends the user to disable the wrong thing — and a trap the
+  host cannot classify admits it and offers `/bug` rather than guessing. The raw payload stays
+  available to `LCA_DEBUG` and the session record and is never rendered.
 - **A truncated answer now says so, instead of reading like a complete one** (gh #390 gap 1).
   When the model hit its output-token limit, the wire's `finish_reason: "length"` had no
   representation in the protocol at all — an ordinary chat turn ended as a silent "done", a

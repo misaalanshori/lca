@@ -254,6 +254,12 @@ mod three_commands_reachable;
 // Gh #403 gap 1: a transcript replacement must not keep the previous
 // transcript's selection (a wrong-data path, not just a stale highlight).
 // The seam is the transcript generation; the guard pins that it stays one.
+// Gh #403 gap 5 (first half): a guest trap names the extension and offers a command
+// that runs; a host panic does not blame the extension; an unclassifiable trap admits
+// it rather than inventing a cause.
+#[path = "403-trap-attribution.rs"]
+mod trap_attribution;
+
 #[path = "403-stale-selection-cleared.rs"]
 mod stale_selection_cleared;
 

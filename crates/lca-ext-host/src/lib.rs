@@ -130,6 +130,190 @@ pub struct HostEnvironment {
     pub proposals: Option<Proposals>,
 }
 
+/// Why a guest died, and what the user can do about it (gh #403 gap 5).
+///
+/// # Why a class and not the runtime's text
+///
+/// Two things go wrong if the raw trap string is the message. It can carry a
+/// guest-internal detail - wasmtime's "wasm trap: wasm `unreachable` instruction
+/// executed" reads harmlessly, but `out of bounds memory access` names an address
+/// and a link failure names a module path - and it says nothing a user can act on.
+/// So the message rule is: **name the extension, name the class, name the remedy**,
+/// and keep the payload where a developer asks for it ([`TrapDetail::raw`], read by
+/// `LCA_DEBUG` and the session log).
+///
+/// # Why a panic is not a trap
+///
+/// A trap is attributable to the guest: the call was inside a known instance. A
+/// **host panic** is attributable to LCA - it means the host glue broke, not the
+/// extension - and blaming the extension would send the user to disable the wrong
+/// thing, which is worse than naming nothing. [`TrapClass::HostPanic`] is that case
+/// and its message says so.
+#[derive(Debug, Clone)]
+pub struct TrapDetail {
+    class: TrapClass,
+    /// The runtime's own text. Never rendered into a user-facing message; kept so
+    /// `LCA_DEBUG` and the session record can carry it verbatim when a developer has
+    /// asked for the detail.
+    raw: String,
+}
+
+/// The classes a failure can fall into, each with its own sentence (gh #403 gap 5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrapClass {
+    /// The guest hit an `unreachable` - a Rust panic in the guest, an
+    /// `assert!`, or an explicit `std::process::abort`. The extension is at fault.
+    Unreachable,
+    /// The guest read or wrote outside its memory. The extension is at fault.
+    OutOfBoundsMemory,
+    /// The guest called something it did not import, or a signature mismatch.
+    /// Usually a build against a different ABI: re-install or rebuild it.
+    BadSignature,
+    /// The host glue failed around the call. **LCA's fault, not the extension's.**
+    HostPanic,
+    /// A trap the host cannot classify. Says so rather than guessing.
+    Unknown,
+}
+
+impl TrapClass {
+    /// What this class means for the user, in one sentence, without jargon.
+    ///
+    /// The vocabulary rule (`AGENTS.md`, the jargon purge): "unreachable",
+    /// "signature" and "memory access fault" are the runtime's words. A user acts on
+    /// "it crashed", "it read outside its own memory", "it was built for a different
+    /// version".
+    #[must_use]
+    pub fn explanation(self) -> &'static str {
+        // **Predicates, not sentences**: every caller prefixes the extension's name
+        // (`\`conformance\` crashed while running`). "it crashed…" reads correctly only
+        // in isolation and produced "`conformance` it crashed while running" when
+        // composed - found by reading the rendered tool result in a real run, not by any
+        // row, which is why `the_rendered_trap_message_reads_as_a_sentence` now does.
+        match self {
+            TrapClass::Unreachable => "crashed while running",
+            TrapClass::OutOfBoundsMemory => "read outside its own memory",
+            TrapClass::BadSignature => {
+                "was built for a different version of the extension interface"
+            }
+            TrapClass::HostPanic => "was called when the agent's own code crashed",
+            TrapClass::Unknown => "stopped in a way the agent could not identify",
+        }
+    }
+
+    /// Whether this class blames the extension (gh #403 gap 5's false-accusation
+    /// rule). A host panic does **not**, and neither does an unclassified trap -
+    /// there is no evidence, so there is no accusation.
+    #[must_use]
+    pub fn blames_extension(self) -> bool {
+        matches!(
+            self,
+            TrapClass::Unreachable | TrapClass::OutOfBoundsMemory | TrapClass::BadSignature
+        )
+    }
+}
+
+impl std::fmt::Display for TrapDetail {
+    /// The class sentence alone, for a caller with no handle in scope (a load
+    /// failure's log line). The user-facing message is [`TrapDetail::message`], which
+    /// can also name the extension and its remedy.
+    ///
+    /// Deliberately **not** the raw text: every path that renders this ends up in
+    /// something a person may read.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.class.explanation())
+    }
+}
+
+impl TrapDetail {
+    /// A trap from the guest, classified from wasmtime's own trap kind.
+    #[must_use]
+    pub fn guest(class: TrapClass, raw: impl Into<String>) -> Self {
+        Self {
+            class,
+            raw: raw.into(),
+        }
+    }
+
+    /// The host glue panicked while a call was in flight (gh #403 gap 5).
+    ///
+    /// Separate from [`Self::guest`] on purpose: this is **LCA's** failure, and the
+    /// message says so rather than naming the extension's name at the user as the
+    /// culprit.
+    #[must_use]
+    pub fn host_panic(raw: impl Into<String>) -> Self {
+        Self {
+            class: TrapClass::HostPanic,
+            raw: raw.into(),
+        }
+    }
+
+    /// Which class this is.
+    #[must_use]
+    pub fn class(&self) -> TrapClass {
+        self.class
+    }
+
+    /// The runtime's text, for a developer who asked for it (`LCA_DEBUG`, the
+    /// session log's extension event). Never for a user-facing message.
+    #[must_use]
+    pub fn raw(&self) -> &str {
+        &self.raw
+    }
+
+    /// The user-facing sentence: what happened, and - when there is a culprit - what
+    /// to do about it.
+    ///
+    /// The remedy is **the command the CLI actually accepts** (`lca ext disable
+    /// <name>`) and the run-scoped equivalent (`lca --no-extensions`), both pinned by
+    /// a row that parses the real argument definitions rather than trusting a string
+    /// written twice.
+    ///
+    /// `extension` is the handle's name, which `to_dispatch` has in scope. It is
+    /// passed in rather than stored so this type stays a pure value: the same
+    /// `TrapDetail` is also recorded before any name is attached, and a detail that
+    /// carried a name would go stale if the handle were renamed.
+    #[must_use]
+    pub fn message(&self, extension: &str) -> String {
+        // The dispatcher renders a `Failed` as `extension call failed: {message}`, so
+        // this text must not open by repeating the extension's name - the user would
+        // read "extension call failed: `conformance` failed:". Each sentence here leads
+        // with what happened instead.
+        //
+        // `concat!` rather than a `\`-continued literal: `cargo fmt` reflows a
+        // continued string by keeping its leading indentation, which silently put runs
+        // of spaces into the message (found by reading the rendered text, not the
+        // source).
+        let remedy = concat!(
+            " To keep working without it, run `lca ext disable ",
+            "{name}",
+            "` (or `lca --no-extensions` for one run); a fresh install often fixes it",
+            ": `lca ext install ",
+            "{name}",
+            "`."
+        );
+        match self.class {
+            TrapClass::HostPanic => format!(
+                "the agent crashed while calling `{extension}` - not the extension's \
+                 fault. Please run /bug so it can be fixed"
+            ),
+            TrapClass::Unknown => format!(
+                "`{extension}` {}.{remedy} If it still stops with it disabled, run /bug",
+                self.class.explanation(),
+                remedy = remedy.replace("{name}", extension)
+            ),
+            // Leads with the extension's name: the user's first question is "which
+            // one", and burying it inside the remedy command makes them read to the
+            // end of the line to find out. The dispatcher's generic
+            // "extension call failed:" prefix is not a name.
+            class => format!(
+                "`{extension}` {}.{remedy}",
+                class.explanation(),
+                remedy = remedy.replace("{name}", extension)
+            ),
+        }
+    }
+}
+
 /// Something wrong with one call.
 #[derive(Debug, thiserror::Error)]
 pub enum CallError {
@@ -137,8 +321,17 @@ pub enum CallError {
     #[error("extension is disabled for this session")]
     Disabled,
     /// The call trapped; the extension is now disabled (FR-EXT-3).
-    #[error("extension trapped: {0}")]
-    Trap(String),
+    ///
+    /// Gh #403 gap 5: the payload is a **class**, not the runtime's text. The
+    /// rendered message names the extension (added by `to_dispatch`, which has the
+    /// handle), the class, and what to do - and never the guest's own strings.
+    /// A wasmtime trap message can carry a guest-internal path or constant
+    /// (`unreachable` reading, a module name, a memory address), and the standing
+    /// secrets rule is that a hidden detail must not land in scrollback. The raw
+    /// text is kept on [`TrapDetail`] for `LCA_DEBUG` and the session log, where a
+    /// developer asked for it.
+    #[error("{0}")]
+    Trap(TrapDetail),
     /// The fuel budget ran out (FR-EXT-4).
     #[error("fuel budget exhausted")]
     FuelExhausted,
@@ -725,15 +918,34 @@ impl Inner {
                 }
                 other => {
                     self.disable();
-                    CallError::Trap(other.to_string())
+                    // Gh #403 gap 5: classify from wasmtime's own trap kind - never
+                    // by reading the message text, which is the substring-guessing
+                    // #151 removed. The class drives the sentence; the raw text is
+                    // kept for `LCA_DEBUG` and never rendered.
+                    let class = match other {
+                        Trap::UnreachableCodeReached => TrapClass::Unreachable,
+                        Trap::MemoryOutOfBounds => TrapClass::OutOfBoundsMemory,
+                        Trap::BadSignature => TrapClass::BadSignature,
+                        // Everything else: a stack overflow, an integer divide by
+                        // zero, an indirect-call type mismatch. There is no remedy
+                        // more specific than "run it alone", so the message says it
+                        // could not tell rather than guessing a cause.
+                        _ => TrapClass::Unknown,
+                    };
+                    CallError::Trap(TrapDetail::guest(class, other.to_string()))
                 }
             };
         }
         // Anything else (link failures, host-shape errors): the text is
         // reported, never interpreted. Guest-answered strings never reach
         // here at all - a WIT result is data, not a runtime failure.
+        //
+        // Gh #403 gap 5: this path is **not** a guest trap, so it is not classified
+        // as one. A link failure means the module did not match the host's imports -
+        // and blaming the extension's *runtime behaviour* for it would be a false
+        // accusation. `Unknown` says the agent could not identify it, which is true.
         self.disable();
-        CallError::Trap(err.to_string())
+        CallError::Trap(TrapDetail::guest(TrapClass::Unknown, err.to_string()))
     }
 }
 
@@ -757,7 +969,12 @@ async fn pool_call<T: Send + 'static>(
         Ok(result) => result,
         Err(_) => {
             inner.disable();
-            Err(CallError::Trap("host call panicked".to_string()))
+            // Gh #403 gap 5: a panic in the **host glue** is LCA's fault, not the
+            // extension's. The message says so - a matcher that blamed the guest here
+            // would send the user to disable the wrong thing.
+            Err(CallError::Trap(TrapDetail::host_panic(
+                "host call panicked".to_string(),
+            )))
         }
     }
 }
@@ -851,9 +1068,21 @@ impl WasmExtension {
     }
 }
 
+/// One call's failure, in the shape the dispatcher's callers read.
+///
+/// Gh #403 gap 5: a trap is the case this function exists for. The message a user
+/// eventually sees is `ToolResult::error(.., err.to_string())` in
+/// `lca-core`'s tool path, so whatever is built here **is** the diagnosis - and it
+/// must name the extension (this is the one place the handle is in scope), say what
+/// class of failure it was, and offer a command that runs. A trap therefore goes
+/// through [`TrapDetail::message`] rather than being formatted as `{extension}:
+/// {err}`, which produced `conformance: extension trapped: wasm trap: wasm
+/// `unreachable` instruction executed` - the runtime's words, no remedy, and a
+/// guest detail in the scrollback.
 fn to_dispatch(call_err: CallError, extension: &str) -> DispatchError {
     match call_err {
         CallError::Disabled => DispatchError::Disabled,
+        CallError::Trap(detail) => DispatchError::Failed(detail.message(extension)),
         other => DispatchError::Failed(format!("{extension}: {other}")),
     }
 }

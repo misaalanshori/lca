@@ -774,3 +774,319 @@ fn repeated_calls_are_stable_on_the_driver() {
     // `instance_cache`'s own rows and by `fuel_budget_cancels_a_spinning_call`
     // (a store that is not re-fuelled cannot run the next call).
 }
+
+// ===========================================================================
+// Gh #403 gap 5: a trap says which extension, and what to do about it.
+// ===========================================================================
+//
+// Before this, the message a user saw was
+//
+//     conformance: extension trapped: wasm trap: wasm `unreachable` instruction executed
+//
+// Three things wrong with it: it is the runtime's vocabulary (nothing to act on), it
+// carries no remedy, and it puts a guest-internal detail in the scrollback. These rows
+// assert the three fixes, plus the two ways a matcher goes wrong - blaming a guest for
+// a host failure, and inventing a culprit where there is no evidence.
+
+/// The message a user actually reads: `to_dispatch` -> `DispatchError::Failed` ->
+/// `ToolResult::error(.., err.to_string())` in the core tool path. Going through
+/// `execute_tool` here rather than formatting the error directly is what makes these
+/// rows about the *rendered* text rather than about an intermediate value.
+fn rendered_trap(extension: &lca_ext_host::WasmExtension) -> String {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a test runtime");
+    let err = runtime
+        .block_on(extension.execute_tool(&call("trap")))
+        .expect_err("the guest traps");
+    err.to_string()
+}
+
+// Verifies: gh #403 gap 5 (**the row this issue is about**) - **a trap during a guest
+// call names the extension.** Asserted on the rendered message, not on "an error
+// occurred": the whole defect was that the error existed and said nothing useful.
+#[test]
+fn a_trap_names_the_extension_that_trapped() {
+    let mut host = ExtHost::new(limits(), env("trap-name"));
+    let extension = host.load(fixture(), manifest()).expect("loads");
+    let message = rendered_trap(&extension);
+    assert!(
+        message.contains("conformance"),
+        "the message names the extension: {message}"
+    );
+    // ...and names it *first*: a user asking "which one" must not have to read to the
+    // end of the remedy line to find out. The dispatcher's own prefix is generic, so
+    // this is the message's job.
+    let name_at = message.find("conformance").expect("named");
+    let remedy_at = message.find("lca ext disable").expect("remedy");
+    assert!(
+        name_at < remedy_at,
+        "the name leads, the remedy follows: {message}"
+    );
+    // ...and says what happened, in words a user can act on (gh #403 gap 5's jargon
+    // rule: "unreachable instruction executed" is the runtime's vocabulary).
+    assert!(
+        message.contains("crashed"),
+        "it says what happened rather than quoting the runtime: {message}"
+    );
+}
+
+// Verifies: gh #403 gap 5 - **the remedy is a command the CLI actually accepts.** A
+// remedy that does not run is a second bug, so the spelling is asserted against the
+// CLI's own argument definitions rather than trusted from a string written twice.
+//
+// Read from `cli_args.rs`'s clap derive: `Ext(ExtCommand)` with a `Disable` subcommand
+// taking a `<NAME>` positional, and a top-level `--no-extensions` flag.
+#[test]
+fn the_trap_remedy_is_a_real_command() {
+    let mut host = ExtHost::new(limits(), env("trap-remedy"));
+    let extension = host.load(fixture(), manifest()).expect("loads");
+    let message = rendered_trap(&extension);
+
+    let cli = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../lca-cli/src/cli_args.rs"
+    ))
+    .expect("cli_args.rs is readable");
+
+    assert!(
+        message.contains("lca ext disable conformance"),
+        "the disable remedy names the real subcommand and the extension: {message}"
+    );
+    // The subcommand exists, spelled this way, taking a name.
+    assert!(
+        cli.contains("Disable") && cli.contains("disable"),
+        "`ext disable` is a real subcommand"
+    );
+    assert!(
+        cli.contains("no_extensions") || cli.contains("no-extensions"),
+        "the run-scoped equivalent `--no-extensions` is a real flag"
+    );
+    assert!(
+        message.contains("lca --no-extensions"),
+        "and the message offers it: {message}"
+    );
+    // A reinstall is the other honest next step for a bad build.
+    assert!(
+        cli.contains("Install") && cli.contains("install"),
+        "`ext install` is a real subcommand"
+    );
+    assert!(
+        message.contains("lca ext install conformance"),
+        "offered as the fix for a build from the wrong ABI: {message}"
+    );
+}
+
+// Verifies: gh #403 gap 5 - **the trap payload is not rendered.** wasmtime's text can
+// name a memory address, a module path or a guest constant; the standing secrets rule
+// is that a hidden detail must not land in scrollback. The class's own words carry the
+// meaning, and the raw text stays on the detail for `LCA_DEBUG`.
+#[test]
+fn the_trap_payload_is_not_rendered() {
+    use lca_ext_host::{TrapClass, TrapDetail};
+    // A payload shaped like the ones wasmtime really produces: an address, a module
+    // path, a guest constant. Driven through the real builder, so the row tests the
+    // rule rather than the conformance fixture's particular text (which happens to be
+    // the harmless `unreachable` reading - a row asserting only that would pass while
+    // a hostile payload leaked).
+    for (class, raw) in [
+        (
+            TrapClass::OutOfBoundsMemory,
+            "wasm trap: out of bounds memory access at 0x7f3a2c001000",
+        ),
+        (
+            TrapClass::Unreachable,
+            "wasm trap: wasm `unreachable` instruction executed",
+        ),
+        (
+            TrapClass::BadSignature,
+            "unknown import: `env::secret_path` (/opt/guest/build.rs)",
+        ),
+        (TrapClass::Unknown, "some opaque runtime text"),
+    ] {
+        let detail = TrapDetail::guest(class, raw);
+        let message = detail.message("conformance");
+        for leaked in [
+            "0x7f3a",
+            "wasm trap",
+            "secret_path",
+            "/opt/guest",
+            "unreachable",
+        ] {
+            assert!(
+                !message.contains(leaked),
+                "the runtime's own text must not reach the user (`{leaked}`): {message}"
+            );
+        }
+        assert!(
+            !message.contains(raw),
+            "and not the payload as a whole: {message}"
+        );
+        // ...while the detail still carries it for `LCA_DEBUG`.
+        assert_eq!(detail.raw(), raw, "the raw text is kept, not discarded");
+    }
+}
+
+// Verifies: gh #403 gap 5 (**the false-accusation row**) - **a host panic is not
+// blamed on the extension.** A matcher that blames a guest for a host bug is worse
+// than no matcher: it sends the user to disable something innocent. The class says
+// where the fault is, and the remedy is the diagnostic path rather than a disable.
+#[test]
+fn a_host_panic_does_not_blame_the_extension() {
+    use lca_ext_host::TrapDetail;
+    let detail = TrapDetail::host_panic("host call panicked");
+    let message = detail.message("conformance");
+    assert!(
+        message.contains("not the extension's fault"),
+        "it says whose fault it is: {message}"
+    );
+    assert!(
+        message.contains("/bug"),
+        "and offers the diagnostic path: {message}"
+    );
+    assert!(
+        !message.contains("lca ext disable"),
+        "it must not send the user to disable an innocent extension: {message}"
+    );
+    assert!(
+        !detail.class().blames_extension(),
+        "and the class itself does not blame the extension"
+    );
+}
+
+// Verifies: gh #403 gap 5 - **an unattributable trap says so** rather than inventing a
+// cause. "Blameless means no accusation without evidence": a class the host cannot
+// identify offers the narrow-it-down path (`ext disable`, or run without extensions)
+// and the bug report, not a guess at what went wrong.
+#[test]
+fn an_unidentified_trap_admits_it_and_offers_the_diagnostic_path() {
+    use lca_ext_host::{TrapClass, TrapDetail};
+    let detail = TrapDetail::guest(TrapClass::Unknown, "some opaque runtime text");
+    let message = detail.message("conformance");
+    assert!(
+        message.contains("could not"),
+        "it admits it does not know: {message}"
+    );
+    assert!(
+        message.contains("lca --no-extensions"),
+        "and offers the narrowing-down run: {message}"
+    );
+    assert!(
+        message.contains("/bug"),
+        "and the diagnostic path: {message}"
+    );
+    assert!(
+        !detail.class().blames_extension(),
+        "no evidence, no accusation: the class does not blame the extension"
+    );
+    assert!(
+        !message.contains("some opaque runtime text"),
+        "and the raw text is still withheld: {message}"
+    );
+}
+
+// Verifies: FR-EXT-3 (**unchanged**) - the disable-on-trap still happens. This cycle is
+// message-only: the extension is disabled for the session either way, so a user who
+// ignores the remedy is not invited to keep crashing the host.
+#[test]
+fn the_disable_on_trap_still_happens() {
+    let mut host = ExtHost::new(limits(), env("trap-disable"));
+    let extension = host.load(fixture(), manifest()).expect("loads");
+    let _ = rendered_trap(&extension);
+    assert!(
+        !extension.is_enabled(),
+        "FR-EXT-3: a trapped extension is disabled for the session"
+    );
+    // A second call reports `Disabled`, which is its own (accurate) message.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a test runtime");
+    let err = runtime
+        .block_on(extension.execute_tool(&call("ok")))
+        .expect_err("stays disabled");
+    assert!(
+        matches!(err, lca_protocol::DispatchError::Disabled),
+        "got {err:?}"
+    );
+}
+
+// Verifies: gh #403 gap 5 - **the class is derived from wasmtime's trap kind, not by
+// reading the message text.** #151 removed substring guessing because guest words
+// riding an error chain could misfire; classification by `Trap` variant cannot. This
+// row pins the two classes the conformance fixture really produces, so a later
+// "simplification" that greps the string fails here.
+#[test]
+fn the_class_comes_from_the_trap_kind_not_the_text() {
+    let mut host = ExtHost::new(limits(), env("trap-class"));
+    let extension = host.load(fixture(), manifest()).expect("loads");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a test runtime");
+    let err = runtime
+        .block_on(extension.execute_tool(&call("trap")))
+        .expect_err("traps");
+    let lca_protocol::DispatchError::Failed(message) = err else {
+        panic!("a trap is a `Failed`, not a `Disabled`: {err:?}");
+    };
+    // The conformance fixture's `trap` mode is a Rust `panic!` in the guest, which
+    // lowers to `unreachable` - so the crash sentence, not the memory one.
+    assert!(
+        message.contains("crashed"),
+        "the fixture's panic classifies as an `unreachable`: {message}"
+    );
+    assert!(
+        !message.contains("memory"),
+        "and not as a memory fault: {message}"
+    );
+}
+
+// Verifies: gh #403 gap 5 - **the rendered message reads as a sentence.** The class
+// descriptions are *predicates* (`crashed while running`), because every caller prefixes
+// the extension's name; describing them as sentences ("it crashed…") produced
+// "`conformance` it crashed while running" in a real run. That defect was invisible to
+// every other row here - they assert substrings, which the malformed sentence still
+// contains - so this one asserts the join.
+#[test]
+fn the_rendered_trap_message_reads_as_a_sentence() {
+    use lca_ext_host::{TrapClass, TrapDetail};
+    for class in [
+        TrapClass::Unreachable,
+        TrapClass::OutOfBoundsMemory,
+        TrapClass::BadSignature,
+        TrapClass::Unknown,
+    ] {
+        let message = TrapDetail::guest(class, "raw").message("conformance");
+        // The name is followed by its predicate, not by a second subject.
+        assert!(
+            message.starts_with("`conformance` "),
+            "the extension's name opens the sentence: {message}"
+        );
+        let after = &message["`conformance` ".len()..];
+        for doubled in ["it ", "the extension ", "`conformance`"] {
+            assert!(
+                !after.starts_with(doubled),
+                "no second subject after the name (`{doubled}`): {message}"
+            );
+        }
+        // One sentence-ending period before the remedy, and the remedy follows it.
+        assert!(
+            message.contains(". To keep working") || message.contains(". If it still"),
+            "the predicate ends before the remedy begins: {message}"
+        );
+        // No accidental double space from a reflowed literal.
+        assert!(
+            !message.contains("  "),
+            "no run of spaces survives formatting: {message}"
+        );
+    }
+    // The host-panic sentence has its own shape and must read too.
+    let message = TrapDetail::host_panic("raw").message("conformance");
+    assert!(
+        message.starts_with("the agent crashed while calling `conformance`"),
+        "the host-panic sentence names the agent as the actor: {message}"
+    );
+    assert!(!message.contains("  "), "{message}");
+}
