@@ -60,6 +60,23 @@ impl SizeValue {
             SizeValue::Percent(p) => ((u32::from(base) * u32::from(p.min(100))) / 100) as u16,
         }
     }
+
+    /// The share of `span` this value names, for a **position** rather than a size.
+    ///
+    /// A percentage position distributes the ring between an overlay and the two
+    /// margins, so the span it is a percentage of is the *slack* (`avail - size`),
+    /// never the whole viewport.
+    ///
+    /// Values above 100 saturate. That is belt-and-braces, not the guarantee: the clamp
+    /// in [`resolve_axis`] is what a caller can observe, and it already holds an
+    /// out-of-range share at the far margin. Saturating here keeps the arithmetic honest
+    /// for a caller that resolves a position without the clamp.
+    fn share(self, span: u16) -> u16 {
+        match self {
+            SizeValue::Abs(v) => v,
+            SizeValue::Percent(p) => ((u32::from(span) * u32::from(p.min(100))) / 100) as u16,
+        }
+    }
 }
 
 /// A nine-point anchor.
@@ -320,6 +337,34 @@ impl MouseRegistry {
 }
 
 /// Resolve an overlay's rectangle from its options and rendered height.
+///
+/// **A percentage positions the overlay, not its corner.** `Percent(0)` puts the
+/// overlay's near edge on the margin, `Percent(100)` puts its far edge on the
+/// opposite margin, and `Percent(50)` leaves equal gaps on both sides: the
+/// percentage is the share of the *slack*, `avail - size`, that falls before the
+/// overlay (`margin + share(avail - size)`, pi's `resolveOverlayLayout`).
+///
+/// The corner-relative reading of the same number — `term * p / 100` — is exactly
+/// what `Percent(50)` used to do here, and it is why a half-percent modal sat with
+/// its top-left corner at the middle of the screen instead of centred.
+///
+/// Resolution order, pinned rather than left implicit because two controls asking the
+/// same question is how this bug gets filed again: an explicit `row`/`col` wins over
+/// the `anchor`, and the anchor still positions the axis the explicit value leaves
+/// unset. `offset_x`/`offset_y` apply on top of either, as in pi.
+///
+/// The clamp into the margin box runs **after** the position is resolved, and it is
+/// what keeps an offset (or an absolute `row` larger than the screen) inside. It is not
+/// load-bearing for percentages any more: with the slack-based form the far edge lands
+/// on the margin by construction, so `Percent(100)` no longer relies on the clamp to
+/// recover the box it used to push past the right edge.
+///
+/// An `anchor` stays **viewport-relative**, not margin-relative (the deviation from pi
+/// named in this module's header). LCA's own layout composes the viewport, and the
+/// picker places itself by counting rows up from the bottom edge; insetting every
+/// anchor by the margin would move it two rows off the composer it is pinned above.
+/// The margin is a floor and a ceiling on a *percentage*'s placement, and the clamp on
+/// everything else.
 pub fn resolve_overlay_layout(
     options: &OverlayOptions,
     term_width: u16,
@@ -345,45 +390,87 @@ pub fn resolve_overlay_layout(
     height = height.min(avail_h).max(1);
 
     let anchor = options.anchor.unwrap_or(Anchor::Center);
-    let (base_row, base_col) = match anchor {
+    let (anchor_row, anchor_col) = match anchor {
         Anchor::TopLeft => (0, 0),
-        Anchor::TopCenter => (0, (term_width - width) / 2),
+        Anchor::TopCenter => (0, (term_width.saturating_sub(width)) / 2),
         Anchor::TopRight => (0, term_width.saturating_sub(width)),
-        Anchor::MiddleLeft => ((term_height - height) / 2, 0),
-        Anchor::Center => ((term_height - height) / 2, (term_width - width) / 2),
-        Anchor::MiddleRight => ((term_height - height) / 2, term_width.saturating_sub(width)),
+        Anchor::MiddleLeft => ((term_height.saturating_sub(height)) / 2, 0),
+        Anchor::Center => (
+            (term_height.saturating_sub(height)) / 2,
+            (term_width.saturating_sub(width)) / 2,
+        ),
+        Anchor::MiddleRight => (
+            (term_height.saturating_sub(height)) / 2,
+            term_width.saturating_sub(width),
+        ),
         Anchor::BottomLeft => (term_height.saturating_sub(height), 0),
-        Anchor::BottomCenter => (term_height.saturating_sub(height), (term_width - width) / 2),
+        Anchor::BottomCenter => (
+            term_height.saturating_sub(height),
+            (term_width.saturating_sub(width)) / 2,
+        ),
         Anchor::BottomRight => (
             term_height.saturating_sub(height),
             term_width.saturating_sub(width),
         ),
     };
 
-    let row = options
-        .row
-        .map(|r| r.resolve(term_height))
-        .unwrap_or_else(|| {
-            (base_row as i32 + options.offset_y).clamp(0, term_height as i32) as u16
-        });
-    let col = options
-        .col
-        .map(|c| c.resolve(term_width))
-        .unwrap_or_else(|| (base_col as i32 + options.offset_x).clamp(0, term_width as i32) as u16);
-
-    // Clamp into the margin box.
-    let row = row
-        .min(term_height.saturating_sub(height))
-        .max(margin_h.min(term_height));
-    let col = col
-        .min(term_width.saturating_sub(width))
-        .max(margin_w.min(term_width));
+    let row = resolve_axis(
+        options.row,
+        anchor_row,
+        options.offset_y,
+        margin_h,
+        avail_h,
+        height,
+        term_height,
+    );
+    let col = resolve_axis(
+        options.col,
+        anchor_col,
+        options.offset_x,
+        margin_w,
+        avail_w,
+        width,
+        term_width,
+    );
     Rect {
         row,
         col,
         width,
         height,
     }
+}
+
+/// One axis of the overlay's position, then clamped into the margin box.
+///
+/// An absolute value is a screen coordinate, as in pi. A percentage is the share of
+/// the slack between the margins that falls *before* the overlay, so it positions the
+/// overlay rather than its corner. The anchor is viewport-relative and is the fallback;
+/// the offset applies to whichever of the three won.
+fn resolve_axis(
+    value: Option<SizeValue>,
+    anchor_at: u16,
+    offset: i32,
+    margin: u16,
+    avail: u16,
+    size: u16,
+    limit: u16,
+) -> u16 {
+    let base = match value {
+        Some(SizeValue::Abs(abs)) => i32::from(abs),
+        Some(percent) => i32::from(margin).saturating_add(i32::from(percent.share(avail - size))),
+        None => i32::from(anchor_at),
+    };
+    let placed = base.saturating_add(offset);
+    // The clamp sits here, after the position is resolved, and it bounds the box by
+    // the **far margin**, not the terminal edge - an overlay is inside its margin box,
+    // not merely on the screen. Every term is subtract-only, so a size larger than the
+    // viewport (reachable with an absolute width) falls back to the near margin instead
+    // of wrapping the bound around.
+    let high = limit
+        .saturating_sub(size)
+        .saturating_sub(margin)
+        .max(margin);
+    placed.clamp(i32::from(margin), i32::from(high)) as u16
 }
 
 /// Find the cursor position (row, col) from `CURSOR_MARKER` in rendered
@@ -492,6 +579,222 @@ mod tests {
         let rect = resolve_overlay_layout(&opts, 20, 10, 40);
         assert!(rect.row + rect.height <= 10);
         assert!(rect.col + rect.width <= 20);
+    }
+
+    // Verifies: gh #373 gap 4 - a percentage positions the **overlay**, not its
+    // corner, so `Percent(50)` centres it in the space between the margins. The
+    // assertion is the *gaps*, because the gaps are the property: a formula that
+    // happened to produce the same number from a corner-anchored rule would not
+    // keep them equal when the box or the terminal changes shape.
+    #[test]
+    fn a_percentage_centres_the_overlay_in_the_margin_box() {
+        for (term_w, term_h, margin, box_w, box_h) in [
+            (80u16, 24u16, 0u16, 20u16, 6u16),
+            (80, 24, 2, 20, 6),
+            (81, 25, 0, 20, 7),
+            (120, 40, 4, 50, 11),
+        ] {
+            let opts = OverlayOptions {
+                width: Some(SizeValue::Abs(box_w)),
+                row: Some(SizeValue::Percent(50)),
+                col: Some(SizeValue::Percent(50)),
+                margin,
+                ..Default::default()
+            };
+            let rect = resolve_overlay_layout(&opts, term_w, term_h, box_h);
+            assert_eq!(rect.width, box_w);
+            assert_eq!(rect.height, box_h);
+
+            let left = rect.col.saturating_sub(margin);
+            let right = (term_w - margin).saturating_sub(rect.col + rect.width);
+            assert!(
+                left.abs_diff(right) <= 1,
+                "horizontal gaps differ by more than a cell at {term_w}x{term_h} margin {margin}: \
+                 left {left} right {right} (col {})",
+                rect.col
+            );
+
+            let top = rect.row.saturating_sub(margin);
+            let bottom = (term_h - margin).saturating_sub(rect.row + rect.height);
+            assert!(
+                top.abs_diff(bottom) <= 1,
+                "vertical gaps differ by more than a cell at {term_w}x{term_h} margin {margin}: \
+                 top {top} bottom {bottom} (row {})",
+                rect.row
+            );
+        }
+    }
+
+    // Verifies: gh #373 gap 4 - the endpoints are the values actually in use, and a
+    // centring formula can break both: `Percent(0)` must stay exactly on the margin
+    // (not one row above it, not the margin doubled).
+    #[test]
+    fn a_zero_percentage_lands_on_the_margin() {
+        for margin in [0u16, 1, 2, 3] {
+            let opts = OverlayOptions {
+                width: Some(SizeValue::Abs(20)),
+                row: Some(SizeValue::Percent(0)),
+                col: Some(SizeValue::Percent(0)),
+                margin,
+                ..Default::default()
+            };
+            let rect = resolve_overlay_layout(&opts, 80, 24, 6);
+            assert_eq!(rect.col, margin, "col at margin {margin}");
+            assert_eq!(rect.row, margin, "row at margin {margin}");
+        }
+    }
+
+    // Verifies: gh #373 gap 4 - `Percent(100)` puts the overlay's **far edge** on the
+    // opposite margin. This is the half a pure centring fix breaks by resolving the
+    // corner at `term - margin`, which would push the far edge a whole box past it.
+    #[test]
+    fn a_hundred_percentage_puts_the_far_edge_on_the_margin() {
+        for margin in [0u16, 1, 2, 3] {
+            let opts = OverlayOptions {
+                width: Some(SizeValue::Abs(20)),
+                row: Some(SizeValue::Percent(100)),
+                col: Some(SizeValue::Percent(100)),
+                margin,
+                ..Default::default()
+            };
+            let rect = resolve_overlay_layout(&opts, 80, 24, 6);
+            assert_eq!(
+                rect.col + rect.width,
+                80 - margin,
+                "right edge at margin {margin}"
+            );
+            assert_eq!(
+                rect.row + rect.height,
+                24 - margin,
+                "bottom edge at margin {margin}"
+            );
+        }
+    }
+
+    // Verifies: gh #373 gap 4 - an out-of-range percentage is clamped to the far
+    // margin rather than producing a position outside the box (a config-shaped number
+    // reaches this function, so the range is enforced here rather than trusted).
+    //
+    // The observable rule is "anything above 100 resolves as 100"; the clamp is what
+    // makes that true, which is why `share`'s own saturation is not the half this row
+    // fails against (see the report's mutation table).
+    #[test]
+    fn an_out_of_range_percentage_is_clamped_to_the_far_margin() {
+        let at_hundred = OverlayOptions {
+            width: Some(SizeValue::Abs(20)),
+            row: Some(SizeValue::Percent(100)),
+            col: Some(SizeValue::Percent(100)),
+            margin: 2,
+            ..Default::default()
+        };
+        let beyond = OverlayOptions {
+            row: Some(SizeValue::Percent(250)),
+            col: Some(SizeValue::Percent(u16::MAX)),
+            ..at_hundred.clone()
+        };
+        let at = resolve_overlay_layout(&at_hundred, 80, 24, 6);
+        let past = resolve_overlay_layout(&beyond, 80, 24, 6);
+        assert_eq!(past, at, "anything above 100 resolves the same as 100");
+        assert!(past.col + past.width <= 80 - 2);
+        assert!(past.row + past.height <= 24 - 2);
+    }
+
+    // Verifies: gh #373 gap 4 - the anchor does not silently override a percentage.
+    // Two controls answering the same question is how this bug gets filed again, so
+    // the precedence is pinned: the explicit position wins, and the axis it does not
+    // set still falls back to the anchor.
+    #[test]
+    fn an_anchor_does_not_override_the_percentage() {
+        let opts = OverlayOptions {
+            width: Some(SizeValue::Abs(20)),
+            anchor: Some(Anchor::TopLeft),
+            row: Some(SizeValue::Percent(50)),
+            ..Default::default()
+        };
+        let rect = resolve_overlay_layout(&opts, 80, 24, 6);
+        assert_eq!(rect.row, 9, "the percentage sets the row, not the anchor");
+        assert_eq!(rect.col, 0, "the unset axis still obeys the anchor");
+    }
+
+    // Verifies: gh #373 gap 4 - the clamp sits **after** the position is resolved, and
+    // it is what keeps an overlay inside its margin box.
+    //
+    // Under the corrected percentage form the clamp is no longer load-bearing *for a
+    // percentage on its own*: `share(avail - size)` cannot exceed the slack, so the far
+    // edge lands on the margin by construction. What still needs it is a position plus a
+    // displacement - an offset, or an absolute row/col - which is what this row drives,
+    // because a clamp with nothing reaching it is a clamp nobody would notice losing.
+    #[test]
+    fn a_displaced_overlay_is_clamped_inside_the_margin_box() {
+        let pushed_right_and_down = OverlayOptions {
+            width: Some(SizeValue::Abs(20)),
+            row: Some(SizeValue::Percent(100)),
+            col: Some(SizeValue::Percent(100)),
+            offset_x: 40,
+            offset_y: 40,
+            margin: 2,
+            ..Default::default()
+        };
+        let rect = resolve_overlay_layout(&pushed_right_and_down, 80, 24, 6);
+        assert_eq!((rect.col, rect.row), (58, 16), "clamped to the far margin");
+        assert_eq!(rect.col + rect.width, 78);
+        assert_eq!(rect.row + rect.height, 22);
+
+        let pushed_left_and_up = OverlayOptions {
+            width: Some(SizeValue::Abs(20)),
+            row: Some(SizeValue::Percent(0)),
+            col: Some(SizeValue::Percent(0)),
+            offset_x: -40,
+            offset_y: -40,
+            margin: 2,
+            ..Default::default()
+        };
+        let rect = resolve_overlay_layout(&pushed_left_and_up, 80, 24, 6);
+        assert_eq!((rect.col, rect.row), (2, 2), "clamped to the near margin");
+
+        // An absolute position past the edge is the third way in.
+        let far = OverlayOptions {
+            width: Some(SizeValue::Abs(20)),
+            row: Some(SizeValue::Abs(500)),
+            col: Some(SizeValue::Abs(500)),
+            margin: 2,
+            ..Default::default()
+        };
+        let rect = resolve_overlay_layout(&far, 80, 24, 6);
+        assert_eq!((rect.col + rect.width, rect.row + rect.height), (78, 22));
+    }
+
+    // Verifies: gh #373 gap 4 - an offset applies on top of a percentage, as in pi's
+    // `resolveOverlayLayout` (which adds `offsetY`/`offsetX` after either form).
+    #[test]
+    fn an_offset_applies_on_top_of_a_percentage() {
+        let opts = OverlayOptions {
+            width: Some(SizeValue::Abs(20)),
+            row: Some(SizeValue::Percent(50)),
+            col: Some(SizeValue::Percent(50)),
+            offset_y: 1,
+            offset_x: -5,
+            ..Default::default()
+        };
+        let rect = resolve_overlay_layout(&opts, 80, 24, 6);
+        assert_eq!(rect.row, 10, "9 from the percentage plus 1");
+        assert_eq!(rect.col, 25, "30 from the percentage minus 5");
+    }
+
+    // Verifies: gh #373 gap 4 - a box that fills the available space has no slack for
+    // a percentage to distribute, so both endpoints collapse onto the margin instead of
+    // dividing by a zero span.
+    #[test]
+    fn a_full_span_percentage_pins_the_overlay_to_the_margin() {
+        let opts = OverlayOptions {
+            row: Some(SizeValue::Percent(100)),
+            col: Some(SizeValue::Percent(100)),
+            margin: 2,
+            ..Default::default()
+        };
+        let rect = resolve_overlay_layout(&opts, 80, 24, 99);
+        assert_eq!((rect.col, rect.row), (2, 2));
+        assert_eq!((rect.width, rect.height), (76, 20));
     }
 
     #[test]

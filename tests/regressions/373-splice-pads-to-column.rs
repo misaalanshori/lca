@@ -255,3 +255,106 @@ fn the_hit_test_counts_wrapped_rows_like_the_painter() {
         "the painter wraps with `wrap_text_with_ansi` over the linkified line"
     );
 }
+
+// ---------------------------------------------------------------------------
+// gap 4: a percentage positions the overlay, not its corner
+// ---------------------------------------------------------------------------
+//
+// `resolve_overlay_layout` resolved a percentage `row`/`col` as `term * p / 100`
+// — a position for the **top-left corner**. So `Percent(50)` put the corner at the
+// midpoint instead of centring the overlay, and `Percent(100)` pushed the far edge a
+// whole box past the opposite margin (the clamp hid that part, which is why it read as
+// "approximately right" on a wide terminal).
+//
+// The behavioural rows live in `crates/lca-tui/src/engine/core.rs` and
+// `crates/lca-ui/src/render_tests.rs`. These pin the shape:
+
+// Verifies: gh #373 gap 4 - **the percentage is a share of the slack, added to the
+// margin.**
+//
+// This is the whole fix, and the one line a future edit could quietly restore: the old
+// form resolved the percentage against the terminal dimension (`share(limit)`), which
+// positions the corner. Resolving it against `avail - size` and adding the margin is
+// what makes the number position the overlay. `avail` and `size` are both in scope at
+// that point for exactly this reason.
+#[test]
+fn a_percentage_is_a_share_of_the_slack_not_of_the_viewport() {
+    let source = read("crates/lca-tui/src/engine/core.rs");
+    let body = function_body(&source, "fn resolve_axis(");
+    assert!(
+        body.contains("percent.share(avail - size)"),
+        "the percentage distributes the slack between the overlay and the margins: {body}"
+    );
+    assert!(
+        body.contains("i32::from(margin).saturating_add"),
+        "starting from the margin, so `Percent(0)` is the margin itself: {body}"
+    );
+    // The corner-relative reading must not come back.
+    for stale in ["share(limit)", "share(term_height)", "share(term_width)"] {
+        assert!(
+            !body.contains(stale),
+            "`{stale}` resolves the corner, which is the defect this gap fixed: {body}"
+        );
+    }
+}
+
+// Verifies: gh #373 gap 4 - **the doc comment states the contract, not the arithmetic.**
+//
+// The brief's point: the old code's comment accurately described what it did, and what
+// it did was not what a reader of `Percent(50)` expects. A formula change alone would
+// leave the next reader to infer the meaning from the arithmetic again.
+#[test]
+fn the_percentage_contract_is_written_down() {
+    let source = read("crates/lca-tui/src/engine/core.rs");
+    assert!(
+        source.contains("A percentage positions the overlay, not its corner"),
+        "the contract sentence is the fix's durable half"
+    );
+    for endpoint in [
+        "overlay's near edge on the margin",
+        "its far edge on the",
+        "opposite margin",
+    ] {
+        assert!(
+            source.contains(endpoint),
+            "both endpoints are stated, because they are the values in use: {endpoint}"
+        );
+    }
+    assert!(
+        source.contains("an explicit `row`/`col` wins over"),
+        "the anchor/percentage precedence is stated where the resolution order is"
+    );
+}
+
+// Verifies: gh #373 gap 4 - **no production caller asked for a percentage position.**
+//
+// The brief required the sweep rather than an assumption: every `Percent(` in the tree
+// is a `width` or `max_height` (a *size*), and no caller sets `row`/`col` from one. That
+// is why the arithmetic change landed without touching a caller - and it is the check
+// that would catch a future caller adopting the corrected option and expecting the old
+// meaning.
+#[test]
+fn no_caller_positions_an_overlay_with_a_percentage() {
+    for rel in [
+        "crates/lca-ui/src/render.rs",
+        "crates/lca-ui/src/chat_mouse.rs",
+        "crates/lca-ui/src/login_trail.rs",
+        "crates/lca-ui/src/chat_settings_footer.rs",
+    ] {
+        let source = read(rel);
+        for (index, line) in source.lines().enumerate() {
+            let code = line.trim();
+            if code.starts_with("//") {
+                continue;
+            }
+            let positional =
+                (code.contains("row:") || code.contains("col:")) && code.contains("Percent(");
+            assert!(
+                !positional,
+                "{rel}:{} positions an overlay with a percentage (row/col); this guard is \
+                 where that caller's expectation gets stated: {line}",
+                index + 1
+            );
+        }
+    }
+}

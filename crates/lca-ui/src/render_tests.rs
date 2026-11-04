@@ -933,3 +933,158 @@ fn a_click_on_a_wrapped_row_maps_to_the_line_painted_there() {
         wrapped[1]
     );
 }
+
+// ===========================================================================
+// gh #373 gap 4: a percentage positions the overlay, not its corner.
+//
+// These rows drive the real painter at the rect the layout resolves for a
+// percentage position, so what they read is the frame a user sees. The gaps are
+// the property: a corner-anchored formula leaves the right gap half the box
+// wider, and a centring fix silently breaks both endpoints.
+// ===========================================================================
+
+/// The first and last columns of a painted frame row, in cells.
+fn frame_edges(row: &str) -> Option<(usize, usize)> {
+    let plain = strip_terminal_sequences(row);
+    let left = plain
+        .chars()
+        .position(|c| c == '╭' || c == '│' || c == '╰')?;
+    let right = plain
+        .chars()
+        .collect::<Vec<char>>()
+        .iter()
+        .rposition(|c| *c == '╮' || *c == '│' || *c == '╯')?;
+    Some((left, right))
+}
+
+/// The opts a percentage-positioned box resolves, and the box's rect.
+fn percent_box(
+    term_w: u16,
+    term_h: u16,
+    pct: u16,
+    body: &[String],
+) -> (
+    lca_tui::engine::core::OverlayOptions,
+    lca_tui::engine::core::Rect,
+) {
+    let options = lca_tui::engine::core::OverlayOptions {
+        width: Some(lca_tui::engine::core::SizeValue::Percent(60)),
+        min_width: Some(24),
+        max_height: Some(lca_tui::engine::core::SizeValue::Abs(10)),
+        col: Some(lca_tui::engine::core::SizeValue::Percent(pct)),
+        row: Some(lca_tui::engine::core::SizeValue::Percent(pct)),
+        margin: 2,
+        ..Default::default()
+    };
+    let rect = lca_tui::engine::core::resolve_overlay_layout(
+        &options,
+        term_w,
+        term_h,
+        u16::try_from(body.len())
+            .unwrap_or(u16::MAX)
+            .saturating_add(2),
+    );
+    (options, rect)
+}
+
+// Verifies: gh #373 gap 4 - `Percent(50)` leaves equal gaps on both sides, and
+// the painted frame is the width the layout resolved.
+#[test]
+fn a_percentage_placed_overlay_has_equal_gaps_on_both_sides() {
+    let body = vec!["alpha".to_string(), "beta".to_string()];
+    for (term_w, term_h) in [(80u16, 24u16), (100, 30), (61, 21)] {
+        let (options, rect) = percent_box(term_w, term_h, 50, &body);
+        let mut base = vec![".".repeat(term_w as usize); term_h as usize];
+        overlay_box_placed(
+            &mut base,
+            term_w,
+            term_h,
+            "t",
+            &body,
+            &Theme::plain(),
+            None,
+            &options,
+        );
+        let plain: Vec<String> = base
+            .iter()
+            .map(|line| strip_terminal_sequences(line))
+            .collect();
+        let top = plain
+            .iter()
+            .position(|r| r.contains('╭'))
+            .expect("a top border");
+        let bottom = plain
+            .iter()
+            .rposition(|r| r.contains('╰'))
+            .expect("a bottom border");
+        let (left, right) = frame_edges(&plain[top]).unwrap_or_else(|| panic!("{:?}", plain[top]));
+        assert_eq!(
+            right - left + 1,
+            rect.width as usize,
+            "the painted frame is the resolved rect's width at {term_w}x{term_h}"
+        );
+        let left_gap = left;
+        let right_gap = (term_w as usize).saturating_sub(right + 1);
+        assert!(
+            left_gap.abs_diff(right_gap) <= 1,
+            "at {term_w}x{term_h} the horizontal gaps differ: left {left_gap}, \
+             right {right_gap} (frame {left}..={right}, rect {rect:?})"
+        );
+        let above = top;
+        let below = term_h as usize - (bottom + 1);
+        assert!(
+            above.abs_diff(below) <= 1,
+            "at {term_w}x{term_h} the vertical gaps differ: above {above}, below {below}"
+        );
+        assert_eq!(top, rect.row as usize, "the frame starts at the rect's row");
+        assert_eq!(
+            bottom - top + 1,
+            rect.height as usize,
+            "and is the rect's height"
+        );
+    }
+}
+
+// Verifies: gh #373 gap 4 - the endpoints, which are the values in use.
+// `Percent(0)` puts the frame's near edge on the margin; `Percent(100)` puts its
+// far edge on the opposite margin. A pure centring fix breaks the second.
+#[test]
+fn a_percentage_overlays_endpoints_sit_on_the_margins() {
+    let body = vec!["alpha".to_string()];
+    for pct in [0u16, 100] {
+        let (options, rect) = percent_box(80, 24, pct, &body);
+        let mut base = vec![".".repeat(80); 24];
+        overlay_box_placed(
+            &mut base,
+            80,
+            24,
+            "t",
+            &body,
+            &Theme::plain(),
+            None,
+            &options,
+        );
+        let plain: Vec<String> = base
+            .iter()
+            .map(|line| strip_terminal_sequences(line))
+            .collect();
+        let top = plain
+            .iter()
+            .position(|r| r.contains('╭'))
+            .expect("a top border");
+        let bottom = plain
+            .iter()
+            .rposition(|r| r.contains('╰'))
+            .expect("a bottom border");
+        let (left, right) = frame_edges(&plain[top]).unwrap_or_else(|| panic!("{:?}", plain[top]));
+        if pct == 0 {
+            assert_eq!(left, 2, "Percent(0) sits on the left margin");
+            assert_eq!(top, 2, "and on the top margin");
+        } else {
+            assert_eq!(right + 1, 78, "Percent(100) ends on the right margin");
+            assert_eq!(bottom + 1, 22, "and on the bottom margin");
+        }
+        assert_eq!(top, rect.row as usize);
+        assert_eq!(bottom - top + 1, rect.height as usize);
+    }
+}

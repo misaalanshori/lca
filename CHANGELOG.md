@@ -18,6 +18,22 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **A percentage overlay position now positions the overlay, not its corner** (gh #373 gap 4).
+  `resolve_overlay_layout` resolved a percentage `row`/`col` as `term * p / 100`, so
+  `Percent(50)` put the box's **top-left corner** at the midpoint instead of centring it,
+  and `Percent(100)` pushed the far edge a whole box past the opposite margin (the clamp
+  absorbed that, which is why it read as roughly-right on a wide terminal). A percentage is
+  now the share of the slack between the margins that falls before the overlay —
+  `margin + share(avail - size)`, pi's `resolveOverlayLayout` — so `Percent(0)` sits on the
+  near margin, `Percent(100)` puts the far edge on the opposite one, and `Percent(50)`
+  leaves equal gaps either side. The clamp still runs **after** the position resolves and
+  now bounds by the far *margin* rather than the terminal edge; that is what holds a
+  displaced overlay (an offset, or an absolute row/col past the screen) inside its box,
+  since a percentage on its own no longer needs clamping. An explicit `row`/`col` still
+  wins over `anchor`, the anchor still positions the axis it leaves unset, and `offset_x`/
+  `offset_y` apply on top of either, as in pi. No caller in the tree positions an overlay
+  with a percentage, so no caller changed; a guard now refuses the first one that tries,
+  so that caller has to state what it means.
 - **A crash inside an extension now names it, and tells you what to do** (gh #403 gap 5). When a
   guest trapped, the message a user saw was `conformance: extension trapped: wasm trap: wasm
   `unreachable` instruction executed` — the runtime's vocabulary, no remedy, and a guest-internal
