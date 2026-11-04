@@ -17,7 +17,7 @@
 //! content-addressed properties fall out for free - a repaint is idempotent, and
 //! the terminal's texture cache dedups for us.
 //!
-//! **The row count is the cell height** ([`image_cell_size`]), and the returned
+//! **The row count is the cell height** (`image_cell_size`), and the returned
 //! vector is exactly that tall: the sequence on row 0, blanks below. Kitty is told
 //! `C=1`, so its cursor never moves and the host's own cursor accounting stays
 //! correct while it writes the blanks. iTerm2 moves its cursor to the bottom of
