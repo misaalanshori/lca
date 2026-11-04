@@ -616,9 +616,24 @@ async fn a_trapping_extension_is_reported_and_the_session_survives() {
         .expect("extension event surfaced");
     assert_eq!(event.0, "conformance");
     assert!(event.1 == "error" || event.1 == "disabled", "{}", event.1);
+    // Gh #403 gap 5 (this brief sanctions the change): the detail is no longer the
+    // runtime's word "trapped" - it is the sentence a user reads, which names what
+    // happened and offers a command that runs. Asserting the *old* verb here would
+    // pin the defect the previous cycle fixed.
     assert!(
-        event.2.contains("trapped") || event.2.contains("disabled"),
-        "{}",
+        event.2.contains("crashed") || event.2.contains("disabled"),
+        "the reported detail says what happened in the user's words: {}",
+        event.2
+    );
+    assert!(
+        event.2.contains("lca ext disable conformance") || event.2.contains("disabled"),
+        "and offers a remedy that runs: {}",
+        event.2
+    );
+    // The runtime's vocabulary must not ride the record either.
+    assert!(
+        !event.2.contains("wasm trap") && !event.2.contains("unreachable"),
+        "the payload is not recorded in the user-facing detail: {}",
         event.2
     );
 
