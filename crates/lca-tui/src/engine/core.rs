@@ -461,15 +461,17 @@ fn resolve_axis(
         None => i32::from(anchor_at),
     };
     let placed = base.saturating_add(offset);
-    // The clamp sits here, after the position is resolved, and it bounds the box by
-    // the **far margin**, not the terminal edge - an overlay is inside its margin box,
-    // not merely on the screen. Every term is subtract-only, so a size larger than the
-    // viewport (reachable with an absolute width) falls back to the near margin instead
-    // of wrapping the bound around.
-    let high = limit
-        .saturating_sub(size)
-        .saturating_sub(margin)
-        .max(margin);
+    // The clamp sits here, after the position is resolved, and it is unchanged in
+    // reach: the far edge may reach the terminal's own edge, and the near edge may not
+    // pass the margin. It is deliberately **not** tightened to the far margin, because
+    // a bottom-anchored picker places itself by counting rows up from the bottom edge
+    // and would move by the margin if the bound moved. A percentage does not need the
+    // tightening: `share(avail - size)` cannot exceed the slack, so `Percent(100)` lands
+    // on the far margin by construction.
+    //
+    // Every term is subtract-only, so a size larger than the viewport (reachable with an
+    // absolute width) falls back to the near margin instead of wrapping the bound around.
+    let high = limit.saturating_sub(size).max(margin);
     placed.clamp(i32::from(margin), i32::from(high)) as u16
 }
 
@@ -717,7 +719,7 @@ mod tests {
     }
 
     // Verifies: gh #373 gap 4 - the clamp sits **after** the position is resolved, and
-    // it is what keeps an overlay inside its margin box.
+    // it is what keeps an overlay inside its box.
     //
     // Under the corrected percentage form the clamp is no longer load-bearing *for a
     // percentage on its own*: `share(avail - size)` cannot exceed the slack, so the far
@@ -725,7 +727,7 @@ mod tests {
     // displacement - an offset, or an absolute row/col - which is what this row drives,
     // because a clamp with nothing reaching it is a clamp nobody would notice losing.
     #[test]
-    fn a_displaced_overlay_is_clamped_inside_the_margin_box() {
+    fn a_displaced_overlay_is_clamped_inside_its_box() {
         let pushed_right_and_down = OverlayOptions {
             width: Some(SizeValue::Abs(20)),
             row: Some(SizeValue::Percent(100)),
@@ -736,9 +738,13 @@ mod tests {
             ..Default::default()
         };
         let rect = resolve_overlay_layout(&pushed_right_and_down, 80, 24, 6);
-        assert_eq!((rect.col, rect.row), (58, 16), "clamped to the far margin");
-        assert_eq!(rect.col + rect.width, 78);
-        assert_eq!(rect.row + rect.height, 22);
+        assert_eq!(
+            (rect.col, rect.row),
+            (60, 18),
+            "the far edge stops at the screen edge, the reach this clamp always had"
+        );
+        assert_eq!(rect.col + rect.width, 80);
+        assert_eq!(rect.row + rect.height, 24);
 
         let pushed_left_and_up = OverlayOptions {
             width: Some(SizeValue::Abs(20)),
@@ -761,7 +767,7 @@ mod tests {
             ..Default::default()
         };
         let rect = resolve_overlay_layout(&far, 80, 24, 6);
-        assert_eq!((rect.col + rect.width, rect.row + rect.height), (78, 22));
+        assert_eq!((rect.col + rect.width, rect.row + rect.height), (80, 24));
     }
 
     // Verifies: gh #373 gap 4 - an offset applies on top of a percentage, as in pi's

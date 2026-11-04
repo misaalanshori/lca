@@ -26,10 +26,11 @@ Dates are UTC.
   now the share of the slack between the margins that falls before the overlay —
   `margin + share(avail - size)`, pi's `resolveOverlayLayout` — so `Percent(0)` sits on the
   near margin, `Percent(100)` puts the far edge on the opposite one, and `Percent(50)`
-  leaves equal gaps either side. The clamp still runs **after** the position resolves and
-  now bounds by the far *margin* rather than the terminal edge; that is what holds a
-  displaced overlay (an offset, or an absolute row/col past the screen) inside its box,
-  since a percentage on its own no longer needs clamping. An explicit `row`/`col` still
+  leaves equal gaps either side. The clamp still runs **after** the position resolves,
+  and its reach is unchanged (the near edge may not pass the margin, the far edge may
+  reach the screen edge) — deliberately, because a bottom-anchored picker counts rows up
+  from the bottom edge and would move by the margin if the bound were tightened. An
+  explicit `row`/`col` still
   wins over `anchor`, the anchor still positions the axis it leaves unset, and `offset_x`/
   `offset_y` apply on top of either, as in pi. No caller in the tree positions an overlay
   with a percentage, so no caller changed; a guard now refuses the first one that tries,
