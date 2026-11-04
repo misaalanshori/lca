@@ -75,6 +75,7 @@ impl Transcript {
                 entry,
                 width,
                 theme,
+                lca_tui::widgets::image::detect_image_protocol(),
                 self.tools_expanded,
                 self.thinking,
                 self.codeblock_border,

@@ -275,6 +275,16 @@ pub struct Transcript {
     /// acceptance row for gh #410 would have passed only while the cache was
     /// cold. Cheap to keep honest: an integer compare per entry.
     cache_epoch: u64,
+    /// Which kitty images this terminal already holds (gh #324 gap 1).
+    ///
+    /// A repaint of an image already in here emits a **placement**, not a
+    /// transmission: the base64 is the expensive part of the frame and the
+    /// terminal already has it. Keyed by the derived id, which is stable for the
+    /// same payload at the same scale, so the key is exactly "the same upload".
+    ///
+    /// A `RefCell` because `render` takes `&self` - the cache is a rendering
+    /// memo, not state anyone reads.
+    uploaded_images: std::cell::RefCell<crate::placements::PlacementCache>,
     /// Nested call ids that were suppressed into a parent's checklist (gh #404
     /// gap 1), mapped to the child's name.
     ///
@@ -1068,8 +1078,28 @@ impl Transcript {
         }
     }
 
-    /// Render every entry to styled lines at `width`.
+    /// Render every entry to styled lines at `width`, for the detected terminal.
     pub fn render(&self, width: u16, theme: &Theme) -> Vec<String> {
+        self.render_for_protocol(
+            width,
+            theme,
+            lca_tui::widgets::image::detect_image_protocol(),
+        )
+    }
+
+    /// Render every entry to styled lines at `width` for an explicit image
+    /// protocol (gh #324 gap 1).
+    ///
+    /// The protocol is a parameter rather than a call to the detector because
+    /// the kitty path is the one under test on a box whose tmux has no
+    /// graphics: a row that could only ask the environment could not assert the
+    /// image shapes at all.
+    pub fn render_for_protocol(
+        &self,
+        width: u16,
+        theme: &Theme,
+        protocol: lca_tui::widgets::image::ImageProtocol,
+    ) -> Vec<String> {
         let mut cache = self.cache.borrow_mut();
         if cache.len() != self.entries.len() {
             cache.resize(self.entries.len(), None);
@@ -1091,6 +1121,7 @@ impl Transcript {
                 entry,
                 width,
                 theme,
+                protocol,
                 self.tools_expanded,
                 self.thinking,
                 self.codeblock_border,
@@ -1101,6 +1132,9 @@ impl Transcript {
             );
             out.extend(lines.iter().cloned());
             cache[i] = Some((width, self.cache_epoch, lines, thinking_rows));
+        }
+        if protocol == lca_tui::widgets::image::ImageProtocol::Kitty {
+            self.uploaded_images.borrow_mut().substitute(&mut out);
         }
         out
     }
@@ -1125,6 +1159,9 @@ pub(crate) use render::render_key_hint;
 #[path = "compaction_card_tests.rs"]
 mod compaction_card_tests;
 
+#[cfg(test)]
+#[path = "image_tests.rs"]
+mod image_tests;
 #[cfg(test)]
 #[path = "nested_tests.rs"]
 mod nested_tests;

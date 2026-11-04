@@ -124,6 +124,7 @@ pub(super) fn render_entry(
     entry: &Entry,
     width: u16,
     theme: &Theme,
+    protocol: lca_tui::widgets::image::ImageProtocol,
     tools_expanded: bool,
     thinking: ThinkingVisibility,
     codeblock_border: CodeBlockBorder,
@@ -273,7 +274,7 @@ pub(super) fn render_entry(
                 out.extend(render_image(
                     info,
                     bytes,
-                    lca_tui::widgets::image::detect_image_protocol(),
+                    protocol,
                     (width as usize).min(tuning.image_width_cells.max(1) as usize),
                 ));
             }

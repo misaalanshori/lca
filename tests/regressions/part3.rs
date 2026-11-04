@@ -510,3 +510,12 @@ mod fullscreen_exit_handoff;
 // renderer, one refresh-or-close helper, one "last row" predicate.
 #[path = "382-composer-window-and-caret-seams.rs"]
 mod composer_window_and_caret_seams;
+
+// Gh #324 gap 1: every inline image used `i=1` and claimed one row, so a second
+// image overwrote the first's texture and the entry after each one painted over
+// it. Identity is now derived from the payload *and* the cell scale (stable, so a
+// repaint places rather than re-uploads), and the render returns the reservation.
+// The two halves are one defect: fixing the id alone leaves every multi-row image
+// sliced by its successor.
+#[path = "324-image-identity-and-rows.rs"]
+mod image_identity_and_rows;

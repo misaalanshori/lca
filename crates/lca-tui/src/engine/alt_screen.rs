@@ -15,6 +15,9 @@
 //! scroll-to-end indicator. The transcript-preservation handoff on exit is
 //! kept.
 
+pub(crate) mod image_blocks;
+use image_blocks::expand_for_image_blocks;
+
 use super::core::{CURSOR_MARKER, SEGMENT_RESET, extract_cursor_position};
 use super::selection::{Granularity, Selection, SelectionPoint};
 use super::terminal::Terminal;
@@ -334,7 +337,6 @@ impl AltScreenRenderer {
             document: Vec::new(),
         }
     }
-
     /// Enter the alt screen and enable mouse tracking.
     pub fn enter(&mut self, term: &mut dyn Terminal) {
         let mut out = String::from("\x1b[?1049h\x1b[?7l");
@@ -467,6 +469,10 @@ impl AltScreenRenderer {
         if resize {
             out.push_str("\x1b[2J\x1b[H");
         }
+        // Gh #324 gap 1: an image's reserved rows are one block. A frame that
+        // repaints *any* row of a block must repaint the whole block, or the
+        // sequence lands on a row whose neighbours were cleared and the image is
+        // sliced - and a row inside a reserve must never be treated as text.
         let mut touched: Vec<usize> = Vec::new();
         for (row, line) in lines.iter().enumerate() {
             let caret_row = cursor.is_some_and(|(r, _, _)| r as usize == row);
@@ -474,6 +480,9 @@ impl AltScreenRenderer {
                 continue;
             }
             touched.push(row);
+        }
+        if let Some(expanded) = expand_for_image_blocks(&lines, &touched) {
+            touched = expanded;
         }
         // gh #18 (LCA-PROMPT-GH18FIX2): clear every row this frame rewrites
         // before painting any of them. The shared baseline - pi's own diff
@@ -1165,3 +1174,7 @@ mod focus_tests;
 #[cfg(test)]
 #[path = "alt_screen/right_click_tests.rs"]
 mod right_click_tests;
+
+#[cfg(test)]
+#[path = "alt_screen/image_block_tests.rs"]
+mod image_block_tests;

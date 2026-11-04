@@ -63,8 +63,15 @@ pub fn extract_ansi_code(s: &str, pos: usize) -> Option<(String, usize)> {
     let next = *bytes.get(pos + 1)?;
     match next {
         b'[' => {
+            // `A B C D` are cursor movements, accepted for gh #324 gap 1's
+            // multi-row iTerm2 shape (see `ansi_code_length`).
             let mut j = pos + 2;
-            while j < bytes.len() && !matches!(bytes[j], b'm' | b'G' | b'K' | b'H' | b'J') {
+            while j < bytes.len()
+                && !matches!(
+                    bytes[j],
+                    b'm' | b'G' | b'K' | b'H' | b'J' | b'A' | b'B' | b'C' | b'D'
+                )
+            {
                 j += 1;
             }
             if j < bytes.len() {
@@ -128,13 +135,19 @@ fn note_fast_path_hit() {}
 
 /// Length of the escape sequence starting at `pos`, or `0` when there is none —
 /// pi's `ansiCodeLength` (`packages/tui/src/utils.ts`), and deliberately the same
-/// closed vocabulary as [`extract_ansi_code`]: CSI finals `m G K H J`, and OSC/APC
-/// terminated by BEL or ST.
+/// closed vocabulary as [`extract_ansi_code`]: CSI finals `m G K H J`, plus the
+/// cursor movements `A B C D`.
 ///
-/// This exists so the width fast path can *skip* a code without substringing it.
-/// Anything it does not recognise answers `0`, which makes the fast path decline
-/// rather than guess: a wrong skip length would silently mismeasure every row after
-/// it, and a mismeasurement is much worse than a missed optimisation.
+/// **`A B C D` are here for gh #324 gap 1**, whose multi-row iTerm2 shape opens
+/// with `\x1b[{n}A` to put the cursor back at the top of the block. The four are
+/// not "supported" by pi - they are *unrecognised* there, so pi walks them as text
+/// and mismeasures that one row. Recognising them is strictly closer to the
+/// terminal's truth, which is all this function answers. **`E F G` stay out on
+/// purpose**: `G` already means `CHA` in this vocabulary, and a final that two
+/// meanings disagree about is exactly the ambiguity the closed list exists to
+/// avoid. A sequence this does not recognise answers `0`, which makes the fast path
+/// decline rather than guess: a wrong skip length would silently mismeasure every
+/// row after it, and a mismeasurement is much worse than a missed optimisation.
 fn ansi_code_length(s: &str, pos: usize) -> usize {
     let bytes = s.as_bytes();
     if pos >= bytes.len() || bytes[pos] != 0x1b {
@@ -147,7 +160,10 @@ fn ansi_code_length(s: &str, pos: usize) -> usize {
         b'[' => {
             let mut j = pos + 2;
             while j < bytes.len() {
-                if matches!(bytes[j], b'm' | b'G' | b'K' | b'H' | b'J') {
+                if matches!(
+                    bytes[j],
+                    b'm' | b'G' | b'K' | b'H' | b'J' | b'A' | b'B' | b'C' | b'D'
+                ) {
                     return j + 1 - pos;
                 }
                 j += 1;

@@ -22,6 +22,7 @@
 use super::core::{SEGMENT_RESET, extract_cursor_position, width_violation};
 use super::terminal::Terminal;
 use super::text::truncate_to_width;
+use crate::widgets::image::kitty_reserved_rows;
 
 /// Whether this session is Termux, whose soft keyboard changes the terminal height by
 /// 10-15 rows every time it shows or hides (gh #372 bug 3).
@@ -458,19 +459,59 @@ impl MainScreenRenderer {
             }
         }
 
-        for (i, line) in new_lines
-            .iter()
-            .enumerate()
-            .take(render_end + 1)
-            .skip(first_changed_idx)
-        {
+        // Gh #324 gap 1: an image's reserved rows are **one block**, and the
+        // paint loop must not walk into it. The old loop wrote `\r\n` for every
+        // row including the blanks below a kitty header, so each blank took the
+        // text path: the cursor left the block's top, the reserve was never
+        // claimed, and the transcript row after the image landed on it. pi's
+        // `getKittyImageReservedRows` is the same shape - walk the reserve, then
+        // come back up - and the `i += ahead` below is what makes a blank row
+        // inside a reserve unreachable from the text path.
+        let mut i = first_changed_idx;
+        while i <= render_end {
+            let line = &new_lines[i];
+            // Rows still inside a reserve that started above this frame's first
+            // changed row belong to that image, not to this repaint.
+            if line.is_empty() {
+                if i > first_changed_idx {
+                    out.push_str("\r\n");
+                }
+                if !clear_first {
+                    out.push_str("\x1b[2K");
+                }
+                out.push_str(line);
+                i += 1;
+                continue;
+            }
+            let reserved = kitty_reserved_rows(line).unwrap_or(1).max(1) as usize;
+            // How many of those rows are still ahead of us in this walk.
+            let ahead = reserved.min(render_end.saturating_sub(i) + 1);
             if i > first_changed_idx {
                 out.push_str("\r\n");
             }
+            if ahead > 1 {
+                if !clear_first {
+                    out.push_str("\x1b[2K");
+                }
+                for row in 1..ahead {
+                    let blank = new_lines.get(i + row);
+                    debug_assert!(
+                        blank.is_none_or(|b| b.is_empty()),
+                        "a reserved row below the image header is blank"
+                    );
+                    out.push_str("\r\n\x1b[2K");
+                }
+                out.push_str(&format!("\x1b[{}A", ahead - 1));
+                out.push_str(line);
+                out.push_str(&format!("\x1b[{}B", ahead - 1));
+                i += ahead;
+                continue;
+            }
             if !clear_first {
-                out.push_str("\x1b[2K"); // Clear current line
+                out.push_str("\x1b[2K");
             }
             out.push_str(line);
+            i += 1;
         }
         out.push_str(SEGMENT_RESET);
 
@@ -1143,3 +1184,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "main_screen/image_reserve_tests.rs"]
+mod image_reserve_tests;

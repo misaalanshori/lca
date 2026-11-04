@@ -53,7 +53,13 @@ shell command and sends its output with your message; `!!command` runs one the m
 never sees. The card says which one you ran: `!bash …` in the accent
 color, `!!bash …` quiet, so the context boundary is visible at a glance
 and still readable with color off. Paste an image and it rides the turn
-when the model takes vision (`/attach` does the same from a path).
+when the model takes vision (`/attach` does the same from a path). A
+transcript can hold several images: each one gets its own place on screen,
+keeps the rows its own height needs, and the next message starts below it
+rather than on top of it. Scrolling back over an image does not re-send it.
+On a terminal without inline graphics — tmux, most editors' terminals — it
+shows a labelled placeholder (`[image image/png · 320×240 · 780 B]`)
+instead of guessing.
 
 A large paste — more than ten lines, or over a thousand characters — is
 replaced by a chip, `[paste #1 +25 lines]`. The chip is one object: `Left`

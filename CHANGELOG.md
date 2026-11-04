@@ -18,6 +18,18 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **Inline images no longer overwrite each other or the row beneath them** (gh #324
+  gap 1). The kitty encoder hardcoded `i=1`, so a second transcript image replaced the
+  first one's texture, and `render_image` returned a **single** line for an image `rows`
+  tall, so the entry after it was painted over the image's own rows. An image's id is
+  now derived from its payload **and** its cell scale — unique enough that two images
+  cannot collide, stable enough that a repaint re-places instead of re-uploading — and
+  the render returns the reservation, with both renderers treating a reserve as one
+  block (clear it whole, place once, walk back down). A repaint is a ~40-byte
+  placement rather than the base64 payload, tracked by a bounded LRU, so scrolling over
+  an image no longer stutters. The chunked upload also stopped repeating its header on
+  every chunk, matching pi's `m=1` continuations byte for byte. The placeholder path
+  used by terminals without graphics is unchanged.
 - **The real-terminal harness no longer reports a blank pane as a correct layout**
   (gh #489 follow-up). `wait_for_layout_width` returned success when the pane's widest
   painted line was within the requested width — and an **unpainted** pane measures `0`, so
