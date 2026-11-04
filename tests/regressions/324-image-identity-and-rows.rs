@@ -672,18 +672,28 @@ fn a_link_is_only_offered_for_a_file_that_exists() {
 #[test]
 fn the_file_url_is_a_real_url() {
     let image = read("crates/lca-tui/src/widgets/image/fallback.rs");
-    let url = function_body(&image, "pub fn file_url(");
+    // The encoding rule lives in `encode_file_url`, split from the absoluteness gate so the
+    // Windows shape is testable on any host (CI found that the hard way).
+    let url = function_body(&image, "pub fn encode_file_url(");
+    // The property, not the spelling: a separator is never encoded, and a drive colon is
+    // kept only in drive position. Asserting the literal `match` arm locked a spelling
+    // that the Windows fix legitimately changed.
     assert!(
-        url.contains("b'/' | b'-' | b'_' | b'.' | b'~'"),
+        url.contains("'/' | '-' | '_' | '.' | '~' => true"),
         "the separators and unreserved marks stay literal: {url}"
+    );
+    assert!(
+        url.contains("'::'") || url.contains("':' => drive_colon"),
+        "and a colon is kept only where it is a drive: {url}"
     );
     assert!(
         url.contains("%{byte:02X}"),
         "and everything else is uppercase-hex percent-encoded: {url}"
     );
+    let gate = function_body(&image, "pub fn file_url(");
     assert!(
-        url.contains("if !path.is_absolute()"),
-        "a relative path has no file:// location: {url}"
+        gate.contains("if !path.is_absolute()"),
+        "a relative path has no file:// location: {gate}"
     );
     assert!(url.contains("file://"), "and the scheme is present");
 }

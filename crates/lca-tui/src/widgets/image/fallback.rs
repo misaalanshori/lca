@@ -73,15 +73,55 @@ pub fn file_url(path: &std::path::Path) -> Option<String> {
     if !path.is_absolute() {
         return None;
     }
+    Some(encode_file_url(&path.to_string_lossy()))
+}
+
+/// [`file_url`]'s encoding rule, over a path **string** (gh #324 gap 5).
+///
+/// Split out so the rule is testable on any host: the Windows shape (`\` separators and a
+/// drive colon) is one a Linux run cannot produce through `Path`, and CI is the only place
+/// that shape appears for real. Testing the encoder directly pins the rule everywhere
+/// rather than only where the platform happens to build such a path.
+#[must_use]
+pub fn encode_file_url(path: &str) -> String {
+    // A URL has one separator and it is `/`. On Windows a path arrives with `\`, and the
+    // drive colon is the one `:` that is **not** encoded: the canonical form is
+    // `file:///C:/Users/...` - three slashes, because the authority is empty and the drive
+    // is the first path segment.
+    //
+    // Both mistakes were caught by the row below rather than by CI, which is the point of
+    // pinning the encoder directly: my first version produced `file://C%3A/...` because it
+    // assumed a leading `/` that a Windows path does not have.
+    let normalized = path.replace('\\', "/");
+    let with_slash = if normalized.starts_with('/') {
+        normalized
+    } else {
+        format!("/{normalized}")
+    };
+    // A drive colon is `/<letter>:` at the start of the path.
+    let drive_colon = with_slash.as_bytes().get(2) == Some(&b':')
+        && with_slash
+            .as_bytes()
+            .get(1)
+            .is_some_and(u8::is_ascii_alphabetic);
     let mut out = String::from("file://");
-    for byte in path.to_string_lossy().bytes() {
-        match byte {
-            b'/' | b'-' | b'_' | b'.' | b'~' => out.push(byte as char),
-            _ if byte.is_ascii_alphanumeric() => out.push(byte as char),
-            _ => out.push_str(&format!("%{byte:02X}")),
+    for (index, char) in with_slash.chars().enumerate() {
+        let keep = match char {
+            '/' | '-' | '_' | '.' | '~' => true,
+            ':' => drive_colon && index == 2,
+            _ => char.is_ascii_alphanumeric(),
+        };
+        if keep {
+            out.push(char);
+        } else {
+            // One percent sign per **byte**, so non-ASCII is UTF-8-encoded as `file://`
+            // requires.
+            for byte in char.to_string().bytes() {
+                out.push_str(&format!("%{byte:02X}"));
+            }
         }
     }
-    Some(out)
+    out
 }
 
 /// Wrap visible text in an OSC 8 hyperlink, ST-terminated (gh #324 gap 5).
@@ -186,6 +226,20 @@ mod fallback_link_tests {
         out
     }
 
+    /// A platform-absolute scratch root, so these rows run on Windows too.
+    ///
+    /// Three of them asserted Unix literals as if `/tmp/x.png` were absolute everywhere;
+    /// on Windows it is a relative path, `file_url` correctly refused it, and CI caught
+    /// what this box could not. A `PathBuf` built from the platform's own rules is the
+    /// only version that means the same thing on both.
+    fn root() -> std::path::PathBuf {
+        if cfg!(windows) {
+            std::path::PathBuf::from(r"C:\lca-test")
+        } else {
+            std::path::PathBuf::from("/tmp")
+        }
+    }
+
     /// A `None`-protocol `ImageInfo` with a path, which is what `/attach` produces.
     fn attached(path: &str) -> ImageInfo {
         let bytes = {
@@ -268,11 +322,15 @@ mod fallback_link_tests {
     // link that opens nothing is worse than a label.
     #[test]
     fn a_path_with_a_space_is_percent_encoded() {
-        let info = attached("/tmp/my picture file.png");
+        let info = attached(&root().join("my picture file.png").to_string_lossy());
         let joined = render_fallback_with(&info, 120, true, |_| true).join("\n");
         assert!(
-            joined.contains("file:///tmp/my%20picture%20file.png"),
-            "the space is %20 and the separators stay literal: {joined:?}"
+            joined.contains("my%20picture%20file.png"),
+            "the spaces are %20: {joined:?}"
+        );
+        assert!(
+            !joined.contains("%2F"),
+            "and the separator is never encoded: {joined:?}"
         );
         // The raw space must not reach the *URL*; the display keeps it, which is the
         // line above. Asserting "no raw space anywhere" would fail a correct output.
@@ -290,16 +348,51 @@ mod fallback_link_tests {
         );
     }
 
+    // Verifies: gh #324 gap 5 - **the Windows shape is a real URL.** CI caught this and
+    // this Linux box could not produce the input: a Windows path arrives with `\`
+    // separators, and the drive colon must stay literal (`file:///C:/…`) rather than
+    // become `%3A`. The encoder is pinned directly, so the rule holds on every host.
+    #[test]
+    fn a_windows_drive_path_encodes_to_a_file_url() {
+        assert_eq!(
+            encode_file_url(r"C:\Users\u\a b.png"),
+            "file:///C:/Users/u/a%20b.png",
+            "backslashes become slashes and the drive colon stays literal"
+        );
+        assert_eq!(
+            encode_file_url(r"C:\Users\u\café.png"),
+            "file:///C:/Users/u/caf%C3%A9.png",
+            "and a non-ASCII byte is still UTF-8 percent-encoded"
+        );
+        // A plain Unix path keeps its single leading slash and gains no drive colon.
+        assert_eq!(
+            encode_file_url("/tmp/a b.png"),
+            "file:///tmp/a%20b.png",
+            "the Unix shape is unchanged"
+        );
+    }
+
     // Verifies: gh #324 gap 5 - **non-ASCII is UTF-8 percent-encoded**, one byte at a
     // time, which is what `file://` means. Matching `pathToFileURL` exactly, measured
     // against node: `/home/u/café.png` -> `file:///home/u/caf%C3%A9.png`.
     #[test]
     fn a_non_ascii_path_is_utf8_percent_encoded() {
-        let info = attached("/home/u/café.png");
+        let info = attached(&root().join("café.png").to_string_lossy());
         let joined = render_fallback_with(&info, 120, true, |_| true).join("\n");
+        // The encoded form of the *platform's* path: `caf%C3%A9` on both, whatever the
+        // separators before it.
         assert!(
-            joined.contains("file:///home/u/caf%C3%A9.png"),
+            joined.contains("caf%C3%A9.png"),
             "the UTF-8 bytes are encoded: {joined:?}"
+        );
+        // The display keeps the real character (it is a readable path); only the **URL**
+        // must be pure ASCII, so the assertion is scoped to the URL - asserting on the
+        // whole line would fail a correct output, which is the same mistake I made with
+        // the space row.
+        let url = file_url(&root().join("café.png")).expect("a url");
+        assert!(
+            url.is_ascii(),
+            "the URL is pure ASCII even though the path is not: {url:?}"
         );
     }
 
@@ -309,17 +402,18 @@ mod fallback_link_tests {
     // `~` for it would be a lie. It is linked, because it is still a real file.
     #[test]
     fn a_path_outside_home_is_shown_in_full() {
-        let info = attached("/var/tmp/lca/shot.png");
+        let path = root().join("lca/shot.png");
+        let info = attached(&path.to_string_lossy());
         let joined = render_fallback_with(&info, 120, true, |_| true).join("\n");
         assert!(
-            joined.contains("/var/tmp/lca/shot.png"),
+            joined.contains(&*path.to_string_lossy()),
             "the whole path is the label: {joined:?}"
         );
         assert!(!joined.contains('~'), "and no ~ was invented: {joined:?}");
-        assert!(
-            joined.contains("file:///var/tmp/lca/shot.png"),
-            "and it is still linked: {joined:?}"
-        );
+        // The link is derived from the same path, so the assertion cannot drift from the
+        // platform's separators.
+        let url = file_url(&path).expect("an absolute path has a url");
+        assert!(joined.contains(&url), "and it is still linked: {joined:?}");
     }
 
     // Verifies: gh #324 gap 5 - **a link is a claim the file exists.** An attachment that
@@ -328,7 +422,7 @@ mod fallback_link_tests {
     // see what it was.
     #[test]
     fn a_missing_file_is_a_label_not_a_link() {
-        let info = attached("/tmp/lca-pruned-this-file.png");
+        let info = attached(&root().join("lca-pruned-this-file.png").to_string_lossy());
         // The file is gone, which the injected check reports - that is the pruned case.
         let joined = render_fallback_with(&info, 120, true, |_| false).join("\n");
         assert!(
@@ -371,7 +465,7 @@ mod fallback_link_tests {
     fn the_none_protocol_grammar_is_unchanged() {
         // #326's grammar is the **path-less** case: a clipboard paste, or an image whose
         // file is unknown. An image with a file gets gap 5's richer form instead.
-        let mut info = attached("/tmp/x.png");
+        let mut info = attached(&root().join("x.png").to_string_lossy());
         info.path = None;
         let lines = render_image(&info, &[], ImageProtocol::None, 80);
         let joined = lines.join("\n");
