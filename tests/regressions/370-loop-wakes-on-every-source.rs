@@ -171,3 +171,135 @@ fn each_forwarder_signals_after_enqueuing() {
         "enqueue first, then wake - the reverse order can lose a wake"
     );
 }
+
+// ============================================================================
+// gh #370 flaw 2: one iteration, many events.
+// ============================================================================
+
+/// The input-path helpers, where the drain lives.
+fn helpers_source() -> String {
+    std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/crates/lca-ui/src/run_input_helpers.rs"
+    ))
+    .expect("run_input_helpers.rs is readable")
+}
+
+// Verifies: gh #370 flaw 2 - **the loop drains before it paints**. The loop popped one
+// event per iteration and then did a full `viewport()` + `render()` pass, so a drag's
+// every cell cost a complete repaint. The regression this prevents is structural - a
+// later "simplification" back to a single pop - so it is asserted on the shape: the
+// loop's input step is a drain, and the pop it used to call is gone.
+//
+// Asserted on the source because the loop needs a terminal, a turn runner and a wake
+// channel, none of which a unit row has. The *behaviour* is measured beside the code
+// (`crates/lca-ui/src/run_batch_tests.rs`): twelve events cost one frame, and the
+// composer holds all twelve characters.
+#[test]
+fn the_loop_drains_every_arrived_event_before_it_paints() {
+    let source = run_source();
+    assert!(
+        source.contains("input_helpers::drain_input("),
+        "the loop's input step drains the channel"
+    );
+    // The old shape must not survive anywhere in the loop: one `try_recv` per iteration
+    // is the flaw, whichever channel it reads.
+    assert!(
+        !source.contains("let pending_input = match early_input.as_ref()"),
+        "the single-pop shape is gone"
+    );
+    // ...and every drained event is handled, not just the last. The loop iterates the
+    // drained vector rather than destructuring one event out of it.
+    assert!(
+        source.contains("for data in input.drain(..)"),
+        "every drained event is handled in order"
+    );
+    // The paint still happens once per iteration, after the handling - the drain changes
+    // how many events are consumed, not when the frame is painted.
+    let drain_at = source
+        .find("input_helpers::drain_input(")
+        .expect("the drain exists");
+    let render_at = source
+        .find("screen.render(&mut terminal, viewport, document, width, height)")
+        .expect("the paint exists");
+    assert!(
+        render_at < drain_at,
+        "the frame is painted before the drain in the same iteration (the loop renders \
+         at its top and polls at its bottom), so a batch costs one frame"
+    );
+}
+
+// Verifies: gh #370 flaw 2 - **the drain is bounded**, and the bound is a named constant
+// with its rationale attached. An unbounded `while let Ok(..) = try_recv()` would never
+// leave the drain while a continuous producer fills it, so the loop would stop painting
+// entirely - the trap the brief names. The bound row beside the code asserts the
+// behaviour; this one asserts the shape, because a literal at the call site is how the
+// rationale gets lost.
+#[test]
+fn the_drain_is_bounded_by_a_documented_constant() {
+    let helpers = helpers_source();
+    assert!(
+        helpers.contains("pub const MAX_DRAINED"),
+        "the bound is a named constant"
+    );
+    assert!(
+        helpers.contains("while drained.len() < MAX_DRAINED"),
+        "and the drain actually consults it"
+    );
+    // The doc comment must sit on the constant, not in a distant module header: the
+    // number and the reason for the number travel together.
+    let decl = helpers
+        .find("pub const MAX_DRAINED")
+        .expect("the constant exists");
+    let context = &helpers[decl.saturating_sub(1200)..decl];
+    assert!(
+        context.contains("well above"),
+        "the constant's doc explains why that number is safe: {context}"
+    );
+}
+
+// Verifies: gh #370 flaw 2 - **the drain never sleeps or waits for more.** A deadline, a
+// "settle window", or a `try_recv` retry loop would add latency to the first keystroke of
+// a burst by construction - exactly the regression flaw 1's receipt (median echo 20.1 ->
+// 20.3 ms) would show. The drain takes what is there and returns.
+#[test]
+fn the_drain_adds_no_wait_of_its_own() {
+    let helpers = helpers_source();
+    let start = helpers
+        .find("pub fn drain_input")
+        .expect("the drain exists");
+    let body = &helpers[start..];
+    let end = body.find("\n}\n").unwrap_or(body.len());
+    let body = &body[..end];
+    for forbidden in ["sleep", "recv_timeout", "Instant::now", "Duration"] {
+        assert!(
+            !body.contains(forbidden),
+            "the drain must not wait for more events (`{forbidden}` found): a bounded \
+             wait here is latency added to every burst's first keystroke"
+        );
+    }
+}
+
+// Verifies: gh #370 flaw 2 - **keystrokes and mouse motions are one contract.** The
+// brief allowed collapsing a motion burst to its last position; LCA handles every event
+// instead, because a per-kind rule ("mouse may collapse, keys may not") is a second
+// contract for the next event kind to get wrong, and because a drag's intermediate
+// positions are observable to the gesture that builds the selection. This pins that the
+// drain has no kind test at all, so no future edit can introduce one silently.
+#[test]
+fn the_drain_does_not_distinguish_event_kinds() {
+    let helpers = helpers_source();
+    let start = helpers
+        .find("pub fn drain_input")
+        .expect("the drain exists");
+    let body = &helpers[start..];
+    let end = body.find("\n}\n").unwrap_or(body.len());
+    let body = &body[..end];
+    for forbidden in ["starts_with", "parse_sgr_mouse", "is_escape", "\"\\x1b\""] {
+        assert!(
+            !body.contains(forbidden),
+            "the drain must not inspect the event kind (`{forbidden}` found): every \
+             event is handled, which is the only rule that cannot eat characters"
+        );
+    }
+}

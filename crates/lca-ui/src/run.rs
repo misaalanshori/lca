@@ -825,17 +825,37 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
         // Gh #370 flaw 1: block on every source, not stdin alone. Input is taken
         // first, non-blocking, so a keystroke is never queued behind a producer; only
         // when there is none does the loop sleep - at most one tick - on the wake.
-        let pending_input = match early_input.as_ref() {
-            Some(early) => early.try_recv(),
-            None => input_rx.try_recv().ok(),
+        //
+        // Gh #370 flaw 2: take **every** event that has already arrived before painting
+        // once. A fullscreen drag emits dozens of SGR `Move` sequences per second, and
+        // popping one per iteration made every cell of the drag cost a complete repaint.
+        // The drain is bounded (see `input_helpers::drain_input`) and every drained event
+        // is still handled in order - keystrokes are never coalesced away, and a drag's
+        // intermediate positions are observable to the gesture, so they are handled too.
+        let mut input = match early_input.as_ref() {
+            Some(early) => input_helpers::drain_input(&mut || early.try_recv()),
+            None => input_helpers::drain_input(&mut || input_rx.try_recv().ok()),
         };
-        let woke = if pending_input.is_some() {
-            crate::run_wake::Woke::Input
-        } else {
+        let woke = if input.is_empty() {
             wakes.wait(&mut || false)
+        } else {
+            crate::run_wake::Woke::Input
         };
-        match pending_input {
-            Some(data) => {
+        if input.is_empty() {
+            // Nothing typed: a producer woke us, or the tick elapsed (gh #210's
+            // hover tooltip clock runs on both).
+            if woke != crate::run_wake::Woke::Input {
+                let (width, height) = chat.world.size;
+                if chat.poll_tooltip(width, height, screen.scroll(), std::time::Instant::now()) {
+                    dirty = true;
+                }
+            }
+        } else {
+            // Every drained event is handled, in arrival order, before one paint. `Exit`
+            // stops at the event that asked for it: the events behind it were typed after
+            // the quit, and replaying them into a loop that is ending would be wrong.
+            let mut exit = false;
+            for data in input.drain(..) {
                 if let InputResult::Exit = handle_input(
                     &data,
                     &mut chat,
@@ -847,21 +867,14 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
                     &turns.cancel,
                     &mut turns.aborted,
                 ) {
-                    break 'main Ok(());
-                }
-                dirty = true;
-            }
-            None => {
-                // Nothing typed: a producer woke us, or the tick elapsed (gh #210's
-                // hover tooltip clock runs on both).
-                if woke != crate::run_wake::Woke::Input {
-                    let (width, height) = chat.world.size;
-                    if chat.poll_tooltip(width, height, screen.scroll(), std::time::Instant::now())
-                    {
-                        dirty = true;
-                    }
+                    exit = true;
+                    break;
                 }
             }
+            if exit {
+                break 'main Ok(());
+            }
+            dirty = true;
         }
 
         // Resize.
@@ -1079,7 +1092,11 @@ impl TurnState {
 }
 
 #[path = "run_input_helpers.rs"]
-mod input_helpers;
+pub(crate) mod input_helpers;
+
+#[cfg(test)]
+#[path = "run_batch_tests.rs"]
+mod batch_tests;
 
 #[cfg(test)]
 #[path = "run_tests.rs"]

@@ -342,6 +342,8 @@ The host pulls. The extension does not push. This keeps back pressure on the sid
 
 Rendering is not one frame per event. The renderer coalesces on a frame interval, so a fast stream does not cost one redraw per token.
 
+The same holds for **input** (gh #370 flaw 2). The loop takes every event that has already arrived before it paints once, so a fullscreen drag or a fast burst costs one frame rather than one per cell or per key. The drain is bounded: it never waits for more events, so it adds no latency to the first keystroke of a burst, and a producer that never stops cannot starve the frame — the loop paints with what it has and drains again next iteration. **Every drained event is still handled, in order**: nothing is coalesced away. A mouse burst is not collapsed to its last position, because the intermediate positions are observable to the gesture that builds a selection, and a per-kind rule ("mouse may collapse, keys may not") is a second contract for the next event kind to get wrong.
+
 An unknown `vendor-event` kind is recorded and ignored. This is the case that exists so a new vendor concept does not force an ABI break.
 
 An `error` event ends the stream. The core decides whether the error is retryable and either retries with backoff or surfaces it, keeping the session open either way. Capacity names retry even when the provider flagged the failure non-retryable (gh #202): the shared `is_capacity_error` predicate (transient overload wording, HTTP 529) drives both the wire kits' mid-stream classification and the turn loop's retry override.

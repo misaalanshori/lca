@@ -18,6 +18,15 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **A mouse drag paints one frame, not one per cell** (gh #370 flaw 2). The interactive loop
+  popped a single input event per iteration and then did a full viewport and render pass, so a
+  fullscreen drag — dozens of SGR motion sequences a second — cost a complete repaint per cell. The
+  loop now takes every event that has already arrived and paints once: measured on the same pane
+  with the same 41-event drag, **42 frames before, 1 after** (real pi 1.3.0 does 2). The drain is
+  bounded and never waits for more events, so input latency is unchanged (median echo 23.8 → 22.4 ms,
+  within noise) and a producer that never stops cannot starve the frame. Every drained event is
+  still handled in order — keystrokes are never coalesced away, and a drag's intermediate positions
+  stay observable to the selection it builds.
 - **An attached image's fallback is a clickable link where it was a dead label**
   (gh #324 gap 5). On a terminal without inline graphics — tmux, most editors' terminals,
   so most users — an image rendered as a sentence pretending to be an image. It now
