@@ -125,8 +125,8 @@ fn the_kitty_arm_returns_one_line_per_reserved_row() {
 fn both_renderers_treat_an_image_reserve_as_one_block() {
     let main = read("crates/lca-tui/src/engine/main_screen.rs");
     assert!(
-        main.contains("kitty_reserved_rows("),
-        "the main-screen paint loop asks how many rows an image claims"
+        main.contains("kitty_block_rows("),
+        "the main-screen paint loop asks how many rows an image claims - and gap 4          narrowed that to the rows the reserve can actually own (it stops at text)"
     );
     assert!(
         main.contains("i += ahead"),
@@ -482,5 +482,101 @@ fn the_placeholder_path_stays_text() {
     assert!(
         render_fn.contains("ImageProtocol::None => render_image_placeholder"),
         "the None arm is untouched: {render_fn}"
+    );
+}
+
+// ===========================================================================
+// Gap 4 - the changed range is image-aware, and orphaned textures are deleted
+// ===========================================================================
+
+// Verifies: gh #324 gap 4 - **the range expansion runs in `render`, upstream of every
+// arm that consumes the range.** A test-only accessor that calls the expansion directly
+// passes with the wiring removed - I measured that with my first version of the rows,
+// which stayed green against a broken renderer. So the guard pins the *call site*, not
+// the helper.
+#[test]
+fn the_changed_range_is_expanded_inside_render() {
+    let main = read("crates/lca-tui/src/engine/main_screen.rs");
+    let render = function_body(&main, "pub fn render(");
+    assert!(
+        render.contains("expand_range_for_images(&self.previous_lines, &new_lines"),
+        "the range is expanded, from both frames, inside render: {render}"
+    );
+    // And there is no test-only accessor that could be mistaken for the real path.
+    assert!(
+        !main.contains("fn expanded_changed_range("),
+        "no accessor that bypasses the wiring it would be testing"
+    );
+}
+
+// Verifies: gh #324 gap 4 - **a block is bounded by the rows it can own.** `r=` is the
+// claimed height, but the reserve is a run of *blank* rows: the document may end, or
+// another entry's text may start, before the claim is reached. Treating the claim as
+// authoritative repaints a neighbour's text as part of the image - which is how the block
+// walk's own assertion fired the first time I wrote the full-viewport row.
+#[test]
+fn a_block_stops_at_the_first_row_that_holds_text() {
+    let image = read("crates/lca-tui/src/widgets/image.rs");
+    let block = function_body(&image, "pub fn kitty_block_rows(");
+    assert!(
+        block.contains("!next.is_empty()"),
+        "a non-blank row ends the reserve: {block}"
+    );
+    assert!(
+        block.contains("None => break"),
+        "and so does the end of the document: {block}"
+    );
+    let main = read("crates/lca-tui/src/engine/main_screen.rs");
+    assert!(
+        main.contains("kitty_block_rows(&new_lines, i)"),
+        "the paint loop uses the bounded answer"
+    );
+}
+
+// Verifies: gh #324 gap 4 - **deleting a texture is an id diff, not a range scan.** The
+// distinction the brief calls out: a *replaced* image needs `a=d,d=I,i=<old>`; a *moved*
+// one (gap 3's crop, same id, new placement) must not be deleted. A range-based delete
+// would undo gap 3, so the guard pins the diff.
+#[test]
+fn the_delete_is_an_id_diff_not_a_range_scan() {
+    // The gap-4 helpers live in their own module (gate 11 split).
+    let ranges = read("crates/lca-tui/src/engine/main_screen/image_ranges.rs");
+    let orphan = function_body(&ranges, "fn orphaned_image_ids(");
+    assert!(
+        orphan.contains("previous") && orphan.contains("next"),
+        "both frames are consulted, so an id that survives is not deleted: {orphan}"
+    );
+    assert!(
+        orphan.contains("!live.contains(id)"),
+        "an id is orphaned only when nothing in the new frame names it: {orphan}"
+    );
+    assert!(
+        !orphan.contains("first") && !orphan.contains("last"),
+        "and no range is involved, which is what keeps a crop alive: {orphan}"
+    );
+    // The delete command itself is kitty's `d=I`, which frees the data.
+    let delete = function_body(&ranges, "fn delete_kitty_image(");
+    assert!(
+        delete.contains("a=d,d=I,i={id},q=2"),
+        "the data is freed, not just the placement: {delete}"
+    );
+}
+
+// Verifies: gh #324 gap 4 - **the delete rides the same synchronized block as the
+// repaint.** Emitting it before the frame would make the old image vanish for a frame
+// before the new drawing arrived - a flicker where the fix was meant to remove one.
+#[test]
+fn the_delete_is_emitted_inside_the_frame() {
+    let main = read("crates/lca-tui/src/engine/main_screen.rs");
+    let render = function_body(&main, "pub fn render(");
+    let open = render
+        .find("out.push_str(\"\\x1b[?2026h\")")
+        .expect("the frame opens");
+    let delete = render
+        .find("delete_kitty_image(*id)")
+        .expect("the deletes are emitted");
+    assert!(
+        delete > open,
+        "the deletes come after the frame opens: {render}"
     );
 }

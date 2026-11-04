@@ -18,6 +18,16 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **A partial repaint no longer slices a multi-row image, and replaced images are
+  released** (gh #324 gap 4). The differential renderer picks an interval of document rows
+  to repaint, and an interval that started or ended inside an image could not be honoured —
+  the terminal cannot redraw part of a texture — so the untouched half kept the old
+  drawing (a ghost) and the repainted half showed the new frame. The interval is now
+  widened to whole image blocks in both frames, and a block's span is the run of blank
+  rows it actually owns rather than its claimed height. A replaced image's old texture is
+  deleted with `a=d,d=I` inside the same synchronized block, so the terminal no longer
+  accumulates a texture per replacement over a session; a cropped image keeps its id and
+  is never deleted, because cropping is the same texture with a new placement.
 - **A partly visible image is cropped to the band on screen** (gh #324 gap 3). Fullscreen
   slices the transcript by whole rows, so an image straddling the viewport edge was
   placed in full: its top scrolled away showed the picture's beginning, its bottom cut
