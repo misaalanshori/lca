@@ -764,6 +764,7 @@ fn image_entries_render_a_placeholder() {
             width: Some(10),
             height: Some(20),
             alt: Some("a chart".into()),
+            path: None,
         },
         Vec::new(),
     );

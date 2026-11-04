@@ -18,6 +18,16 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **An attached image's fallback is a clickable link where it was a dead label**
+  (gh #324 gap 5). On a terminal without inline graphics — tmux, most editors' terminals,
+  so most users — an image rendered as a sentence pretending to be an image. It now
+  renders as `[Image: ~/pics/chart.png [image/png] 320x240]`, wrapped in an `OSC 8`
+  `file://` link whenever the terminal forwards hyperlinks, so it can be clicked open.
+  The visible text is identical with or without the link (one formatter, two wrappings),
+  the home directory is abbreviated to `~/` rather than printed, and the URL is
+  percent-encoded so a path with a space or a non-ASCII byte still opens. A clipboard
+  paste has no file and a pruned attachment's file is gone, so both stay a plain label —
+  a link that opens nothing is worse than the label it replaced.
 - **A partial repaint no longer slices a multi-row image, and replaced images are
   released** (gh #324 gap 4). The differential renderer picks an interval of document rows
   to repaint, and an interval that started or ended inside an image could not be honoured —

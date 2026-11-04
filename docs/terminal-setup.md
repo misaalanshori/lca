@@ -88,6 +88,8 @@ terminal lacks corrupts rendering.
 | Tab status (OSC 7501, gh #213) | On after the terminal answers the support query; off under `screen` | `LCA_PROGRAM_STATUS=1` forces reports, `=0` silences them |
 | Theme light/dark (OSC 11 + `CSI ? 996 n`, gh #379) | Asked once at startup and closed with a `DA1` sentinel (`ESC [ c`), which every terminal answers whether or not it reports colours. The theme is chosen from `COLORFGBG`/defaults **immediately**; a colour answer refines it when it arrives, including one that arrives late over a slow link. Once the sentinel has closed the query, an `OSC 11` printed by another program cannot repaint the palette | No key: `ui.theme` pins a theme and stops the refresh |
 
+The same capability decides whether an image **fallback** is clickable. On a terminal without inline graphics — tmux, most editors' terminals — an attached image renders as `[Image: ~/pics/chart.png [image/png] 320x240]`, and when hyperlinks are available that label is wrapped in an `OSC 8` link to `file:///…/chart.png`. Below it the ladder does not need a second answer: the visible text is identical either way, only the wrapper differs, and the URL is percent-encoded (`/` literal, a space as `%20`, non-ASCII as UTF-8 bytes) so a path with a space still opens. The link is offered only for a path that still exists: a pruned attachment falls back to the plain label, because a link that opens nothing is worse than the label it replaced.
+
 `terminal.hyperlinks`, `terminal.images`, and `terminal.true_color`
 exist as accepted-but-inert keys (pi's names, gh #82): detection
 lives below config's reach, so they parse and do nothing. The

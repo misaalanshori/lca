@@ -58,8 +58,12 @@ transcript can hold several images: each one gets its own place on screen,
 keeps the rows its own height needs, and the next message starts below it
 rather than on top of it. Scrolling back over an image does not re-send it.
 On a terminal without inline graphics — tmux, most editors' terminals — it
-shows a labelled placeholder (`[image image/png · 320×240 · 780 B]`)
-instead of guessing.
+shows a labelled placeholder instead of guessing. When the image came from a
+**file** (`/attach`) and the terminal forwards hyperlinks, that label is a
+link to the file — `[Image: ~/pics/chart.png [image/png] 320x240]` — so it can
+be clicked open; the `~/` form keeps your home directory name off the screen.
+A clipboard paste has no file to link to, and an attachment whose file has
+been pruned is shown as a plain label rather than a link to something gone.
 
 A large paste — more than ten lines, or over a thousand characters — is
 replaced by a chip, `[paste #1 +25 lines]`. The chip is one object: `Left`

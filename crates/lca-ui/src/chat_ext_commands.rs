@@ -16,9 +16,13 @@ impl Chat {
             CommandEffect::AttachImage {
                 media_type,
                 bytes,
+                path,
                 note,
             } => {
-                let info = lca_tui::widgets::image::ImageInfo::new(&media_type, &bytes);
+                let mut info = lca_tui::widgets::image::ImageInfo::new(&media_type, &bytes);
+                // Gh #324 gap 5: the host knows the file; the fallback links to it.
+                info.path = path;
+                let info = info;
                 self.transcript.push_image(info, bytes);
                 self.say(crate::state::sanitize_block(&note));
             }

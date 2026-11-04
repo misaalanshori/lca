@@ -580,3 +580,127 @@ fn the_delete_is_emitted_inside_the_frame() {
         "the deletes come after the frame opens: {render}"
     );
 }
+
+// ===========================================================================
+// Gap 5 - the fallback is a link when it can be, a label when it cannot
+// ===========================================================================
+
+// Verifies: gh #324 gap 5 - **one formatter, two wrappings.** The linked and unlinked
+// forms must differ by the OSC 8 wrapper and nothing else; a second sentence for the
+// unlinked case would be a second code path, and the two would drift until a user on
+// `screen` read a different label from a user on kitty.
+#[test]
+fn the_fallback_has_one_text_builder_and_two_wrappings() {
+    // The fallback lives in its own module (gate 11 split); the `None` arm stays in
+    // `image.rs` and delegates to it.
+    let image = read("crates/lca-tui/src/widgets/image/fallback.rs");
+    let text = function_body(&image, "pub fn fallback_text(");
+    assert!(
+        !text.contains("\\x1b]8"),
+        "the text builder never emits a link itself: {text}"
+    );
+    let render = function_body(&image, "pub fn render_fallback_with(");
+    assert!(
+        render.contains("osc8_link(&text, &url)") && render.contains("None => fallback_text(info)"),
+        "the wrapping happens in one place, over one text: {render}"
+    );
+    // And the link wrapper is the markdown renderer's shape, not a second dialect.
+    let link = function_body(&image, "fn osc8_link(");
+    assert!(
+        link.contains("\\x1b]8;;{url}\\x1b\\\\"),
+        "ST-terminated, like `LinkMode::Hyperlink`: {link}"
+    );
+}
+
+// Verifies: gh #324 gap 5 - **the hyperlink decision reuses the existing ladder.** Adding
+// a second detection is how two answers to "can this terminal link" appear; the brief is
+// explicit that the ladder in `terminal.rs` is the one.
+#[test]
+fn the_link_decision_uses_the_one_hyperlink_ladder() {
+    let fallback = read("crates/lca-tui/src/widgets/image/fallback.rs");
+    let image = read("crates/lca-tui/src/widgets/image.rs");
+    let placeholder = function_body(&image, "pub fn render_image_placeholder(");
+    assert!(
+        placeholder.contains("crate::engine::terminal::supports_hyperlinks()"),
+        "the product path asks the existing ladder: {placeholder}"
+    );
+    // No second **hyperlink** detection. (`env("TERM")` does appear in this file, but it
+    // belongs to `detect_image_protocol_with` - the *graphics protocol* ladder, which is a
+    // different question from "can this terminal link". Asserting on `TERM` alone would
+    // fail on a legitimate, unrelated reader.)
+    assert!(
+        !fallback.contains("LCA_HYPERLINKS") && !image.contains("LCA_HYPERLINKS"),
+        "the fallback does not re-detect hyperlinks on its own"
+    );
+    for body in [
+        function_body(&fallback, "pub fn render_fallback_with("),
+        function_body(&fallback, "fn fallback_link("),
+    ] {
+        assert!(
+            !body.contains("supports_hyperlinks()"),
+            "the decision is passed in, so a row can drive both answers: {body}"
+        );
+    }
+}
+
+// Verifies: gh #324 gap 5 - **a link is a claim the file exists.** The existence check is
+// what keeps the fallback honest after `lca session gc` prunes an attachment; without it
+// the label offers a link to something gone, which the issue's design notes call out as
+// worse than the label it replaced.
+#[test]
+fn a_link_is_only_offered_for_a_file_that_exists() {
+    let image = read("crates/lca-tui/src/widgets/image/fallback.rs");
+    let link = function_body(&image, "fn fallback_link(");
+    assert!(
+        link.contains("if !file_exists(path)"),
+        "the existence check is load-bearing, not decorative: {link}"
+    );
+    assert!(
+        link.contains("if !hyperlinks"),
+        "and so is the capability: {link}"
+    );
+    assert!(
+        link.contains("path.as_deref()?"),
+        "and a path, which a clipboard image does not have: {link}"
+    );
+}
+
+// Verifies: gh #324 gap 5 - **the `file://` URL is a real URL.** `/` stays literal and
+// everything outside the unreserved set is percent-encoded with uppercase hex, which is
+// what `pathToFileURL` produces; a raw space or a raw non-ASCII byte makes the link
+// unopenable.
+#[test]
+fn the_file_url_is_a_real_url() {
+    let image = read("crates/lca-tui/src/widgets/image/fallback.rs");
+    let url = function_body(&image, "pub fn file_url(");
+    assert!(
+        url.contains("b'/' | b'-' | b'_' | b'.' | b'~'"),
+        "the separators and unreserved marks stay literal: {url}"
+    );
+    assert!(
+        url.contains("%{byte:02X}"),
+        "and everything else is uppercase-hex percent-encoded: {url}"
+    );
+    assert!(
+        url.contains("if !path.is_absolute()"),
+        "a relative path has no file:// location: {url}"
+    );
+    assert!(url.contains("file://"), "and the scheme is present");
+}
+
+// Verifies: #326 + gh #324 gap 5 - **the grammar a user reads is unchanged for an image
+// with no file.** The `None` protocol is what most terminals get, so the text must not
+// shift under them: this cycle adds a link and a path, never a reworded sentence.
+#[test]
+fn the_path_less_fallback_keeps_the_326_grammar() {
+    let image = read("crates/lca-tui/src/widgets/image.rs");
+    let placeholder = function_body(&image, "pub fn render_image_placeholder(");
+    assert!(
+        placeholder.contains("if info.path.is_some()"),
+        "the richer form is only for an image that has a file: {placeholder}"
+    );
+    assert!(
+        placeholder.contains("[image {} · {} · {}]"),
+        "and the path-less grammar is the #326 one, verbatim: {placeholder}"
+    );
+}

@@ -41,6 +41,8 @@
 
 mod crop;
 pub use crop::{clip_band, crop_kitty_line, crop_kitty_line_px};
+mod fallback;
+pub use fallback::{fallback_text, file_url, render_fallback, render_fallback_with};
 
 /// What is known about one image without decoding it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,6 +57,13 @@ pub struct ImageInfo {
     pub height: Option<u32>,
     /// Alt text, when the source carried one.
     pub alt: Option<String>,
+    /// The file this image came from, when it came from one (gh #324 gap 5).
+    ///
+    /// `None` for a clipboard paste, which genuinely has no file, and for an attachment
+    /// whose file was pruned. The graphics ladder does not use it; the **fallback** does,
+    /// which is the path most terminals get - it turns a dead label into a `file://` link
+    /// the user can open.
+    pub path: Option<std::path::PathBuf>,
 }
 
 impl ImageInfo {
@@ -70,6 +79,7 @@ impl ImageInfo {
             width,
             height,
             alt: None,
+            path: None,
         }
     }
 }
@@ -188,6 +198,13 @@ fn human_bytes(n: usize) -> String {
 /// Render a legible image placeholder: one or two lines naming the media
 /// type, dimensions, size, and alt text. Never panics on bad input.
 pub fn render_image_placeholder(info: &ImageInfo, width: usize) -> Vec<String> {
+    // Gh #324 gap 5: an image **with a file** gets the fallback grammar and, when the
+    // terminal forwards OSC 8, a link to it. An image without one (a clipboard paste, a
+    // pruned attachment) keeps #326's grammar byte for byte - that is the text most
+    // terminals already show, and this cycle adds a link rather than rewording it.
+    if info.path.is_some() {
+        return render_fallback(info, width, crate::engine::terminal::supports_hyperlinks());
+    }
     let dimensions = match (info.width, info.height) {
         (Some(w), Some(h)) => format!("{w}×{h}"),
         _ => "unknown size".to_string(),
@@ -719,6 +736,7 @@ mod tests {
             width: Some(640),
             height: Some(480),
             alt: Some("a chart".into()),
+            path: None,
         };
         let out = render_image_placeholder(&info, 80);
         assert!(out[0].contains("image/png"));
@@ -1040,6 +1058,7 @@ mod tests {
             width: Some(10),
             height: Some(10),
             alt: None,
+            path: None,
         };
         let lines = render_image(&info, &[1, 2, 3], ImageProtocol::None, 40);
         assert!(lines[0].contains("image/png"));
@@ -1061,6 +1080,7 @@ mod width_tests {
             width: Some(640),
             height: Some(480),
             alt: None,
+            path: None,
         };
         assert_eq!(image_cell_size(&info, 30).0, 30);
         assert_eq!(image_cell_size(&info, 200).0, 72, "natural 640/9 ceiling");

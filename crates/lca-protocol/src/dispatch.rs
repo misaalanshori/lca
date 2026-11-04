@@ -38,6 +38,12 @@ pub enum CommandEffect {
         media_type: String,
         /// The image bytes (for dimensions and size).
         bytes: Vec<u8>,
+        /// The file it came from, when it came from one (gh #324 gap 5).
+        ///
+        /// The host knows it and the transcript does not, and the *fallback* needs it to
+        /// offer a `file://` link - which is the path most terminals (tmux among them)
+        /// actually get. `None` for an image with no file.
+        path: Option<std::path::PathBuf>,
         /// The notice to show alongside it.
         note: String,
     },

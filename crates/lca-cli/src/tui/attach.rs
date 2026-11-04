@@ -115,6 +115,8 @@ impl Ui {
                     Some((media_type, bytes)) => CommandEffect::AttachImage {
                         media_type,
                         bytes,
+                        // `/attach <path>` knows the file, and the fallback links to it.
+                        path: Some(path.to_path_buf()),
                         note,
                     },
                     None => CommandEffect::ShowWidget(note),
@@ -180,6 +182,9 @@ impl Ui {
         CommandEffect::AttachImage {
             media_type: "image/png".to_string(),
             bytes: png,
+            // A clipboard image has no file, so there is nothing to link to (gh #324
+            // gap 5). The fallback says so by rendering the label without a link.
+            path: None,
             note,
         }
     }
