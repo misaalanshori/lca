@@ -74,6 +74,46 @@ fn a_kitty_image_paints_as_one_block_and_the_next_row_starts_below_it() {
     );
 }
 
+// Verifies: gh #324 gap 1 - the block walk is **pi's exact byte shape.** pi
+// (`tui-main-screen.ts`, the `imageReservedRows > 1` branch) emits
+// `2K`, then `\r\n\x1b[2K` per remaining row, then `\x1b[{n}A`, the line,
+// then `\x1b[{n}B`. Prose can drift from code; this pins the sequence, so a
+// hand-rolled variant that "looks equivalent" fails here.
+#[test]
+fn the_block_walk_matches_pis_byte_shape() {
+    let (mut r, mut term) = (MainScreenRenderer::new(), FakeTerminal::new(20, 10));
+    r.render(&mut term, vec!["before".into()], 20, 10);
+    let _ = term.take_output();
+    r.render(
+        &mut term,
+        vec![
+            "before".into(),
+            header(7, 4, 3),
+            String::new(),
+            String::new(),
+            "after".into(),
+        ],
+        20,
+        10,
+    );
+    let out = term.take_output();
+    let header_at = out.find("\x1b_Ga=T").expect("the sequence");
+    // The walk back up is immediately before the sequence, and the down is
+    // immediately after its terminator.
+    let before = &out[..header_at];
+    assert!(
+        before.ends_with("\x1b[2K\r\n\x1b[2K\r\n\x1b[2K\x1b[2A"),
+        "clear, clear, clear, then up two: {before:?}"
+    );
+    let after_seq = &out[header_at..];
+    let terminator = after_seq.find("\x1b\\").expect("the APC terminator") + 2;
+    assert!(
+        after_seq[terminator..].starts_with("\x1b[2B"),
+        "then back down two: {:?}",
+        &after_seq[terminator..(terminator + 8).min(after_seq.len())]
+    );
+}
+
 // Verifies: gh #324 gap 1 - two images in one frame both keep their own block. The
 // filed bug painted the second over the first; here the second must start below
 // the first's reserve and carry a different id.
