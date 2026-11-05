@@ -144,3 +144,58 @@ fn model_choice_before_first_message_rides_pending() {
     assert_eq!(meta.model.as_deref(), Some("model"));
     assert_eq!(meta.provider.as_deref(), Some("prov"));
 }
+
+// Verifies: gh #339 finding 6 - a pending session's log lands **under the sessions
+// root**, never next to the process.
+//
+// The defect was a fallback: `new_pending` used to be
+// `new_pending_with_id(..).unwrap_or_else(|_| Session::new(String::new(),
+// PathBuf::new()))`, and an empty directory joins to the *relative* `log.jsonl`. The
+// first append would then have written a session log into whatever directory the
+// process stood in - a data-location bug with no error and no session root above it.
+//
+// The rows below pin the property rather than the shape: the last one asserts the
+// *relative* path really is what the old handle produced, so a future refactor back to
+// a bare `Session` handle cannot pass by the property quietly becoming vacuous.
+#[test]
+fn a_pending_session_lands_under_the_sessions_root() {
+    let store = store("lazy-scope");
+    let project = scratch("lazy-scope-project");
+    let session = store.new_pending(&project, "test");
+    assert!(
+        session.dir().starts_with(store.sessions_dir()),
+        "the handle's directory sits under the sessions root: {:?} not under {:?}",
+        session.dir(),
+        store.sessions_dir()
+    );
+    assert!(
+        session.log_path().is_absolute(),
+        "so the log path is absolute, never a bare `log.jsonl` in the CWD: {:?}",
+        session.log_path()
+    );
+    assert!(
+        session.log_path().starts_with(store.sessions_dir()),
+        "the log lands in the session, not beside it: {:?}",
+        session.log_path()
+    );
+    assert!(
+        lca_session::valid_session_id(session.id()),
+        "the generated id is valid by construction, which is why the fallback is gone: {:?}",
+        session.id()
+    );
+}
+
+// Verifies: gh #339 finding 6 - the *other* half: validation stays on the path that
+// takes an id from outside, because that one can still fail. Removing the fallback
+// must not have removed the refusal with it.
+#[test]
+fn a_chosen_id_still_validates_before_any_handle_exists() {
+    let store = store("lazy-invalid");
+    let project = scratch("lazy-invalid-project");
+    for bad in ["", "../escape", "a/b", "-leading"] {
+        assert!(
+            store.new_pending_with_id(&project, bad, "t").is_err(),
+            "an id that escapes the project root is refused: {bad:?}"
+        );
+    }
+}

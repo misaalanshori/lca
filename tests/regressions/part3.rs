@@ -544,3 +544,11 @@ mod truncation_and_reasoning_draft;
 // colon grammar, and the order that keeps #366's drop intact.
 #[path = "368-input-reassembly.rs"]
 mod input_reassembly;
+
+// Gh #339: a cleanup batch, and the two cleanups whose fix is a deletion. The
+// record vocabulary had a second 20-arm copy and could only drift silently; the pending
+// session had an empty-path fallback that would have written `log.jsonl` into the
+// process's own directory. Behavioural rows live beside the code; these pin that the
+// deleted shapes stay deleted.
+#[path = "339-deleted-duplicates.rs"]
+mod deleted_duplicates;

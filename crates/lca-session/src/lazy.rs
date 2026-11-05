@@ -11,7 +11,7 @@
 //! error); `close` skips what never materialized. Forks and clones
 //! always write records at creation, so they stay eager.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use super::store::{Session, SessionStore};
 use crate::{Result, ids};
@@ -32,13 +32,24 @@ pub(crate) struct PendingSpec {
 impl SessionStore {
     /// A fresh session without touching disk (gh #122): the id is
     /// real, the directory lands on the first record.
+    ///
+    /// **Infallible without swallowing anything** (gh #339 finding 6). This used to
+    /// be `new_pending_with_id(..).unwrap_or_else(|_| Session::new(String::new(),
+    /// PathBuf::new()))`, and that fallback was a data-location bug rather than a
+    /// tidy-up: an empty directory joins to the *relative* path `log.jsonl`, so the
+    /// first append would have written a session log into whatever directory the
+    /// process happened to be standing in, with no session root above it and nothing
+    /// to tell the user. The only error `new_pending_with_id` can return is
+    /// `InvalidId`, and the id here is **generated**, not read: `{now:013}-{entropy:08x}`
+    /// is digits, a dash, and lowercase hex, which `valid_session_id` accepts for
+    /// every `u64` of clock and entropy. So the constructor that cannot fail is the
+    /// one that takes a generated id, and validation stays on the path that takes an
+    /// id from outside.
+    ///
+    /// `a_pending_session_lands_under_the_sessions_root` pins the property the old
+    /// fallback broke.
     pub fn new_pending(&self, project_dir: &Path, title: &str) -> Session {
-        self.new_pending_with_id(
-            project_dir,
-            &crate::ids::session_id(crate::ids::now_ms()),
-            title,
-        )
-        .unwrap_or_else(|_| Session::new(String::new(), PathBuf::new()))
+        self.register_pending(project_dir, &ids::session_id(ids::now_ms()), title)
     }
 
     /// A fresh session under a chosen id, validating first like the
@@ -53,6 +64,13 @@ impl SessionStore {
         if !crate::valid_session_id(id) {
             return Err(crate::Error::InvalidId { id: id.to_string() });
         }
+        Ok(self.register_pending(project_dir, id, title))
+    }
+
+    /// Register the pending spec and hand back the handle: the half that cannot
+    /// fail, private so no caller reaches it without `valid_session_id` unless it
+    /// generated the id itself (`new_pending`, the only such caller).
+    fn register_pending(&self, project_dir: &Path, id: &str, title: &str) -> Session {
         let canonical =
             std::fs::canonicalize(project_dir).unwrap_or_else(|_| project_dir.to_path_buf());
         let display = super::store::display_path(&canonical);
@@ -69,10 +87,7 @@ impl SessionStore {
                 provider: None,
             },
         );
-        Ok(Session::new(
-            id.to_string(),
-            self.project_dir(project_dir).join(id),
-        ))
+        Session::new(id.to_string(), self.project_dir(project_dir).join(id))
     }
 
     /// Materialize a pending session for an append (gh #122): the
