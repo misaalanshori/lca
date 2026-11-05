@@ -27,6 +27,24 @@ impl FakeCap {
         }
     }
 
+    /// Seed the credential drawer, so a row can drive `access_token`'s refresh path.
+    fn seed(&self, pairs: &[(&str, &str)]) {
+        let mut credentials = self.credentials.lock().unwrap();
+        for (key, value) in pairs {
+            credentials.insert((*key).to_string(), (*value).to_string());
+        }
+    }
+
+    /// The headers of the first recorded request, in order.
+    fn first_request_headers(&self) -> Vec<(String, String)> {
+        self.requests
+            .lock()
+            .unwrap()
+            .first()
+            .map(|(_, _, headers, _)| headers.clone())
+            .unwrap_or_default()
+    }
+
     fn request_bodies(&self) -> Vec<String> {
         self.requests
             .lock()
@@ -387,5 +405,64 @@ fn the_device_flow_primitives_hold() {
     assert_eq!(
         json.get("access_token").and_then(|v| v.as_str()),
         Some("tok-2")
+    );
+}
+
+// Verifies: gh #339 finding 2 - `post_form` was a line-for-line copy of
+// `post_form_accept` minus the `Accept` header. The delegation is the fix, so the guard
+// is on the **wire**: the shared transport must send the form content type either way,
+// add `accept` only for the callers that ask for it, and keep the one bounded read and
+// close. Reading the recorded request rather than the source is what makes a future
+// third caller fail here instead of inheriting a header it never asked for.
+#[test]
+fn the_form_post_sends_accept_only_when_asked() {
+    let pairs = [("client_id", "c1")];
+
+    let accepting = FakeCap::new(vec![(200, b"{}".to_vec())]);
+    lca_subscription::post_form_accept(&accepting, "https://x.test/t", &pairs, "application/json")
+        .expect("accepting post");
+    let sent = accepting.first_request_headers();
+    assert!(
+        sent.iter()
+            .any(|(name, value)| name == "accept" && value == "application/json"),
+        "an accepting caller sends its header: {sent:?}"
+    );
+    assert!(
+        sent.iter()
+            .any(|(name, value)| name == "content-type"
+                && value == "application/x-www-form-urlencoded"),
+        "and the form content type: {sent:?}"
+    );
+    assert_eq!(
+        accepting.request_bodies().len(),
+        1,
+        "one request, not one per header shape"
+    );
+
+    // The plain `post_form` is reached through the refresh path: an expired access
+    // token with a refresh token present.
+    let refreshing = FakeCap::new(vec![(
+        200,
+        br#"{"access_token":"new","expires_in":3600}"#.to_vec(),
+    )]);
+    refreshing.seed(&[("access", "stale"), ("refresh", "r1"), ("expires", "0")]);
+    lca_subscription::access_token(&refreshing, &codex_spec()).expect("refresh");
+    let sent = refreshing.first_request_headers();
+    assert!(
+        !sent.iter().any(|(name, _)| name == "accept"),
+        "the plain form POST asks for nothing extra: {sent:?}"
+    );
+    assert!(
+        sent.iter()
+            .any(|(name, value)| name == "content-type"
+                && value == "application/x-www-form-urlencoded"),
+        "and it is still a form POST: {sent:?}"
+    );
+    let bodies = refreshing.request_bodies();
+    assert!(
+        bodies
+            .first()
+            .is_some_and(|body| body.contains("grant_type=refresh_token")),
+        "with the pairs the caller passed: {bodies:?}"
     );
 }

@@ -53,35 +53,17 @@ fn endpoint(cap: &dyn ProviderCap, key: &str, default: &str) -> String {
 
 /// POST a form and read the whole response (the token calls are small
 /// and request/response, unlike the stream).
+///
+/// Delegates rather than repeating the transport (gh #339 finding 2): this was a
+/// line-for-line copy of [`post_form_accept`] minus the `accept` header, and two
+/// copies of a bounded read, a status call and a close is three places for the
+/// 1 MiB cap or the close to drift out of.
 fn post_form(
     cap: &dyn ProviderCap,
     url: &str,
     pairs: &[(&str, &str)],
 ) -> Result<(u16, String), IdentityFailure> {
-    let body: String = pairs
-        .iter()
-        .map(|(key, value)| format!("{}={}", percent(key), percent(value)))
-        .collect::<Vec<_>>()
-        .join("&");
-    let headers = [("content-type", "application/x-www-form-urlencoded")];
-    let handle = cap
-        .net_request("POST", url, &headers, Some(body.as_bytes()))
-        .map_err(|err| IdentityFailure(err.to_string()))?;
-    let status = cap
-        .net_response_status(handle)
-        .map_err(|err| IdentityFailure(err.to_string()))?;
-    let mut text = Vec::new();
-    while let Some(chunk) = cap
-        .net_read_body(handle, 64 * 1024)
-        .map_err(|err| IdentityFailure(err.to_string()))?
-    {
-        text.extend_from_slice(&chunk);
-        if text.len() > 1024 * 1024 {
-            break;
-        }
-    }
-    let _ = cap.net_close_response(handle);
-    Ok((status, String::from_utf8_lossy(&text).into_owned()))
+    post_form_with_accept(cap, url, pairs, None)
 }
 
 /// POST one JSON object over capabilities and read the bounded
@@ -770,8 +752,7 @@ pub fn poll_device_code(
     }))
 }
 
-/// POST form fields and read the bounded reply, asking for JSON back
-/// (the device endpoints answer url-encoded without the `Accept`).
+/// POST form fields and read the bounded reply with an `Accept` header.
 /// Public for the form-speaking token endpoints (gh #187's refresh).
 pub fn post_form_accept(
     cap: &dyn ProviderCap,
@@ -779,15 +760,30 @@ pub fn post_form_accept(
     pairs: &[(&str, &str)],
     accept: &str,
 ) -> Result<(u16, String), IdentityFailure> {
+    post_form_with_accept(cap, url, pairs, Some(accept))
+}
+
+/// The one form POST (gh #339 finding 2): `accept` is `None` for the callers that
+/// want the endpoint's own default, `Some` for the device endpoints that answer
+/// url-encoded without it.
+fn post_form_with_accept(
+    cap: &dyn ProviderCap,
+    url: &str,
+    pairs: &[(&str, &str)],
+    accept: Option<&str>,
+) -> Result<(u16, String), IdentityFailure> {
     let body: String = pairs
         .iter()
         .map(|(key, value)| format!("{}={}", percent(key), percent(value)))
         .collect::<Vec<_>>()
         .join("&");
-    let headers = [
-        ("content-type", "application/x-www-form-urlencoded"),
-        ("accept", accept),
-    ];
+    // Built by hand rather than as a fixed-length array: the `accept` pair is the
+    // only difference between the two callers, and taking it as an option is what
+    // lets one implementation serve both.
+    let mut headers = vec![("content-type", "application/x-www-form-urlencoded")];
+    if let Some(accept) = accept {
+        headers.push(("accept", accept));
+    }
     let handle = cap
         .net_request("POST", url, &headers, Some(body.as_bytes()))
         .map_err(|err| IdentityFailure(err.to_string()))?;

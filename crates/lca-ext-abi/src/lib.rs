@@ -8,13 +8,16 @@
 #![forbid(unsafe_code)]
 
 /// The ABI version this build implements (`major.minor`, per the manifest's
-/// `abi` field and the support window in docs/abi-versioning.md).
+/// `abi` field and the support window in `docs/abi-versioning.md`).
 ///
-/// `0.4` is the line the ADR-0028 development window's next release train
-/// carries: the ABI label tracks the product minor, so `lca 0.4.y` ships
-/// `abi 0.4` (docs/abi-versioning.md, ADR-0028's second annotation). The
-/// in-place 0.2 changes (typed image content, `provider-login`, the
-/// `list-models` settings parameter) are the train's breaking items.
+/// `0.6` is the line the 0.6 release train carries, and the label no longer
+/// tracks the product minor: since the 2026-10-05 owner annotation it bumps only on a
+/// real breaking change, so `lca 0.6.x` ships `abi 0.6` for the whole line
+/// (`docs/abi-versioning.md`). Breaking changes still land **inside** the line under
+/// ADR-0028's development window - each with its own dated annotation there - which is
+/// why the value below can be `0.6` while `wit/` advertises `@0.6.0`. This comment
+/// previously said `0.4` and listed the 0.2 train's breaking items (gh #339 finding 8):
+/// two release trains stale, in the constant that decides what loads.
 pub const ABI_VERSION: &str = "0.6";
 
 /// The WIT package name that crosses every manifest and registry tag.
@@ -669,8 +672,10 @@ pub use dispatch::{
 #[cfg(feature = "host")]
 #[allow(missing_docs)] // generated bindings: the WIT files carry the docs
 pub mod host {
-    //! Host-side bindings for the worlds written so far. Phase 3, 4, and6
-    //! add their worlds to this module as they land.
+    //! Host-side bindings for every world in `wit/`: all seventeen are generated here
+    //! (sixteen `world-*.wit` files, with `world-tool.wit` carrying both `tool` and
+    //! `tool-catalog`). A world is added to this module in the same change that adds
+    //! its WIT file, so the list has no "not yet" state to describe.
 
     /// The `tool` world.
     pub mod tool {

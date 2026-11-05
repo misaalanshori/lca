@@ -106,7 +106,6 @@ const DENY_PROGRAMS: &[&str] = &[
     "telnet",
     "ftp",
     "tftp",
-    "socat",
 ];
 
 /// A `git` subcommand that reaches the network or moves history off-machine.
@@ -591,6 +590,13 @@ fn path_ok(token: &str, cwd: &Path, workspace: &Path) -> bool {
 fn canonical(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| crate::scope::lexical_normalize(path))
 }
+
+// Gh #339 finding 1's uniqueness row lives in its own file: `DENY_PROGRAMS` is a
+// 120-line table and this file sits at the 1,200-line ceiling, so a row about the table
+// is exactly what should not push it over.
+#[cfg(test)]
+#[path = "shell_deny_tests.rs"]
+mod deny_tests;
 
 #[cfg(test)]
 mod tests {

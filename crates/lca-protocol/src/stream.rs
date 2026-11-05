@@ -99,12 +99,32 @@ pub enum StreamEvent {
 }
 
 impl StreamEvent {
-    /// JSON `type` tag used in the headless `--json` envelopes where this
-    /// event maps one-to-one (`docs/headless.md`).
+    /// The **family** tag for this event: one word per kind of content, not the
+    /// per-variant serde tag.
+    ///
+    /// Gh #339 finding 4: `ReasoningDelta` used to answer `"text"`, the same as
+    /// `TextDelta`. That conflation is the one an LLM-stream consumer cannot
+    /// tolerate - answer text and reasoning text are exactly what
+    /// `docs/headless.md` keeps in separate envelopes (`text-delta` versus
+    /// `thinking-delta`), because a reader that adds thinking to the answer shows a
+    /// conversation the model never had. Reasoning now answers `"reasoning"`, which is
+    /// the variant's own name and a prefix of its wire tag `reasoning-delta`.
+    ///
+    /// The three tool-call variants really are one family (`"tool-call"`), which is why
+    /// this is a family tag and not a rename of the serde tags: `type_tag`-style
+    /// one-to-one is what `Record::type_tag` does, and this is deliberately coarser.
+    ///
+    /// Measured before changing it (the brief asked for the caller survey, not a
+    /// guess): **zero** call sites in the workspace, and the headless envelopes are
+    /// not produced here at all - `lca-cli`'s `HeadlessSink` emits them from
+    /// `TurnEvent` (`docs/headless.md`'s `text-delta` / `thinking-delta` /
+    /// `tool-call`). So the old mapping broke no caller, and the row
+    /// `stream_event_family_tags_keep_reasoning_apart` keeps a future one from
+    /// inheriting it.
     pub fn event_type(&self) -> &'static str {
         match self {
             StreamEvent::TextDelta { .. } => "text",
-            StreamEvent::ReasoningDelta { .. } => "text",
+            StreamEvent::ReasoningDelta { .. } => "reasoning",
             StreamEvent::ToolCallStart { .. } | StreamEvent::ToolCallArgDelta { .. } => "tool-call",
             StreamEvent::ToolCallEnd { .. } => "tool-call",
             StreamEvent::Usage { .. } => "usage",

@@ -42,6 +42,21 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **A fresh session can no longer write its log into the working directory** (gh #339).
+  `Session::new_pending` fell back to `Session::new(String::new(), PathBuf::new())` when the
+  generated id failed validation, and an empty directory joins to the *relative* `log.jsonl`
+  - so the first append would have written a session log into whatever directory the
+  process stood in, with no session root above it and no error. It cannot fail at all: the
+  id is generated (`{now:013}-{entropy:08x}`), and `valid_session_id` accepts that for
+  every clock and entropy value, so `new_pending` now takes a private constructor that
+  neither validates nor falls back while the path that accepts an id from outside keeps
+  validating. Plus seven small verified cleanups in the same batch: a duplicated `"socat"`
+  in `DENY_PROGRAMS` (now guarded by a uniqueness row), `post_form` delegating to
+  `post_form_accept` instead of copying its transport, `record_type_name`'s 20-arm copy of
+  `Record::type_tag` deleted, `StreamEvent::event_type` answering `"reasoning"` for
+  `ReasoningDelta` instead of `"text"`, a dead duplicate `if !self.screen_mode` block in
+  `Chat::viewport` (removed by #374 gap 1), two stale comments, and the `ABI_VERSION` /
+  host-bindings / `default_native_extensions` docs brought up to the 0.6 line.
 - **Typed input survives the terminal's chatter** (gh #368, three bugs in input reassembly). Each
   looked like a different fault and each was the same seam.
   *`Alt+]` froze the session.* A legacy terminal sends `Alt+]` as the OSC introducer `\x1b]` (and

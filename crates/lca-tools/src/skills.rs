@@ -11,9 +11,10 @@
 //! header lines (the first is the name, a `match:` line lists
 //! comma-separated trigger words), then a `---` line, then the body.
 //!
-//! ponytail: the parser duplicates `extensions/skills`'s (the extension
-//! remains a working context-transform example, no longer registered by
-//! default). Move it to a shared crate if a third consumer appears.
+//! The frontmatter parser is **not** this crate's any more: both this host merge and
+//! the `skills` extension call `lca_protocol::skills::parse_skill_text` (gh #156,
+//! gh #304), which is why the old `ponytail:` note about a duplicated parser was
+//! deleted here (gh #339 finding 7) - it described a copy that no longer exists.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};

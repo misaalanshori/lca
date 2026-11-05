@@ -804,3 +804,43 @@ fn extras_merge_key_by_key() {
         Some("new")
     );
 }
+
+// Verifies: gh #339 finding 4 - the family tag keeps reasoning apart from answer
+// text. `ReasoningDelta` answered `"text"`, the same word as `TextDelta`, so a
+// consumer keying on `event_type()` could not tell a model's thinking from what it
+// said. Nothing in the workspace called this (the headless envelopes come from
+// `TurnEvent` in `lca-cli`), which is why the bug survived: the row is on the
+// vocabulary itself, so a future caller inherits a distinction instead of the bug.
+#[test]
+fn stream_event_family_tags_keep_reasoning_apart() {
+    let text = StreamEvent::TextDelta { delta: "x".into() };
+    let reasoning = StreamEvent::ReasoningDelta { delta: "y".into() };
+    assert_eq!(text.event_type(), "text");
+    assert_eq!(
+        reasoning.event_type(),
+        "reasoning",
+        "reasoning is not answer text"
+    );
+    assert_ne!(
+        text.event_type(),
+        reasoning.event_type(),
+        "the two text families must not collide"
+    );
+    // The tool-call family is deliberately coarse: three variants, one word, so a
+    // consumer can group them without matching each case.
+    for event in [
+        StreamEvent::ToolCallStart {
+            call_id: "c".into(),
+            name: "n".into(),
+        },
+        StreamEvent::ToolCallArgDelta {
+            call_id: "c".into(),
+            delta: "{}".into(),
+        },
+        StreamEvent::ToolCallEnd {
+            call_id: "c".into(),
+        },
+    ] {
+        assert_eq!(event.event_type(), "tool-call");
+    }
+}

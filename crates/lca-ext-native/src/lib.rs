@@ -45,10 +45,18 @@ impl NativeRegistry {
     }
 }
 
-/// The first-party extensions this binary ships compiled in
-/// (`extensions/`, each behind its own crate). `stats` feeds the `/stats`
-/// command's text; the Phase 2 move that proved the path was relocating
-/// that built-in behavior out of the TUI and into `hooks-example`.
+/// The first-party handles this binary ships **compiled in**: today exactly one,
+/// `hooks-example` (its own crate under `extensions/`).
+///
+/// Narrowed deliberately (gh #339 finding 8). The doc used to read "the first-party
+/// extensions this binary ships compiled in (`extensions/`, each behind its own crate)",
+/// which described the *whole* `extensions/` tree as in-process - it is not. Everything
+/// else there is a WASM component installed from the catalog (ADR-0019, ADR-0013), and
+/// that distinction is the one a reader of this function needs: what comes back from here
+/// runs unsandboxed, so the list staying short is a property, not an oversight.
+///
+/// `stats` feeds the `/stats` command's text; the Phase 2 move that proved the path was
+/// relocating that built-in behavior out of the TUI and into `hooks-example`.
 pub fn default_native_extensions(stats: StatsSource) -> Vec<NativeHandle> {
     vec![Arc::new(hooks_example::HooksExample::new(stats))]
 }

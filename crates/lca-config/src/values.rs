@@ -206,10 +206,12 @@ impl Config {
         &self.ui_double_escape_action
     }
 
-    /// Pi's `treeFilterMode` domain, accepted config-error-free (gh
-    /// #132): currently inert by documentation - LCA's `/tree` lists
-    /// sessions, not messages, so there is nothing to filter. Known
-    /// but dead is honest; silently dropping the key would not be.
+    /// Pi's `treeFilterMode` domain: the `/tree` navigator's opening filter
+    /// (gh #132, active since gh #231). `lca-ui`'s `TreeFilter::parse` reads it when the
+    /// navigator opens, and `f` cycles from there. This carried an "inert by
+    /// documentation" note from before the navigator existed - it described a `/tree`
+    /// that listed sessions rather than message entries, which has not been true since
+    /// gh #231 (gh #339 finding 7 deleted it).
     pub fn ui_tree_filter_mode(&self) -> &str {
         &self.ui_tree_filter_mode
     }
