@@ -53,6 +53,7 @@ mod copy_ladder;
 pub mod dialogs;
 pub mod ext_widgets;
 pub mod footer;
+pub mod layer_stack;
 mod login_step;
 mod login_trail;
 pub mod logo;

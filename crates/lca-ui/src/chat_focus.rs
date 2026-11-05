@@ -107,17 +107,22 @@ impl Chat {
         // lesser fault of the two: it is in the wrong place, not a corrupted
         // screen. `MainScreenRenderer`'s no-marker arm is the real fix and lives
         // in a file this cycle does not own.
-        if self.picker_open() {
-            return self.picker_field().map_or(Focus::Composer, Focus::Field);
+        // Gh #373 gap 5: one question - which layer is on top - instead of three
+        // predicates in an order that the paint and mouse paths did not share. The IME
+        // candidate window sits beside the surface the user is actually typing into,
+        // which is now the same surface that takes the key and is drawn on top.
+        match self.top_layer() {
+            Some(crate::layer_stack::Layer::Picker) => {
+                self.picker_field().map_or(Focus::Composer, Focus::Field)
+            }
+            Some(crate::layer_stack::Layer::Modal) => {
+                self.modal_field().map_or(Focus::Composer, Focus::Field)
+            }
+            // The search readout is dock chrome, so it is last: an overlay covers it.
+            Some(crate::layer_stack::Layer::Search) => Focus::Field(Field::TranscriptSearch),
+            // The panel owns no keyboard, and an empty stack means the editor.
+            Some(crate::layer_stack::Layer::Panel) | None => Focus::Composer,
         }
-        if self.world.modal_active() || self.world.dialog.is_some() || self.world.wizard.is_some() {
-            return self.modal_field().map_or(Focus::Composer, Focus::Field);
-        }
-        // The search readout is dock chrome, so it is last: an overlay covers it.
-        if self.search.is_some() {
-            return Focus::Field(Field::TranscriptSearch);
-        }
-        Focus::Composer
     }
 
     /// The open picker's text field, in `compose_pickers` order.

@@ -3,7 +3,7 @@
 
 use super::chat::{Chat, highlight_matches};
 use super::ext_widgets::widget_lines;
-use super::render::{overlay_box, overlay_box_picker, side_panel};
+use super::render::{overlay_box_picker, side_panel};
 use crate::chat_pickers::TRUST_OPTIONS;
 
 // E3: a picker owns the keyboard while open, so a slash command typed into
@@ -46,7 +46,7 @@ const HINT_SETTINGS_EDIT: &str = "type the value · enter apply · esc cancel";
 /// before this cycle. A key that works but is not named is a key nobody presses.
 const HINT_SETTINGS_SEARCH: &str =
     "↑↓ move · enter/space/←→ change · tab project · q/esc close · type to search";
-const HINT_LOGIN: &str = "↑↓ move · enter choose · esc cancel";
+pub(super) const HINT_LOGIN: &str = "↑↓ move · enter choose · esc cancel";
 
 pub(crate) use crate::chat_settings_footer::settings_footer_and_hint;
 
@@ -54,7 +54,7 @@ pub(crate) use crate::chat_settings_footer::settings_footer_and_hint;
 /// modal asks for a sensitive read (gh #215): the action text is the
 /// permission action's own display (`read <path>`), so the `read `
 /// prefix peels exactly and the file name decides.
-pub(crate) fn sensitive_read_name(action: &str) -> Option<String> {
+pub(super) fn sensitive_read_name(action: &str) -> Option<String> {
     let path = std::path::Path::new(action.strip_prefix("read ")?);
     let name = path.file_name()?.to_str()?;
     lca_permissions::sensitive::is_sensitive(path).then(|| name.to_string())
@@ -78,7 +78,7 @@ impl Chat {
     // Geometry, title, body, hint, theme, selection: seven inputs is the
     // picker contract; a parameter struct would only rename them.
     #[allow(clippy::too_many_arguments)]
-    fn picker_overlay(
+    pub(super) fn picker_overlay(
         &self,
         viewport: &mut [String],
         width: u16,
@@ -199,10 +199,34 @@ impl Chat {
         // through `&self`, and making it `&mut` for one pair of numbers would ripple
         // through every render call site for no gain.
         self.last_frame_size.set(Some((width, height)));
-        if self.compose_pickers(viewport, width, height) {
+        // Gh #373 gap 5: **paint in the layer order the key path already routed by.**
+        //
+        // This used to be `if compose_pickers(..) { return; }` followed by the modals,
+        // i.e. a picker always won the paint. But `handle_modal_key` runs *first* in the
+        // key path, so a permission prompt raised over an open `/model` picker owned
+        // every keystroke while the picker was the only thing drawn: a user answered a
+        // question they could not see. Painting the top layer instead of the picker
+        // makes the two orders one order.
+        let top = self.top_layer();
+        let picker_paints = self.picker_raised() && !self.picker_covered();
+        if picker_paints
+            && top == Some(crate::layer_stack::Layer::Picker)
+            && self.compose_pickers(viewport, width, height)
+        {
             return;
         }
-        self.compose_modals(viewport, width, height);
+        if self.modal_raised_by_fields() {
+            self.compose_modals(viewport, width, height);
+            if top == Some(crate::layer_stack::Layer::Modal) {
+                return;
+            }
+        }
+        // A picker that is raised but *covered* is deliberately not drawn: the surface
+        // above it occupies the box, and drawing the list underneath would be the same
+        // "painted what is not in charge" fault in the other direction.
+        if picker_paints && self.compose_pickers(viewport, width, height) {
+            return;
+        }
 
         if self.panel_shown(width, height) {
             let mut panel: Vec<String> = Vec::new();
@@ -892,7 +916,7 @@ impl Chat {
         false
     }
 
-    fn login_body(&self, label: &str) -> Vec<String> {
+    pub(super) fn login_body(&self, label: &str) -> Vec<String> {
         let Some(url) = self.world.auth_url.as_deref() else {
             let current = vec![label.to_string(), String::new(), "esc cancels".to_string()];
             return self.with_trail(current);
@@ -913,7 +937,7 @@ impl Chat {
     /// measured wrapped and trimmed from its **oldest** end - the newest steps are
     /// the ones a failure is read against, and the live prompt is never trimmed
     /// at all.
-    fn with_trail(&self, current: Vec<String>) -> Vec<String> {
+    pub(super) fn with_trail(&self, current: Vec<String>) -> Vec<String> {
         let trail = crate::login_trail::trail_rows(&self.world.login_history, &self.theme);
         if trail.is_empty() {
             return current;
@@ -967,214 +991,5 @@ impl Chat {
         // wait's URL or the MCP sign-in screen's. A failure records nothing, so
         // a broken copy never shows a confirmation.
         self.world.url_copied_at = ok.then(std::time::Instant::now);
-    }
-
-    /// Draw the open login/grant/permission/extension modal, if any.
-    /// Compose the extension modal over the viewport.
-    fn compose_modals(&self, viewport: &mut [String], width: u16, height: u16) {
-        // A host-rendered dialog owns the screen outright (gh #124):
-        // nothing stacks under it while it is open.
-        if let Some(modal) = &self.world.dialog {
-            self.compose_host_dialog(viewport, width, height, modal);
-        } else if let Some(label) = &self.world.login_waiting {
-            // R4: a cancellable waiting state, so a slow OAuth callback is
-            // visible and interruptible instead of freezing the app.
-            // Gh #398 gap 1: when the step shows a sign-in URL, the body
-            // carries the copy hint and (where OSC 8 reaches the terminal) the
-            // short clickable label, so an SSH reader never has to mouse-select
-            // a wrapped URL.
-            let body = self.login_body(label);
-            overlay_box(viewport, width, height, "login", &body, &self.theme);
-        } else if let Some(picker) = &self.world.picker {
-            let rows = 15usize.min(height.saturating_sub(7) as usize).max(1);
-            let total = picker.options.len();
-            let start = (picker.selected + 1)
-                .saturating_sub(rows)
-                .min(total.saturating_sub(rows));
-            let end = (start + rows).min(total);
-            // The trail is not merged into a picker's body: `picker_overlay`
-            // windows `body.len() - 2` rows as *items*, so prepending history
-            // would make finished steps scrollable as choices. In every flow that
-            // reaches this picker it is the first step, so the trail is empty.
-            // shortcut: a provider that re-offers the picker mid-flow loses the
-            // trail above it; merge through a header row if that ever happens.
-            let mut body = vec!["Sign in with:".to_string(), String::new()];
-            for (index, option) in picker.options.iter().enumerate().take(end).skip(start) {
-                let cur = if index == picker.selected { '>' } else { ' ' };
-                let hint = if option.hint.is_empty() {
-                    String::new()
-                } else {
-                    format!("   {}", option.hint)
-                };
-                body.push(format!(" {cur} {}{hint}", option.label));
-            }
-            if start > 0 || end < total {
-                body.push(format!("   [{}/{}]", picker.selected + 1, total));
-            }
-            self.picker_overlay(
-                viewport,
-                width,
-                height,
-                "login",
-                &body,
-                HINT_LOGIN,
-                &self.theme,
-                Some(2 + picker.selected.saturating_sub(start)),
-            );
-        } else if let Some(grant) = &self.world.grant {
-            let current = vec![
-                grant.prompt.clone(),
-                String::new(),
-                format!("  connect to {}", grant.host),
-                String::new(),
-                "Allow [y] / Deny [n]".to_string(),
-            ];
-            // Gh #398 gap 2: the consent is a *step of the flow*, not a separate
-            // screen - it names the host the flow just collected, so the trail
-            // above it is what makes the host checkable against what the user
-            // typed.
-            let body = self.with_trail(current);
-            overlay_box(
-                viewport,
-                width,
-                height,
-                &format!("ad hoc grant: {}", grant.provider),
-                &body,
-                &self.theme,
-            );
-        } else if let Some(review) = &self.world.bug_review {
-            // Gh #411 gap 2: the inspection is the gate. The body is the host's
-            // rendered summary (file list, sizes, scrub counts), so the screen
-            // never re-reads the session and cannot drift from what will be
-            // written.
-            let mut body: Vec<String> = review.inspection.lines().map(str::to_string).collect();
-            body.push(String::new());
-            body.push("Write the bundle [y] / Cancel [n]".to_string());
-            overlay_box(
-                viewport,
-                width,
-                height,
-                "bug bundle - review before sharing",
-                &body,
-                &self.theme,
-            );
-        } else if let Some(switch) = &self.world.switch_confirm {
-            let body = vec![
-                switch.prompt.clone(),
-                String::new(),
-                "Switch [y] / Stay [n]".to_string(),
-            ];
-            overlay_box(
-                viewport,
-                width,
-                height,
-                &format!("switch provider: {}", switch.provider),
-                &body,
-                &self.theme,
-            );
-        } else if let Some(secret) = &self.world.secret {
-            // Gh #371 bug 3: the marker sits at the **typed value's** insertion
-            // point, which for a masked field is the end of the asterisks - not
-            // the end of the secret. The mask is built first and the caret is
-            // appended to it, so the anchor follows what the reader can see and
-            // the plaintext never reaches the frame (secrets hygiene, and what
-            // #411's inspection gate established).
-            let (shown, placeholder) = if secret.masked {
-                (
-                    "*".repeat(secret.input.chars().count()),
-                    "(type the secret)",
-                )
-            } else {
-                (secret.input.clone(), "(type a value)")
-            };
-            let current = vec![
-                secret.label.clone(),
-                String::new(),
-                self.caret_row("  ", &shown, placeholder, crate::chat_focus::Field::Secret),
-                String::new(),
-                "Enter stores it; Esc cancels.".to_string(),
-            ];
-            // Gh #398 gap 2: the steps that already happened stay above this one.
-            let body = self.with_trail(current);
-            overlay_box(
-                viewport,
-                width,
-                height,
-                &format!("login: {}", secret.provider),
-                &body,
-                &self.theme,
-            );
-        } else if let Some(modal) = &self.world.permission {
-            let mut body = vec![
-                "Allow this action?".to_string(),
-                String::new(),
-                format!("  {}", modal.action),
-                String::new(),
-            ];
-            // Gh #215: a sensitive read names its security boundary —
-            // allowing it exposes the file's contents to the active
-            // model provider.
-            if let Some(name) = sensitive_read_name(&modal.action) {
-                body.push(format!(
-                    "  ⚠️ Sensitive file read requested ({name}) — allowing this exposes its contents to the active model provider."
-                ));
-                body.push(String::new());
-            }
-            if let Some(deadline) = modal.deadline {
-                let seconds = deadline
-                    .saturating_duration_since(std::time::Instant::now())
-                    .as_secs();
-                body.push(format!(
-                    "auto-approves in {seconds}s - press a key to decide"
-                ));
-                body.push(String::new());
-            }
-            body.push(
-                "[o] once / [a] always this pattern / [t] trust this folder this session / [d] deny"
-                    .to_string(),
-            );
-            overlay_box(
-                viewport,
-                width,
-                height,
-                "permission required",
-                &body,
-                &self.theme,
-            );
-        } else if self.world.modal_open {
-            let trees = self
-                .world
-                .options
-                .render_regions
-                .as_ref()
-                .map(|render| render("modal"))
-                .unwrap_or_default();
-            let mut body: Vec<String> = Vec::new();
-            let mut title = String::from("extension");
-            for (name, tree) in &trees {
-                for line in widget_lines(
-                    &tree.nodes,
-                    &crate::ext_widgets::widget_ctx(
-                        &self.theme,
-                        "modal",
-                        width as usize,
-                        &self.world.ext_scroll,
-                    ),
-                ) {
-                    // A bordered box paints its title (gh #172): the
-                    // chrome reads through the escapes.
-                    if title == "extension"
-                        && let Some(name) = modal_title_line(&line)
-                    {
-                        title = name;
-                    }
-                    body.push(line);
-                }
-                if body.is_empty() {
-                    body.push(name.clone());
-                }
-            }
-            overlay_box(viewport, width, height, &title, &body, &self.theme);
-        }
     }
 }

@@ -42,6 +42,25 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **A prompt raised over an open picker is now the thing you see and the thing that takes your
+  keys, and closing any overlay always hands the keyboard back** (gh #373 gap 5, the last gap on
+  #373). Keyboard ownership was a set of independent booleans — `picker_open()`,
+  `modal_active()`, `search.is_some()` — and four consumers each consulted them in their own
+  order. The measured consequence: a permission prompt raised over an open `/model` picker owned
+  every keystroke (`handle_modal_key` runs first) while `compose_pickers` returned early and never
+  painted it, and `handle_mouse_event` sent clicks to the picker underneath. You answered a
+  question you could not see with a pointer that went somewhere else. Now one **layer stack**
+  answers for the paint, the keys, the caret and the pointer, so the four cannot disagree: the
+  modal rung sits above the picker rung because that is the order the key path always used, and a
+  covered picker is neither painted nor consulted. The stack is *derived* from the surface fields
+  on every ask rather than stored, so a surface added later cannot forget to register and a close
+  of any layer — including the middle of three — leaves a coherent order by construction. An empty
+  stack means the editor has the keyboard, which is now one pinned fact instead of three
+  predicates being false. Two pre-existing holes fell out of the same derivation: `bug_review` and
+  `switch_confirm` take keys and paint but were missing from `modal_active`, so a `/bug`
+  inspection screen was invisible to every predicate that asked about modals; and the panel is
+  explicitly a composited rung that never owns the keyboard, so it cannot become a mode you have
+  to escape from before you can type.
 - **A percentage overlay position now positions the overlay, not its corner** (gh #373 gap 4).
   `resolve_overlay_layout` resolved a percentage `row`/`col` as `term * p / 100`, so
   `Percent(50)` put the box's **top-left corner** at the midpoint instead of centring it,

@@ -55,24 +55,22 @@ impl Chat {
     /// own question): the overlay test the viewport draws with, and the
     /// gate every contextual key asks first - gh #9's copy key among
     /// them.
+    ///
+    /// Gh #373 gap 5: the answer is **which surface is on top**, not which fields are
+    /// set. A picker with a permission prompt above it is present but not in charge,
+    /// and the old field test could not say so - which is how a prompt over a picker
+    /// painted nothing while taking every key.
     pub(super) fn picker_open(&self) -> bool {
-        self.theme_picker.is_some()
-            || self.thinking_picker.is_some()
-            || self.model_picker.is_some()
-            || self.tree_picker.is_some()
-            || self.trust_picker.is_some()
-            || self.resume_picker.is_some()
-            || self.grants_picker.is_some()
-            || self.fork_picker.is_some()
-            || self.scoped_models_picker.is_some()
-            || self.extension_hub.is_some()
-            || self.extension_manager.is_some()
-            || self.mcp_manager.is_some()
-            || self.install_consent.is_some()
-            // Gh #165: the settings selector is a keyboard-owning
-            // overlay like the rest (it draws through the same
-            // composer), so the click and key gates count it.
-            || self.settings_picker.is_some()
+        self.top_layer() == Some(crate::layer_stack::Layer::Picker)
+    }
+
+    /// Whether a picker is raised at all, covered or not.
+    ///
+    /// Different question from [`Self::picker_open`], and the difference is the bug: a
+    /// painter asking this must also ask [`Self::picker_covered`] (or composite in
+    /// [`Self::layers`] order) to avoid drawing the wrong thing on top.
+    pub(super) fn picker_raised(&self) -> bool {
+        self.layers().contains(crate::layer_stack::Layer::Picker)
     }
 
     /// Whether this key is pi's message-copy key with the editor owning
@@ -90,11 +88,13 @@ impl Chat {
         if self.mcp_sign_in_url().is_some() {
             return self.keybindings.matches(data, "app.message.copy");
         }
-        if self.picker_open() || self.search.is_some() {
-            return false;
-        }
-        if self.world.modal_active() && self.world.login_waiting.is_none() {
-            return false;
+        // Gh #373 gap 5: one question - who is on top - rather than three predicates
+        // whose orders could disagree. The OAuth wait stays the exception it always
+        // was: a waiting screen is not a question, and its copy target is the URL.
+        match self.top_layer() {
+            Some(crate::layer_stack::Layer::Panel) | None => {}
+            Some(_) if self.world.login_waiting.is_none() => return false,
+            Some(_) => {}
         }
         self.keybindings.matches(data, "app.message.copy")
     }
@@ -128,10 +128,10 @@ impl Chat {
     /// without the fullscreen / modal / picker / search checks. Mirrors pi's
     /// `shouldDeferViewportInputToOverlay`.
     fn viewport_owns(&self, _data: &str) -> bool {
-        self.screen_mode
-            && !self.world.modal_active()
-            && !self.picker_open()
-            && self.search.is_none()
+        // Gh #373 gap 5: the viewport owns a scroll key only when **nothing** is above
+        // it. Asking the stack is the same question the old three predicates asked,
+        // now with one answer instead of three that had to all be false.
+        self.screen_mode && self.top_layer().is_none()
     }
 
     /// The viewport-scroll target this key names, if the viewport owns it.

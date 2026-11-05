@@ -114,16 +114,23 @@ pub(crate) fn handle_mouse_event(event: MouseEvent, chat: &mut Chat, screen: &mu
         return false;
     }
     // Pi stops scrollbar hover while an overlay owns the viewport.
-    if chat.picker_open() {
-        chat.scrollbar_hover = false;
-        screen.set_scrollbar_hover(false);
-        chat.drawer_hover = false;
+    //
+    // Gh #373 gap 5: route by **the top layer**, the question the key path already
+    // asks. This tested `picker_open()` first, so a permission prompt raised over an
+    // open picker sent clicks to the picker while keys went to the prompt - the pointer
+    // and the keyboard disagreeing about which surface was in charge. A covered picker
+    // no longer receives the click, because a covered layer is not the one on top.
+    chat.scrollbar_hover = false;
+    screen.set_scrollbar_hover(false);
+    chat.drawer_hover = false;
+    let top = chat.top_layer();
+    let picker_on_top =
+        top == Some(crate::layer_stack::Layer::Picker) || (top.is_none() && chat.picker_raised());
+    if picker_on_top {
         return handle_picker_mouse(event, chat, screen);
     }
-    if chat.world.modal_active() {
-        chat.scrollbar_hover = false;
-        screen.set_scrollbar_hover(false);
-        chat.drawer_hover = false;
+    if top.is_some() {
+        // A layer above the picker owns the pointer, and it has no hittable region.
         return false;
     }
     let (width, height) = chat.world.size;

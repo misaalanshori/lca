@@ -778,8 +778,14 @@ impl Chat {
             return Action::Continue;
         }
 
-        // The transcript search owns the keyboard while open (FR-UI-12).
-        if self.search.is_some() {
+        // The transcript search owns the keyboard while open (FR-UI-12) - and **only
+        // while it is the layer on top** (gh #373 gap 5). It used to take every key
+        // whenever a query was set, so a search running under a raised modal swallowed
+        // the modal's keys... except that the modal is dispatched earlier, so the real
+        // defect was the reverse: `render` decided padding from a predicate set while
+        // an overlay drew over the readout. Asking the stack makes "the search has the
+        // keyboard" and "the search is visible" the same fact.
+        if self.top_layer() == Some(crate::layer_stack::Layer::Search) {
             return self.handle_search_key(data, key.as_deref());
         }
         if self.keybindings.matches(data, "app.tools.expand") {

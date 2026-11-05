@@ -358,3 +358,129 @@ fn no_caller_positions_an_overlay_with_a_percentage() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// gap 5: one layer stack, so paint / keys / mouse / focus cannot disagree
+// ---------------------------------------------------------------------------
+//
+// Keyboard ownership was a set of independent predicates (`picker_open()`,
+// `modal_active()`, `search.is_some()`) plus four consumers that each consulted them in
+// their own order. The measured consequence: a permission prompt raised over an open
+// `/model` picker owned every keystroke (`handle_modal_key` runs first) while
+// `compose_pickers` refused to paint it, and `handle_mouse_event` sent clicks to the
+// picker. A user answered a question they could not see, with a mouse that went
+// somewhere else.
+//
+// The behavioural rows live in `crates/lca-ui/src/chat_panel_tests.rs` and
+// `run_mouse_tests.rs`. These pin the shape:
+
+// Verifies: gh #373 gap 5 - **the ownership predicates are derived from the stack.**
+//
+// A predicate that tests its own fields is how the four consumers drifted: each could
+// see a different subset. `picker_open` must ask the stack, and the stack must be
+// derived from the surface fields rather than stored, because a stored stack needs a
+// push at every open path and a pop at every close - and one missed pop is the stranded
+// layer this gap exists to remove.
+#[test]
+fn the_ownership_predicates_are_derived_from_one_stack() {
+    let keys = read("crates/lca-ui/src/chat_keys.rs");
+    let body = function_body(&keys, "pub(super) fn picker_open(");
+    assert!(
+        body.contains("top_layer()"),
+        "picker_open asks the stack, not its own field list: {body}"
+    );
+    assert!(
+        !body.contains("self.model_picker.is_some()"),
+        "and no longer enumerates pickers itself: {body}"
+    );
+
+    let panel = read("crates/lca-ui/src/chat_panel.rs");
+    let derive = function_body(&panel, "pub(crate) fn layers(");
+    assert!(
+        derive.contains("LayerStack::new()"),
+        "the stack is built per ask, not held: {derive}"
+    );
+    for layer in [
+        "Layer::Search",
+        "Layer::Panel",
+        "Layer::Picker",
+        "Layer::Modal",
+    ] {
+        assert!(
+            derive.contains(layer),
+            "every rung is present in the derivation: {layer}"
+        );
+    }
+}
+
+// Verifies: gh #373 gap 5 - **all four consumers ask the same question.**
+//
+// The bug was not a missing branch; it was four consumers with four orders. This is the
+// guard that keeps them converged: each one names the stack, and none re-implements the
+// precedence with its own predicate pair.
+#[test]
+fn every_consumer_routes_through_the_stack() {
+    // The key path's two gates.
+    let keys = read("crates/lca-ui/src/chat_keys.rs");
+    assert!(
+        keys.contains("self.top_layer()"),
+        "the key path asks the stack"
+    );
+    // The pointer path.
+    let mouse = read("crates/lca-ui/src/run_mouse.rs");
+    assert!(
+        mouse.contains("chat.top_layer()"),
+        "the pointer path asks the stack"
+    );
+    assert!(
+        !mouse.contains("if chat.picker_open() {"),
+        "and no longer tests the picker first, which is what split pointer from keyboard"
+    );
+    // The caret / IME path.
+    let focus = read("crates/lca-ui/src/chat_focus.rs");
+    assert!(
+        focus.contains("self.top_layer()"),
+        "the focus path asks the stack"
+    );
+    // The painter.
+    let overlays = read("crates/lca-ui/src/chat_overlays.rs");
+    assert!(
+        overlays.contains("self.top_layer()"),
+        "the painter asks the stack - this is the half that was missing"
+    );
+}
+
+// Verifies: gh #373 gap 5 - **the modal rung is above the picker rung**, because that is
+// the order the key path has always used, and the bug was the paint path disagreeing.
+//
+// Asserted on the derivation's literal sequence rather than on a resolved stack: a
+// resolved stack only shows whichever layers happen to be up in that fixture, while the
+// order of the rungs is the property that must not be reordered.
+#[test]
+fn the_modal_rung_sits_above_the_picker_rung() {
+    let panel = read("crates/lca-ui/src/chat_panel.rs");
+    let derive = function_body(&panel, "pub(crate) fn layers(");
+    let picker = derive
+        .find("Layer::Picker")
+        .expect("the picker rung is listed");
+    let modal = derive
+        .find("Layer::Modal")
+        .expect("the modal rung is listed");
+    assert!(
+        picker < modal,
+        "a question is raised above a list, matching `handle_modal_key`'s precedence"
+    );
+}
+
+// Verifies: gh #373 gap 5 - **the panel is composited but never takes the keyboard.**
+//
+// It is the one layer that must not answer "who owns the next key", or `Alt+X` would
+// become a mode you have to escape from before you can type.
+#[test]
+fn the_panel_layer_declares_itself_keyboard_less() {
+    let stack = read("crates/lca-ui/src/layer_stack.rs");
+    assert!(
+        stack.contains("!matches!(self, Layer::Panel)"),
+        "owns_keyboard excludes the panel"
+    );
+}

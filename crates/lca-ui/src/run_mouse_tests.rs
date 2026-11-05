@@ -219,3 +219,43 @@ fn a_move_over_the_popup_does_not_select_an_offer() {
         "a move over the popup does not move the offer selection"
     );
 }
+
+// Verifies: gh #373 gap 5 - **the real pointer dispatch routes by the top layer.**
+//
+// `handle_mouse_event` asked `picker_open()` first, so a permission prompt raised over
+// an open picker sent every click to the picker while every key went to the prompt.
+// This drives the actual entry point, not the predicate it delegates to.
+#[test]
+fn a_prompt_over_a_picker_takes_the_click_not_the_picker() {
+    use lca_tui::engine::core::{Modifiers, MouseButton, MouseEvent};
+
+    let (mut chat, mut screen, _term) = picker_chat();
+    let (col, row) = item_cell(&chat, 3);
+    chat.world.permission = Some(crate::state::PermissionModal {
+        action: "shell cargo test".to_string(),
+        respond: None,
+        deadline: None,
+    });
+    assert_eq!(chat.top_layer(), Some(crate::layer_stack::Layer::Modal));
+
+    let before = chat.model_picker.as_ref().map(|p| p.selected);
+    let consumed = handle_mouse_event(
+        MouseEvent::Down {
+            col,
+            row,
+            button: MouseButton::Left,
+            modifiers: Modifiers::default(),
+        },
+        &mut chat,
+        &mut screen,
+    );
+    assert!(
+        !consumed,
+        "the modal rung swallows the click rather than handing it to the picker"
+    );
+    assert_eq!(
+        chat.model_picker.as_ref().map(|p| p.selected),
+        before,
+        "so the covered picker's selection did not move under the pointer"
+    );
+}

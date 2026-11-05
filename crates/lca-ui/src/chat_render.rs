@@ -414,6 +414,12 @@ impl Chat {
     }
 
     /// Render the whole document (transcript + dock) at a width.
+    ///
+    /// Gh #373 gap 5: the document itself carries no overlays, but the *stack* is
+    /// derived here too so a caller that reads `layers` immediately after a render
+    /// (every test does, and the mouse path can) is not reading a stale order. The
+    /// derive is a pure function of the surface fields, so asking it twice a frame
+    /// costs a handful of `Option` tests and cannot disagree with itself.
     pub fn render(&self, width: u16) -> Vec<String> {
         let (mut out, dock) = self.sections(width);
         out.extend(dock);
@@ -841,7 +847,11 @@ impl Chat {
         framed.extend(lines);
         framed.extend(dock);
         let mut lines = framed;
-        if self.world.modal_active() || self.picker_open() {
+        // Gh #373 gap 5: pad for a keyboard-owning layer, asked the same way the key
+        // and mouse paths ask. The old pair of predicates could be false while a third
+        // layer (a wizard) was drawing, which left the overlay composited over an
+        // unpadded document.
+        if self.top_layer().is_some() || self.picker_raised() {
             lines.resize(height as usize, String::new());
         }
         self.compose_overlays(&mut lines, width, height);
