@@ -85,3 +85,26 @@ fn the_pending_session_has_no_empty_path_fallback() {
         "the path that takes an id from outside still validates it: {source}"
     );
 }
+
+/// **Why** the deleted fallback was a data-location bug, stated as a fact rather than
+/// as prose: an empty session directory joins to a *relative* path.
+///
+/// This is the mechanism behind the behaviour the row in `crates/lca-session/tests/lazy.rs`
+/// pins. Without it, "the fallback was wrong" is an assertion about history; with it, a
+/// future refactor that reintroduces a bare handle fails here for the reason the fallback
+/// was removed rather than for its spelling.
+#[test]
+fn an_empty_session_directory_logs_into_the_working_directory() {
+    let empty = PathBuf::new();
+    let log = empty.join("log.jsonl");
+    assert_eq!(
+        log,
+        PathBuf::from("log.jsonl"),
+        "an empty directory joins to the bare file name"
+    );
+    assert!(
+        !log.is_absolute(),
+        "so an append would create it relative to the process's own directory: {}",
+        log.display()
+    );
+}
