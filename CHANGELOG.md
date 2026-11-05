@@ -42,6 +42,19 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **A webfetch cut short at the 1 MiB read bound now says so** (gh #351). The fetch loop
+  stops reading at 1 MiB, but the only omission marker in the tool was for the *output*
+  bound (50 KiB) - so a page whose first 1 MiB converted to less text than that came back
+  with no sign anything was missing. Measured: a 2.2 MB page whose first 1 MiB is one
+  inline `<script>` (an ordinary shape for a real site) returned an **empty string and no
+  marker**, which reads as "this page was empty". The cut now reports itself with its own
+  marker, appended after the output bound so a page long in both senses carries both
+  facts, and "did the page continue" is answered by one read past the cap rather than by
+  the loop's budget running out - so a page that ends *exactly* on the bound is not
+  mislabelled as cut. The test that exposed it: `FakeNet` in `webfetch`'s suite answered
+  `Some` on every read and had no `Ok(None)` at all, so every row in the file exited
+  through the truncation branch and the complete-fetch path had never once run; the fake
+  now carries a cursor and the rows assert the read count that proves which branch ran.
 - **A fresh session can no longer write its log into the working directory** (gh #339).
   `Session::new_pending` fell back to `Session::new(String::new(), PathBuf::new())` when the
   generated id failed validation, and an empty directory joins to the *relative* `log.jsonl`

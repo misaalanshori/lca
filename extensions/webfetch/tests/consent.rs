@@ -116,6 +116,27 @@ fn server(body: &'static str) -> (String, std::thread::JoinHandle<()>) {
     (format!("http://{addr}"), handle)
 }
 
+/// The same loopback server for a body that is not a `&'static str` (a page
+/// larger than the read bound has to be built at run time).
+fn server_owned(body: Vec<u8>) -> (String, std::thread::JoinHandle<()>) {
+    let listener = StdTcpListener::bind("127.0.0.1:0").expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let handle = std::thread::spawn(move || {
+        if let Some(mut stream) = listener.incoming().flatten().next() {
+            use std::io::{Read, Write};
+            let mut buf = [0u8; 4096];
+            let _ = stream.read(&mut buf);
+            let head = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(head.as_bytes());
+            let _ = stream.write_all(&body);
+        }
+    });
+    (format!("http://{addr}"), handle)
+}
+
 fn request(url: &str) -> FetchRequest {
     FetchRequest {
         url: url.to_string(),
@@ -355,4 +376,52 @@ fn the_bundled_fetch_tool_ships_with_declaration_only_grants() {
     assert!(!grants.fs_declared, "the fetch tool reads no files");
     assert!(!grants.process, "the fetch tool spawns nothing");
     assert!(!grants.pty, "the fetch tool opens no terminal");
+}
+
+// Verifies: gh #351 - the input cut is reported through the **real** transport, not
+// only through the fake.
+//
+// The behavioural rows build their bodies in memory, so they prove the pipeline's
+// arithmetic; this row proves the answer survives the capability engine's own chunking
+// (`Capabilities::net_read_body` returns one data frame per call and `Ok(None)` at end
+// of stream), which is the half a fake can never pin.
+//
+// The page is 2.2 MB of `<script>` with the answer after it. Before this cycle that
+// returned an empty string and no marker - the shape measured in the report.
+#[test]
+fn a_real_transfer_cut_at_the_bound_says_so() {
+    let sandbox = Sandbox::new("input-cut");
+    let page = format!(
+        "<html><body><script>{}</script><p>REAL ACTUAL ANSWER</p></body></html>",
+        "// padding\n".repeat(200_000)
+    );
+    assert!(
+        page.len() > webfetch::INPUT_MAX,
+        "the page crosses the bound"
+    );
+    let (url, server) = server_owned(page.into_bytes());
+    let caps = engine(
+        &sandbox,
+        Some(Arc::new(Mutex::new(Recording {
+            answer: Decision::Once,
+            asked: Arc::new(Mutex::new(Vec::new())),
+        }))),
+    );
+    let out = webfetch::fetch(
+        &FetchRequest {
+            format: webfetch::Format::Text,
+            ..request(&url)
+        },
+        &*caps,
+    )
+    .expect("fetch");
+    assert!(
+        !out.contains("REAL ACTUAL ANSWER"),
+        "the answer really is past the bound: {out:?}"
+    );
+    assert!(
+        out.contains(webfetch::INPUT_TRUNCATION_MARKER),
+        "so the answer says the page was cut: {out:?}"
+    );
+    server.join().expect("server");
 }

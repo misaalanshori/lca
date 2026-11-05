@@ -10,9 +10,12 @@
 //! and strips all tags instead.
 //!
 //! Bounds: the read loop stops at 1 MiB input (memory safety for the
-//! sandbox); the returned text truncates at 50 KiB with an omission
-//! marker (token safety for the model). Timeouts clamp to 1–120s
-//! (default 30) and wrap the whole fetch.
+//! sandbox) and, when the page continued past that, says so with
+//! [`INPUT_TRUNCATION_MARKER`] (gh #351 — before it, the cut was silent
+//! whenever the converted text stayed under 50 KiB, so a boilerplate-heavy
+//! page came back empty and unmarked); the returned text truncates at
+//! 50 KiB with an omission marker (token safety for the model). Timeouts
+//! clamp to 1–120s (default 30) and wrap the whole fetch.
 //!
 //! Delivery note: both halves run the **same** pipeline
 //! (`fetch` → `convert`), over a `NetView` the mode supplies — the native
@@ -55,6 +58,17 @@ pub const OUTPUT_MAX: usize = 50 * 1024;
 pub const INPUT_MAX: usize = 1024 * 1024;
 /// Omission marker for truncated output.
 pub const TRUNCATION_MARKER: &str = "\n…(truncated to the 50 KiB fetch bound)";
+
+/// Omission marker for a page that ran past the **input** bound (gh #351).
+///
+/// Distinct from [`TRUNCATION_MARKER`] because it says something different: the
+/// text that came back is not merely long, it is *missing whatever was after the
+/// cut*. The read loop stops at 1 MiB, and until this marker existed that stop was
+/// reported only when the converted text happened to exceed the output bound - so a
+/// 1.4 MB page whose 1 MiB prefix was mostly `<script>` came back as an **empty
+/// string with no marker at all**, which reads to the model as "the page was empty".
+pub const INPUT_TRUNCATION_MARKER: &str =
+    "\n…(page cut at the 1 MiB read bound; everything after it was not read)";
 
 /// Output shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -500,6 +514,20 @@ fn fetch_via(request: &FetchRequest, net: &dyn NetView, handle: u32) -> Result<S
             _ => break,
         }
     }
+    // **Did the page continue past the cap?** (gh #351.) `body.len() >= INPUT_MAX`
+    // says the loop ran out of budget, not that the source ended there, and the
+    // difference is the whole point: a source that ended exactly on the cap loses
+    // nothing. One extra read answers it, and only when the budget was reached.
+    //
+    // A failed peek is answered as "no continuation" rather than propagated: the
+    // page is already in hand, and losing a 1 MiB fetch because the connection
+    // closed a moment early would be a worse outcome than an unmarked cut.
+    let cut_at_input = body.len() >= INPUT_MAX
+        && net
+            .read_body(handle, 64 * 1024)
+            .ok()
+            .flatten()
+            .is_some_and(|chunk| !chunk.is_empty());
     let text = String::from_utf8_lossy(&body).into_owned();
     let converted = if is_html {
         convert(&text, request.format)
@@ -508,7 +536,12 @@ fn fetch_via(request: &FetchRequest, net: &dyn NetView, handle: u32) -> Result<S
         // bounds it like everything else.
         text
     };
-    Ok(bound(&converted))
+    let mut out = bound(&converted);
+    if cut_at_input {
+        // After `bound`, so a page that is long in *both* senses carries both facts.
+        out.push_str(INPUT_TRUNCATION_MARKER);
+    }
+    Ok(out)
 }
 
 /// Truncate to the output bound with the omission marker (char

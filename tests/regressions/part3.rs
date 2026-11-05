@@ -552,3 +552,15 @@ mod input_reassembly;
 // deleted shapes stay deleted.
 #[path = "339-deleted-duplicates.rs"]
 mod deleted_duplicates;
+
+// Gh #351 finding 1: the webfetch harness could only express one of the two ways a
+// body ends, so every row exited through the input cap and the complete-fetch path had
+// never run. Closing the gap exposed a defect instead of just a gap: the 1 MiB input cut
+// was **silent** whenever the converted text stayed under 50 KiB, so a boilerplate-heavy
+// page came back as an empty string with no marker. The behavioural rows live in
+// `extensions/webfetch/tests/webfetch.rs` (that crate's `html2md` is GPL-3.0+, so it
+// cannot be a dependency here); this file pins the two distinct markers, that the input
+// one survives the output bound, and that "the page continued" is asked of the transport
+// rather than inferred from the loop's budget.
+#[path = "351-webfetch-input-cut-is-reported.rs"]
+mod webfetch_input_cut;
