@@ -224,6 +224,19 @@ pub struct Chat {
     pub(super) last_transcript_len: Option<usize>,
     /// The width that count was measured at (gh #35).
     pub(super) last_render_width: u16,
+    /// The size the last frame resolved overlays against (gh #373 gap 6).
+    ///
+    /// Kept because **input dispatch runs between frames** and must not disagree with
+    /// the frame about whether an overlay is on screen. A predicate that is asked at
+    /// paint time and never at key time is how an overlay hidden by a width breakpoint
+    /// goes on owning the keyboard - the exact failure the option exists to prevent.
+    pub(super) last_frame_size: std::cell::Cell<Option<(u16, u16)>>,
+    /// The extension side panel's own visibility predicate (gh #373 gap 6).
+    ///
+    /// The panel is LCA's floating HUD: it takes the right 40 columns while open, so on
+    /// a narrow pane it should hide itself. `None` means always show it while
+    /// `panel_open` - every existing host's behaviour.
+    pub(super) panel_visible: Option<Box<dyn Fn(u16, u16) -> bool>>,
     /// The screen scroll at the last frame (gh #209): the run loop
     /// mirrors it here so a tab switch can save the reader's place.
     pub(crate) last_scroll: u16,
@@ -323,6 +336,13 @@ impl Chat {
         // on the chat so a session switch can re-push the header entry.
         let startup_header = std::mem::take(&mut world.options.initial_header);
         let attachment_loader = world.options.hooks.load_attachment.clone();
+        // Gh #373 gap 6: the host's panel breakpoint, taken before `world` moves in.
+        let panel_visible: Option<Box<dyn Fn(u16, u16) -> bool>> =
+            world.options.hooks.panel_visible.clone().map(
+                |visible| -> Box<dyn Fn(u16, u16) -> bool> {
+                    Box::new(move |cols, rows| visible(cols, rows))
+                },
+            );
         let thinking_visibility = world.options.thinking_visibility;
         let codeblock_border = world.options.codeblock_border;
         // S5: the configured theme resolves through the auto-pair grammar
@@ -451,6 +471,8 @@ impl Chat {
             hover_at: None,
             last_transcript_len: None,
             last_render_width: 0,
+            last_frame_size: std::cell::Cell::new(None),
+            panel_visible,
             last_scroll: 0,
             tabs: Vec::new(),
             active_tab: 0,
@@ -1128,39 +1150,8 @@ impl Chat {
     }
 }
 
-/// The visible text of a line with ANSI stripped (for search matching).
-pub(super) fn strip_ansi(line: &str) -> String {
-    lca_tui::engine::text::strip_terminal_sequences(line)
-}
-
-/// Wrap case-insensitive occurrences of `query` in inverse video
-/// (char-boundary-safe; skips a line when case folding changes its length).
-pub(super) fn highlight_matches(line: &str, query: &str) -> String {
-    let line_chars: Vec<char> = line.chars().collect();
-    let query_chars: Vec<char> = query.to_lowercase().chars().collect();
-    if query_chars.is_empty() {
-        return line.to_string();
-    }
-    let lower: Vec<char> = line.to_lowercase().chars().collect();
-    if lower.len() != line_chars.len() {
-        return line.to_string();
-    }
-    let mut out = String::new();
-    let mut i = 0;
-    while i + query_chars.len() <= line_chars.len() {
-        if lower[i..i + query_chars.len()] == query_chars[..] {
-            out.push_str("\x1b[7m");
-            out.extend(&line_chars[i..i + query_chars.len()]);
-            out.push_str("\x1b[27m");
-            i += query_chars.len();
-        } else {
-            out.push(line_chars[i]);
-            i += 1;
-        }
-    }
-    out.extend(&line_chars[i..]);
-    out
-}
+mod chat_highlight;
+pub(crate) use chat_highlight::{highlight_matches, strip_ansi};
 
 #[cfg(test)]
 #[path = "chat_offset_tests.rs"]

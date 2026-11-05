@@ -70,7 +70,7 @@ impl Chat {
         {
             return Some(hit);
         }
-        if self.world.panel_open
+        if self.panel_shown(width, height)
             && let Some(hit) = self.click_panel(col, row, width)
         {
             return Some(hit);
@@ -249,7 +249,7 @@ impl Chat {
         col: u16,
         row: u16,
         width: u16,
-        _height: u16,
+        height: u16,
         delta: i32,
     ) -> bool {
         if !self.screen_mode {
@@ -275,7 +275,7 @@ impl Chat {
             self.send_ext_input("modal", &lca_protocol::UiInput::Scroll { delta });
             return true;
         }
-        if self.world.panel_open {
+        if self.panel_shown(width, height) {
             let panel_w = 40usize.min(width as usize / 2);
             if (col as usize) >= (width as usize).saturating_sub(panel_w) {
                 let _ = row;
@@ -436,7 +436,7 @@ impl Chat {
         let row = (self.window_height(width, height) as u16)
             .saturating_sub(1)
             .saturating_add(self.tab_top(width));
-        let col = if self.world.panel_open {
+        let col = if self.world.panel_open && self.panel_shown(width, height) {
             width.saturating_sub(super::render::panel_width(width) as u16)
         } else {
             width.saturating_sub(2)

@@ -126,6 +126,11 @@ const NON_OVERLAY_EXEMPTIONS: &[&str] = &[
     // it is a different question from "which tab is this surface on". Recorded here so
     // the exemption is a decision rather than an omission.
     "dialog",
+    // gh #373 gap 6: the panel's **visibility predicate**, not a panel. It is host
+    // configuration (like `theme` or the keybindings), so it belongs to every tab and
+    // closing it on a tab switch would be the bug rather than the fix. The panel
+    // itself is still `world.panel_open`, which the flag rule below owns.
+    "panel_visible",
     // Not surfaces: the loop's wake channel, a login URL already handed to the browser,
     // and a "copied" confirmation timestamp belonging to the previous step.
     "waker",

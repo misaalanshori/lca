@@ -1029,6 +1029,10 @@ mod tooltip_tests;
 #[path = "chat_overlay_tests.rs"]
 mod overlay_tests;
 
+// gh #373 gap 6: the overlay visibility predicates, split at the ceiling.
+#[path = "chat_panel_tests.rs"]
+mod panel_tests;
+
 // gh #372 bug 2 (the padding follows its reason), split at the ceiling.
 #[path = "chat_padding_tests.rs"]
 mod padding_tests;

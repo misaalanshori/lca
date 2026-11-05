@@ -61,7 +61,7 @@ pub fn overlay_box_selected(
 pub fn picker_overlay_options(
     height: u16,
     above_rows: usize,
-) -> lca_tui::engine::core::OverlayOptions {
+) -> lca_tui::engine::core::OverlayOptions<'static> {
     lca_tui::engine::core::OverlayOptions {
         width: Some(lca_tui::engine::core::SizeValue::Percent(80)),
         min_width: Some(24),

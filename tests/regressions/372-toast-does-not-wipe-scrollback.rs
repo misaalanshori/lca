@@ -187,6 +187,20 @@ fn overlays_source() -> String {
     .expect("chat_overlays.rs is readable")
 }
 
+/// The overlay **visibility** predicates, which gh #373 gap 6 split out of
+/// `chat_overlays.rs` at the file ceiling.
+///
+/// Read here rather than inlined because this guard's subject is the chain
+/// `pad -> has_overlay -> panel_shown_now -> panel_shown -> panel_open`, and a chain
+/// that spans two files is exactly the kind a single-file reader stops checking.
+fn overlay_predicates_source() -> String {
+    std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/crates/lca-ui/src/chat_panel.rs"
+    ))
+    .expect("chat_panel.rs is readable")
+}
+
 /// The scrollback renderer, so the two exemptions can be read.
 fn main_screen_source() -> String {
     std::fs::read_to_string(concat!(
@@ -205,6 +219,10 @@ fn main_screen_source() -> String {
 #[test]
 fn the_viewport_padding_is_conditioned_on_an_open_overlay() {
     let source = overlays_source();
+    // The predicate bodies live here too: `has_overlay` stayed with the composer, the
+    // two `panel_shown` helpers moved out at the ceiling.
+    let predicates = overlay_predicates_source();
+    let both = format!("{source}\n{predicates}");
     let start = source
         .find("fn compose_overlays_bottom_anchored")
         .expect("the seam exists");
@@ -227,18 +245,37 @@ fn the_viewport_padding_is_conditioned_on_an_open_overlay() {
     let pred_body = &source[predicate..];
     let pred_end = pred_body.find("\n    }\n").unwrap_or(pred_body.len());
     let pred_body = &pred_body[..pred_end];
-    for overlay in [
-        "picker_open",
-        "modal_active",
-        "panel_open",
-        "dialog",
-        "wizard",
-    ] {
+    for overlay in ["picker_open", "modal_active", "dialog", "wizard"] {
         assert!(
             pred_body.contains(overlay),
             "the predicate must know about `{overlay}`"
         );
     }
+    // Gh #373 gap 6: the panel is now known through its **visibility predicate**, so
+    // padding is paid for only when it will actually be painted - a panel hidden by a
+    // width breakpoint is not an overlay to anchor. That makes `panel_shown_now` the
+    // link in the chain, and an unchecked link is how the panel quietly drops out of
+    // the predicate: so this asserts the chain, at both ends.
+    assert!(
+        pred_body.contains("panel_shown_now"),
+        "the predicate must know about the panel (through its visibility predicate)"
+    );
+    let shown = both.find("fn panel_shown_now").expect("the helper exists");
+    let shown_body = &both[shown..];
+    let shown_end = shown_body.find("\n    }\n").unwrap_or(shown_body.len());
+    assert!(
+        shown_body[..shown_end].contains("panel_shown("),
+        "and the helper must still ask the one predicate the paint asks"
+    );
+    let shown_at = both.find("fn panel_shown(").expect("the predicate exists");
+    let shown_at_body = &both[shown_at..];
+    let shown_at_end = shown_at_body
+        .find("\n    }\n")
+        .unwrap_or(shown_at_body.len());
+    assert!(
+        shown_at_body[..shown_at_end].contains("panel_open"),
+        "which consults `panel_open`, so the panel is still accounted for"
+    );
 }
 
 // Verifies: gh #372 bug 3 - **the Termux exemption is height-only.** The soft keyboard

@@ -7,6 +7,30 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Added
+- **An overlay can now have a width ceiling and react to the terminal it is in** (gh #373 gap
+  6). Two `OverlayOptions` fields were missing. `max_width` caps a resolved width, which is
+  what a `Percent(60)` modal on a 200-column terminal needed: it used to blow out to 117
+  columns with nothing to stop it. It is applied to the resolved width and **before** the
+  position chain, so a clamped box is centred as the box it will be painted as — a ceiling
+  applied afterwards would leave the column computed from the unclamped width and the
+  overlay off-centre by half the overhang. `min_width` still wins a conflict with it (CSS's
+  resolution, and the right one here: a floor is a readability guarantee, a ceiling a
+  preference), while the margin box remains the real bound so a minimum can never exceed a
+  narrow pane. And `visible` is now a **predicate** — `|cols, rows| -> bool`, asked on every
+  resolve — instead of a `bool` nothing read. The defect it closes is caching: owners hold
+  their options across frames, so a boolean computed once is stale the moment the terminal
+  resizes. The panel uses it: below 90 columns it hides itself rather than squeezing the
+  transcript into 40 columns. **A hidden overlay does not own the keyboard** — the
+  visibility answer rides on the resolved `Rect` and is consulted by the key gate and the
+  pointer routing, not only by the painter, so a HUD hidden by a width breakpoint cannot
+  swallow a keystroke meant for the editor. Key dispatch is judged against the size of the
+  **frame on screen**, not the terminal's current size, so an unpainted resize cannot flip
+  the gate underneath the reader.
+- **The bottom-anchored picker's absolute row is pinned** (gh #373 gap 6). No test pinned
+  it, which is how the previous cycle's clamp change slipped through: at rest the picker's
+  bottom edge is the terminal's own, and a tightened clamp moved it by the margin without
+  failing anything. The row now asserts the exact row at three box heights and three
+  composer heights, including the at-rest case the clamp actually reaches.
 - **`ui.show_hardware_cursor` shows the terminal's own cursor at the caret** (gh #371
   bug 4). An accessibility opt-in for screen-reader, magnifier and blinking-cursor
   users: LCA paints the caret into the row, which those users cannot follow, so the

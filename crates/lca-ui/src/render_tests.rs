@@ -964,7 +964,7 @@ fn percent_box(
     pct: u16,
     body: &[String],
 ) -> (
-    lca_tui::engine::core::OverlayOptions,
+    lca_tui::engine::core::OverlayOptions<'static>,
     lca_tui::engine::core::Rect,
 ) {
     let options = lca_tui::engine::core::OverlayOptions {

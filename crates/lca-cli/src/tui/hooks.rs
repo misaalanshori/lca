@@ -8,6 +8,8 @@ use std::sync::{Arc, Mutex};
 use lca_protocol::Record;
 use lca_ui::{ShellEvent, ShellHandle, UiHooks};
 
+use super::hooks_mcp::{to_ui_detail, to_ui_row};
+
 /// Whether project-local extensions wait on trust (gh #138): the
 /// directory exists and holds at least one entry, so there is
 /// something for the trust prompt to gate. Empty or absent costs a
@@ -670,6 +672,12 @@ impl Ui {
             // gh #12: the transcript's pre-parse markdown pipeline rides
             // whatever native extensions provide, in registration order.
             markdown_transformers: collect_markdown_transformers(&self.registry().handles()),
+            // Gh #373 gap 6: the panel takes 40 of the terminal's columns, so below
+            // 90 it hides itself rather than squeezing the transcript to nothing -
+            // pi's responsive-side-panel shape (`w >= 90`). The predicate is asked
+            // every frame and again before a key is routed to the panel, so a HUD
+            // hidden by this breakpoint never owns the keyboard.
+            panel_visible: Some(Arc::new(|cols: u16, _rows: u16| cols >= 90)),
         }
     }
 
@@ -1149,50 +1157,4 @@ fn offered_levels_prefer_config_then_extras_then_all() {
         "advertised empty means no reasoning"
     );
     assert_eq!(offered_levels(None, None).len(), 7, "unknown offers all");
-}
-
-/// One manager row as the modal's own type (gh #418 Phase G).
-///
-/// The conversion lives in the host, not in `lca-mcp` and not in `lca-ui`: the
-/// subsystem answers with data (ADR-0047 forbids it rendering), and the interface
-/// cannot name the subsystem's types (the architecture test forbids that edge).
-/// The host is the only crate that may know both.
-fn to_ui_row(row: lca_mcp::ModalServerRow) -> lca_ui::McpServerRow {
-    lca_ui::McpServerRow {
-        scope: row.scope.to_string(),
-        name: row.name,
-        state: row.state,
-        detail: row.detail,
-        effective_exposure: row.effective_exposure,
-        project_override: row.project_override,
-    }
-}
-
-/// One server's detail as the modal's own type.
-fn to_ui_detail(detail: lca_mcp::ModalServerDetail) -> lca_ui::McpServerDetail {
-    lca_ui::McpServerDetail {
-        tools: detail
-            .tools
-            .into_iter()
-            .map(|tool| lca_ui::McpToolRow {
-                name: tool.name,
-                exposure: tool.exposure,
-                description: tool.description,
-            })
-            .collect(),
-        name: detail.name,
-        state: detail.state,
-        detail: detail.detail,
-        target: detail.target,
-        source_path: detail.source_path,
-        override_path: detail.override_path,
-        effective_exposure: detail.effective_exposure,
-        configured_exposure: detail.configured_exposure,
-        enabled: detail.enabled,
-        project_override: detail.project_override,
-        project_toggle_available: detail.project_toggle_available,
-        needs_sign_in: detail.needs_sign_in,
-        has_oauth: detail.has_oauth,
-        stderr_tail: detail.stderr_tail,
-    }
 }

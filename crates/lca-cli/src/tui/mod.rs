@@ -19,14 +19,15 @@ mod display;
 mod editor;
 mod extman;
 mod hooks;
+mod hooks_mcp;
 mod hub;
-mod persona;
 pub(crate) use hub::OFFICIAL_CATALOG_URL;
 mod label_hooks;
 pub mod login;
 mod model_rows;
 mod model_select;
 mod pending_step;
+mod persona;
 mod runner;
 mod session_hooks;
 pub mod startup;
@@ -817,11 +818,9 @@ impl Ui {
                  request will ask you to approve it; a script passes --allow-host {host}"
             ));
         }
-        // Gh #112: malformed screen-mode persistence falls back and
-        // says so on the transcript head (never a silent substring).
-        if let (_, Some(warning)) =
-            crate::tui::hooks::initial_screen_mode(&data, config.ui_fullscreen())
-        {
+        // Gh #112: malformed screen-mode persistence falls back and says so on
+        // the transcript head (never a silent substring).
+        if let (_, Some(warning)) = hooks::initial_screen_mode(&data, config.ui_fullscreen()) {
             initial_head.push(warning);
         }
         // Gh #131/#400: the header names the loaded resources - one compact line

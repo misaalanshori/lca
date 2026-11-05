@@ -733,6 +733,14 @@ pub type LoadAttachment = Arc<dyn Fn(&str) -> Option<(String, Vec<u8>)> + Send +
 /// so a host that wires none still gets the in-app behavior.
 #[derive(Default)]
 pub struct UiHooks {
+    /// The extension side panel's visibility predicate (gh #373 gap 6): `(cols, rows)`
+    /// to whether the panel should show at that size.
+    ///
+    /// Asked on every frame, which is the point - a host that wants a responsive HUD
+    /// ("hide the panel below 90 columns") sets one closure instead of rebuilding the
+    /// panel's options on every resize. Absent means always show it while open, so
+    /// every host that does not set it keeps the behaviour it had.
+    pub panel_visible: Option<Arc<dyn Fn(u16, u16) -> bool + Send + Sync>>,
     /// `/bug`: stage a scrubbed bundle and hand back the inspection screen plus
     /// the confirm/cancel decision (gh #411 gaps 2 and 3). Absent keeps the
     /// one-shot bundle `lca bug` uses, with no gate.

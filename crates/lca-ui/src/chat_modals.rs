@@ -198,6 +198,13 @@ impl Chat {
         if !self.world.panel_open {
             return None;
         }
+        // Gh #373 gap 6: a panel hidden by its own breakpoint does not own the
+        // keyboard. Without this it quietly ate the keys of an invisible surface,
+        // which is the failure mode the visibility predicate exists to prevent -
+        // hiding it in the painter only would have made it worse, not better.
+        if !self.panel_shown_now() {
+            return None;
+        }
         if key == Some("ctrl+p") {
             return None;
         }

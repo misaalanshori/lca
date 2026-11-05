@@ -102,13 +102,28 @@ pub enum Anchor {
     BottomRight,
 }
 
+/// A callback asking whether an overlay should be shown at a terminal size.
+///
+/// The predicate is what makes a *responsive* overlay possible, and it is a function
+/// rather than a `bool` for the reason the feature exists: owners **cache**
+/// `OverlayOptions`, so a boolean computed once is stale the moment the terminal
+/// changes size, and an owner that never rebuilds its options would never update it.
+/// Asking on every resolve is the whole point.
+///
+/// Borrowed rather than boxed so an option set stays `Copy` for a closure that has no
+/// captures; a capturing closure needs `&|..|`-style borrowing at the call site and
+/// cannot outlive the options value.
+pub type VisibleFn<'a> = &'a dyn Fn(u16, u16) -> bool;
+
 /// Overlay placement and sizing (pi's `OverlayOptions`, viewport-relative).
-#[derive(Debug, Clone, Default)]
-pub struct OverlayOptions {
+#[derive(Clone, Default)]
+pub struct OverlayOptions<'a> {
     /// Fixed width.
     pub width: Option<SizeValue>,
     /// Minimum width.
     pub min_width: Option<u16>,
+    /// Maximum width: a ceiling on the resolved width (gh #373 gap 6).
+    pub max_width: Option<SizeValue>,
     /// Maximum height.
     pub max_height: Option<SizeValue>,
     /// Anchor (defaults to center).
@@ -123,10 +138,29 @@ pub struct OverlayOptions {
     pub col: Option<SizeValue>,
     /// Margin from the viewport edges.
     pub margin: u16,
-    /// A predicate; when false the overlay is hidden this frame.
-    pub visible: bool,
+    /// Asked on every resolve whether the overlay should be shown at this size.
+    pub visible: Option<VisibleFn<'a>>,
     /// Do not capture keyboard focus.
     pub non_capturing: bool,
+}
+
+impl std::fmt::Debug for OverlayOptions<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OverlayOptions")
+            .field("width", &self.width)
+            .field("min_width", &self.min_width)
+            .field("max_width", &self.max_width)
+            .field("max_height", &self.max_height)
+            .field("anchor", &self.anchor)
+            .field("offset_x", &self.offset_x)
+            .field("offset_y", &self.offset_y)
+            .field("row", &self.row)
+            .field("col", &self.col)
+            .field("margin", &self.margin)
+            .field("visible", &self.visible.map(|_| "<predicate>"))
+            .field("non_capturing", &self.non_capturing)
+            .finish()
+    }
 }
 
 /// The resolved rectangle of an overlay in the viewport.
@@ -140,6 +174,14 @@ pub struct Rect {
     pub width: u16,
     /// Height.
     pub height: u16,
+    /// Whether the overlay should paint and own input at this size (gh #373 gap 6).
+    ///
+    /// Carried on the rect rather than returned beside it because every caller already
+    /// has the rect, and the focus decision is made by a different layer than the paint
+    /// (`crates/lca-ui`'s `keyboard_owner`). One value that both layers read is what
+    /// stops a hidden overlay from owning the keyboard; a second call with the same
+    /// options would be a second answer waiting to disagree.
+    pub visible: bool,
 }
 
 /// Which mouse button an event names (gh #164, pi's `TuiMouseButton`).
@@ -378,6 +420,20 @@ pub fn resolve_overlay_layout(
     let avail_h = term_height.saturating_sub(margin_h * 2).max(1);
 
     let mut width = options.width.map(|w| w.resolve(avail_w)).unwrap_or(avail_w);
+    // The ceiling is applied to the *resolved* width and **before** the position chain,
+    // so a narrower box is centred as the box it will be painted as. Applied after the
+    // position, the column would be computed from the unclamped width and the overlay
+    // would sit off-centre by half the overhang - a silent truncation, which is the
+    // shape this option exists to avoid rather than to introduce.
+    if let Some(max) = options.max_width {
+        width = width.min(max.resolve(avail_w));
+    }
+    // A floor is applied **after** the ceiling, so `min_width` wins a conflict. That is
+    // CSS's resolution (a `max-width` smaller than `min-width` is ignored) and it is the
+    // right one here: a minimum is a readability guarantee the caller asked for, while a
+    // ceiling is a preference. What a floor may not do is exceed the screen, and the
+    // margin-box bound below is what enforces that - the same bound it had before this
+    // option existed, so a narrow pane never regresses.
     if let Some(min) = options.min_width {
         width = width.max(min);
     }
@@ -437,6 +493,9 @@ pub fn resolve_overlay_layout(
         col,
         width,
         height,
+        visible: options
+            .visible
+            .is_none_or(|seen| seen(term_width, term_height)),
     }
 }
 
@@ -558,385 +617,10 @@ pub fn width_violation(lines: &[String], width: u16) -> Option<(usize, usize)> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn overlay_layout_resolves_anchor_and_clamps() {
-        let opts = OverlayOptions {
-            width: Some(SizeValue::Abs(20)),
-            anchor: Some(Anchor::Center),
-            ..Default::default()
-        };
-        let rect = resolve_overlay_layout(&opts, 80, 24, 6);
-        assert_eq!(rect.width, 20);
-        assert_eq!(rect.height, 6);
-        assert_eq!(rect.col, 30);
-        assert_eq!(rect.row, 9);
-        // Over-large content is clamped into the margin box.
-        let opts = OverlayOptions {
-            margin: 2,
-            ..Default::default()
-        };
-        let rect = resolve_overlay_layout(&opts, 20, 10, 40);
-        assert!(rect.row + rect.height <= 10);
-        assert!(rect.col + rect.width <= 20);
-    }
-
-    // Verifies: gh #373 gap 4 - a percentage positions the **overlay**, not its
-    // corner, so `Percent(50)` centres it in the space between the margins. The
-    // assertion is the *gaps*, because the gaps are the property: a formula that
-    // happened to produce the same number from a corner-anchored rule would not
-    // keep them equal when the box or the terminal changes shape.
-    #[test]
-    fn a_percentage_centres_the_overlay_in_the_margin_box() {
-        for (term_w, term_h, margin, box_w, box_h) in [
-            (80u16, 24u16, 0u16, 20u16, 6u16),
-            (80, 24, 2, 20, 6),
-            (81, 25, 0, 20, 7),
-            (120, 40, 4, 50, 11),
-        ] {
-            let opts = OverlayOptions {
-                width: Some(SizeValue::Abs(box_w)),
-                row: Some(SizeValue::Percent(50)),
-                col: Some(SizeValue::Percent(50)),
-                margin,
-                ..Default::default()
-            };
-            let rect = resolve_overlay_layout(&opts, term_w, term_h, box_h);
-            assert_eq!(rect.width, box_w);
-            assert_eq!(rect.height, box_h);
-
-            let left = rect.col.saturating_sub(margin);
-            let right = (term_w - margin).saturating_sub(rect.col + rect.width);
-            assert!(
-                left.abs_diff(right) <= 1,
-                "horizontal gaps differ by more than a cell at {term_w}x{term_h} margin {margin}: \
-                 left {left} right {right} (col {})",
-                rect.col
-            );
-
-            let top = rect.row.saturating_sub(margin);
-            let bottom = (term_h - margin).saturating_sub(rect.row + rect.height);
-            assert!(
-                top.abs_diff(bottom) <= 1,
-                "vertical gaps differ by more than a cell at {term_w}x{term_h} margin {margin}: \
-                 top {top} bottom {bottom} (row {})",
-                rect.row
-            );
-        }
-    }
-
-    // Verifies: gh #373 gap 4 - the endpoints are the values actually in use, and a
-    // centring formula can break both: `Percent(0)` must stay exactly on the margin
-    // (not one row above it, not the margin doubled).
-    #[test]
-    fn a_zero_percentage_lands_on_the_margin() {
-        for margin in [0u16, 1, 2, 3] {
-            let opts = OverlayOptions {
-                width: Some(SizeValue::Abs(20)),
-                row: Some(SizeValue::Percent(0)),
-                col: Some(SizeValue::Percent(0)),
-                margin,
-                ..Default::default()
-            };
-            let rect = resolve_overlay_layout(&opts, 80, 24, 6);
-            assert_eq!(rect.col, margin, "col at margin {margin}");
-            assert_eq!(rect.row, margin, "row at margin {margin}");
-        }
-    }
-
-    // Verifies: gh #373 gap 4 - `Percent(100)` puts the overlay's **far edge** on the
-    // opposite margin. This is the half a pure centring fix breaks by resolving the
-    // corner at `term - margin`, which would push the far edge a whole box past it.
-    #[test]
-    fn a_hundred_percentage_puts_the_far_edge_on_the_margin() {
-        for margin in [0u16, 1, 2, 3] {
-            let opts = OverlayOptions {
-                width: Some(SizeValue::Abs(20)),
-                row: Some(SizeValue::Percent(100)),
-                col: Some(SizeValue::Percent(100)),
-                margin,
-                ..Default::default()
-            };
-            let rect = resolve_overlay_layout(&opts, 80, 24, 6);
-            assert_eq!(
-                rect.col + rect.width,
-                80 - margin,
-                "right edge at margin {margin}"
-            );
-            assert_eq!(
-                rect.row + rect.height,
-                24 - margin,
-                "bottom edge at margin {margin}"
-            );
-        }
-    }
-
-    // Verifies: gh #373 gap 4 - an out-of-range percentage is clamped to the far
-    // margin rather than producing a position outside the box (a config-shaped number
-    // reaches this function, so the range is enforced here rather than trusted).
-    //
-    // The observable rule is "anything above 100 resolves as 100"; the clamp is what
-    // makes that true, which is why `share`'s own saturation is not the half this row
-    // fails against (see the report's mutation table).
-    #[test]
-    fn an_out_of_range_percentage_is_clamped_to_the_far_margin() {
-        let at_hundred = OverlayOptions {
-            width: Some(SizeValue::Abs(20)),
-            row: Some(SizeValue::Percent(100)),
-            col: Some(SizeValue::Percent(100)),
-            margin: 2,
-            ..Default::default()
-        };
-        let beyond = OverlayOptions {
-            row: Some(SizeValue::Percent(250)),
-            col: Some(SizeValue::Percent(u16::MAX)),
-            ..at_hundred.clone()
-        };
-        let at = resolve_overlay_layout(&at_hundred, 80, 24, 6);
-        let past = resolve_overlay_layout(&beyond, 80, 24, 6);
-        assert_eq!(past, at, "anything above 100 resolves the same as 100");
-        assert!(past.col + past.width <= 80 - 2);
-        assert!(past.row + past.height <= 24 - 2);
-    }
-
-    // Verifies: gh #373 gap 4 - the anchor does not silently override a percentage.
-    // Two controls answering the same question is how this bug gets filed again, so
-    // the precedence is pinned: the explicit position wins, and the axis it does not
-    // set still falls back to the anchor.
-    #[test]
-    fn an_anchor_does_not_override_the_percentage() {
-        let opts = OverlayOptions {
-            width: Some(SizeValue::Abs(20)),
-            anchor: Some(Anchor::TopLeft),
-            row: Some(SizeValue::Percent(50)),
-            ..Default::default()
-        };
-        let rect = resolve_overlay_layout(&opts, 80, 24, 6);
-        assert_eq!(rect.row, 9, "the percentage sets the row, not the anchor");
-        assert_eq!(rect.col, 0, "the unset axis still obeys the anchor");
-    }
-
-    // Verifies: gh #373 gap 4 - the clamp sits **after** the position is resolved, and
-    // it is what keeps an overlay inside its box.
-    //
-    // Under the corrected percentage form the clamp is no longer load-bearing *for a
-    // percentage on its own*: `share(avail - size)` cannot exceed the slack, so the far
-    // edge lands on the margin by construction. What still needs it is a position plus a
-    // displacement - an offset, or an absolute row/col - which is what this row drives,
-    // because a clamp with nothing reaching it is a clamp nobody would notice losing.
-    #[test]
-    fn a_displaced_overlay_is_clamped_inside_its_box() {
-        let pushed_right_and_down = OverlayOptions {
-            width: Some(SizeValue::Abs(20)),
-            row: Some(SizeValue::Percent(100)),
-            col: Some(SizeValue::Percent(100)),
-            offset_x: 40,
-            offset_y: 40,
-            margin: 2,
-            ..Default::default()
-        };
-        let rect = resolve_overlay_layout(&pushed_right_and_down, 80, 24, 6);
-        assert_eq!(
-            (rect.col, rect.row),
-            (60, 18),
-            "the far edge stops at the screen edge, the reach this clamp always had"
-        );
-        assert_eq!(rect.col + rect.width, 80);
-        assert_eq!(rect.row + rect.height, 24);
-
-        let pushed_left_and_up = OverlayOptions {
-            width: Some(SizeValue::Abs(20)),
-            row: Some(SizeValue::Percent(0)),
-            col: Some(SizeValue::Percent(0)),
-            offset_x: -40,
-            offset_y: -40,
-            margin: 2,
-            ..Default::default()
-        };
-        let rect = resolve_overlay_layout(&pushed_left_and_up, 80, 24, 6);
-        assert_eq!((rect.col, rect.row), (2, 2), "clamped to the near margin");
-
-        // An absolute position past the edge is the third way in.
-        let far = OverlayOptions {
-            width: Some(SizeValue::Abs(20)),
-            row: Some(SizeValue::Abs(500)),
-            col: Some(SizeValue::Abs(500)),
-            margin: 2,
-            ..Default::default()
-        };
-        let rect = resolve_overlay_layout(&far, 80, 24, 6);
-        assert_eq!((rect.col + rect.width, rect.row + rect.height), (80, 24));
-    }
-
-    // Verifies: gh #373 gap 4 - an offset applies on top of a percentage, as in pi's
-    // `resolveOverlayLayout` (which adds `offsetY`/`offsetX` after either form).
-    #[test]
-    fn an_offset_applies_on_top_of_a_percentage() {
-        let opts = OverlayOptions {
-            width: Some(SizeValue::Abs(20)),
-            row: Some(SizeValue::Percent(50)),
-            col: Some(SizeValue::Percent(50)),
-            offset_y: 1,
-            offset_x: -5,
-            ..Default::default()
-        };
-        let rect = resolve_overlay_layout(&opts, 80, 24, 6);
-        assert_eq!(rect.row, 10, "9 from the percentage plus 1");
-        assert_eq!(rect.col, 25, "30 from the percentage minus 5");
-    }
-
-    // Verifies: gh #373 gap 4 - a box that fills the available space has no slack for
-    // a percentage to distribute, so both endpoints collapse onto the margin instead of
-    // dividing by a zero span.
-    #[test]
-    fn a_full_span_percentage_pins_the_overlay_to_the_margin() {
-        let opts = OverlayOptions {
-            row: Some(SizeValue::Percent(100)),
-            col: Some(SizeValue::Percent(100)),
-            margin: 2,
-            ..Default::default()
-        };
-        let rect = resolve_overlay_layout(&opts, 80, 24, 99);
-        assert_eq!((rect.col, rect.row), (2, 2));
-        assert_eq!((rect.width, rect.height), (76, 20));
-    }
-
-    #[test]
-    fn cursor_marker_is_extracted_and_stripped() {
-        let lines = vec!["hello".to_string(), format!("ab{CURSOR_MARKER}cd")];
-        let (out, pos) = extract_cursor_position(&lines);
-        assert_eq!(pos, Some((1, 2, false)), "no painted caret in this row");
-        assert_eq!(out[1], "abcd");
-        assert!(!out[1].contains("pi:c"));
-    }
-
-    #[test]
-    fn capability_replies_are_recognized() {
-        assert_eq!(
-            parse_capability_reply("\x1b]11;#000000\x07"),
-            Some(CapabilityReply::BackgroundColor(
-                super::super::colors::RgbColor { r: 0, g: 0, b: 0 }
-            ))
-        );
-        assert_eq!(
-            parse_capability_reply("\x1b[?997;2n"),
-            Some(CapabilityReply::ColorScheme(
-                super::super::colors::ColorScheme::Light
-            ))
-        );
-        assert_eq!(
-            parse_capability_reply("\x1b[6;16;8t"),
-            Some(CapabilityReply::CellSize {
-                height: 16,
-                width: 8
-            })
-        );
-        assert_eq!(parse_capability_reply("\x1b[A"), None);
-    }
-
-    #[test]
-    fn width_violation_detects_overlong_lines() {
-        let lines = vec!["ok".to_string(), "this is too long".to_string()];
-        assert_eq!(width_violation(&lines, 5), Some((1, 16)));
-        assert_eq!(width_violation(&lines, 80), None);
-    }
-}
+#[cfg(test)]
+#[path = "core_tests.rs"]
+mod tests;
 
 #[cfg(test)]
-mod mouse_tests {
-    use super::*;
-
-    // Verifies: gh #164 - SGR press/release/motion/wheel normalize to
-    // the keystone event, coordinates zero-based, modifiers decoded.
-    #[test]
-    fn sgr_press_becomes_a_left_down() {
-        assert_eq!(
-            MouseEvent::from_sgr(0, 10, 5, true),
-            MouseEvent::Down {
-                col: 9,
-                row: 4,
-                button: MouseButton::Left,
-                modifiers: Modifiers::default(),
-            }
-        );
-    }
-
-    // Verifies: gh #164 - a release normalizes to Up.
-    #[test]
-    fn sgr_release_becomes_an_up() {
-        assert!(matches!(
-            MouseEvent::from_sgr(0, 10, 5, false),
-            MouseEvent::Up { col: 9, row: 4, .. }
-        ));
-    }
-
-    // Verifies: gh #164 - motion without a button is a hover; motion
-    // with one names it (pi's 1003 any-motion coordinates).
-    #[test]
-    fn motion_with_and_without_buttons() {
-        // A hover reports motion with button bits 3 (xterm's no-button).
-        assert!(matches!(
-            MouseEvent::from_sgr(32 | 3, 3, 3, true),
-            MouseEvent::Move { button: None, .. }
-        ));
-        assert!(matches!(
-            MouseEvent::from_sgr(32 | 1, 3, 3, true),
-            MouseEvent::Move {
-                button: Some(MouseButton::Middle),
-                ..
-            }
-        ));
-    }
-
-    // Verifies: gh #164 - wheel direction maps to a signed delta, with
-    // shift/alt/ctrl riding along.
-    #[test]
-    fn wheel_maps_direction_and_modifiers() {
-        assert!(matches!(
-            MouseEvent::from_sgr(64, 3, 3, true),
-            MouseEvent::Wheel { delta: -1, .. }
-        ));
-        assert!(matches!(
-            MouseEvent::from_sgr(64 | 1 | 4 | 8 | 16, 3, 3, true),
-            MouseEvent::Wheel {
-                delta: 1,
-                modifiers: Modifiers {
-                    shift: true,
-                    alt: true,
-                    ctrl: true,
-                },
-                ..
-            }
-        ));
-    }
-
-    // Verifies: gh #164 - the registry resolves the topmost region,
-    // and misses cleanly.
-    #[test]
-    fn regions_hit_topmost_first() {
-        let mut registry = MouseRegistry::new();
-        registry.register(
-            Rect {
-                row: 0,
-                col: 0,
-                width: 10,
-                height: 10,
-            },
-            "bottom",
-        );
-        registry.register(
-            Rect {
-                row: 2,
-                col: 2,
-                width: 4,
-                height: 4,
-            },
-            "top",
-        );
-        assert_eq!(registry.hit(3, 3), Some("top"));
-        assert_eq!(registry.hit(0, 0), Some("bottom"));
-        assert_eq!(registry.hit(20, 20), None);
-    }
-}
+#[path = "core_mouse_tests.rs"]
+mod mouse_tests;

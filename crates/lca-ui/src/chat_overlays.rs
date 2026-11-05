@@ -182,19 +182,29 @@ impl Chat {
     fn has_overlay(&self) -> bool {
         self.picker_open()
             || self.world.modal_active()
-            || self.world.panel_open
+            || self.panel_shown_now()
             || self.world.dialog.is_some()
             || self.world.wizard.is_some()
     }
 
     /// Composite the modals and the side panel over the viewport.
     pub(super) fn compose_overlays(&self, viewport: &mut [String], width: u16, height: u16) {
+        // Gh #373 gap 6: input dispatch runs between frames and has no size of its
+        // own, so the size this frame resolved against is recorded here - the one
+        // function **both** renderers pass through (`compose_overlays_bottom_anchored`
+        // for the scrollback screen calls it, and the fullscreen viewport calls it
+        // directly). Recording it on only one path is how the gate would silently fall
+        // back to the terminal's live size in the other. A `Cell` rather than
+        // `&mut self`, the same shape `picker_window` already uses: the frame is drawn
+        // through `&self`, and making it `&mut` for one pair of numbers would ripple
+        // through every render call site for no gain.
+        self.last_frame_size.set(Some((width, height)));
         if self.compose_pickers(viewport, width, height) {
             return;
         }
         self.compose_modals(viewport, width, height);
 
-        if self.world.panel_open {
+        if self.panel_shown(width, height) {
             let mut panel: Vec<String> = Vec::new();
             if let Some(render) = &self.world.options.render_regions {
                 for (_name, tree) in render("panel") {
@@ -224,28 +234,6 @@ impl Chat {
                 *line = highlight_matches(line, query);
             }
         }
-    }
-
-    /// Paint the drawer tab over the margin (gh #207): `◀` opens, `▶`
-    /// closes - the visible face of the Alt+X binding. One cell only,
-    /// accent on hover, so an idle frame stays quiet.
-    fn paint_drawer_tab(&self, viewport: &mut [String], width: u16, height: u16) {
-        let Some((col, row)) = self.drawer_rect(width, height) else {
-            return;
-        };
-        let Some(line) = viewport.get_mut(row as usize) else {
-            return;
-        };
-        let glyph = if self.world.panel_open { "▶" } else { "◀" };
-        let role = if self.drawer_hover {
-            crate::theme::Role::Accent
-        } else {
-            crate::theme::Role::Border
-        };
-        // gh #238: the glyph splices at the seam, so the row behind
-        // cannot tint it and its accent cannot leak right.
-        *line =
-            crate::render::splice_segment(line, col as usize, 1, &(self.theme.role(role))(glyph));
     }
 
     /// Draw the open picker, if any (returns true when one was drawn).
