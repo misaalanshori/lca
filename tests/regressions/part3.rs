@@ -535,3 +535,12 @@ mod completion_list_coverage;
 // a second drawing (pi skips mermaid for `assistant-thinking`).
 #[path = "390-truncation-banner-and-reasoning-draft.rs"]
 mod truncation_and_reasoning_draft;
+
+// Gh #368: three ways input reassembly corrupted typed input - a split reply's tail
+// typed into the prompt, an introducer with no terminator swallowing every
+// following keystroke, and Kitty flag 4's colon form inserting a character twice.
+// The behavioural rows live in `stdin_buffer/recovery_tests.rs`; this pins the
+// recovery's split shape, the two new reply families, the terminator table, the
+// colon grammar, and the order that keeps #366's drop intact.
+#[path = "368-input-reassembly.rs"]
+mod input_reassembly;

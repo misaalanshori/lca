@@ -169,6 +169,18 @@ Two guards pi carries are **not** ported, and the reason is structural rather th
 
 A closed pty (`POLLHUP`, or a read that returns 0) and a `SIGHUP` are the **same event from two directions**, and both exit 129 after flushing. `poll` reports `POLLHUP|POLLERR|POLLNVAL`, which outranks `POLLIN` - a hung-up pty is also "readable", so a classification ordered the other way sees a permanent key and the reader spins. Windows has no `SIGHUP`: a closed console surfaces as a failed `ReadFile`, which the reader's end-of-file arm classifies the same way.
 
+## Input reassembly: what times out into a keystroke, and what drops (#368)
+
+`StdinBuffer` accumulates until a sequence is provably complete, and the 50 ms timeout is what decides the ambiguous cases. Three rules, and they are deliberately different:
+
+**An introducer with no terminator is not a sequence.** A legacy terminal sends `Alt+]` as `ESC ]`, `Alt+P` as `ESC P`, `Alt+_` as `ESC _` - the OSC/DCS/APC introducers with nothing after them. Waiting for a terminator that is never coming means the key and **every keystroke after it** glue into one unreadable event, and the session looks frozen. So on expiry the two introducer bytes are delivered as the meta pair and the remainder is **reparsed** as input (so a `Ctrl+M` in what was typed is still Enter, not two literal characters). `ESC [` is deliberately **not** in this set: a bare `ESC [` is `ctrl+alt+[` *and* the first two bytes of a half-arrived arrow key, so splitting it would trade one ambiguity for another.
+
+**A reply head we asked for is dropped, with its tail.** `OSC 11`/`OSC 7501`/`DA1`/Kitty-flags heads that have *committed* (`ESC ] 11 ;`, `ESC [ ?`) are discarded rather than typed, and a bounded content window keeps the tail from being typed either (#366). `DCS > |` (XTVersion) and `APC G i=1` (Kitty graphics) join that table here - they were the gap.
+
+**The terminator table.** `BEL` and `ST` (`ESC \`) end an `OSC`; **`ST` only** ends `DCS` and `APC`, because `BEL` is an ordinary body byte inside those strings. A `CSI ?` reply ends on its own final byte - and since a head that has not reached one could still become any of `u`/`c`/`n`, any of the three closes the tail window.
+
+**Two ambiguous heads are the accepted cost**, pinned as rows rather than implied: a reply split at the *bare* `OSC`/`DCS` introducer is indistinguishable from the corresponding Alt key plus typing, and is therefore recovered as keystrokes. pi draws the line in the same place. The reported splits - mid-body, or one byte past the introducer - are closed.
+
 ## Cross-cutting: what "works everywhere" actually means here
 
 A requirement stated as applying to all platforms, in the requirements and design document, means the behavior is identical from the perspective of the agent's own logic and the extension ABI; it does not mean the underlying mechanism is identical. The `fs` scope-escape check is one function with one contract everywhere and two different, platform-specific canonicalization implementations underneath it. The cancellation flow is one behavior, kill everything a turn started, with a process-group kill on POSIX and a Job Object kill on Windows underneath it. Extension authors and first-party contributors alike should write to the contract, not to a mechanism, and platform-specific tests, not just platform-specific code, are what keeps the two from drifting apart silently; the Windows CI job being non-optional, per the testing plan, is the concrete enforcement of that principle rather than a formality.

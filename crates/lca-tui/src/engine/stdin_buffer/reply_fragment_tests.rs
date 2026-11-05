@@ -20,7 +20,7 @@
 use super::*;
 
 /// The data strings a process produced, ignoring paste events.
-fn data(events: Vec<StdinEvent>) -> Vec<String> {
+pub(super) fn data(events: Vec<StdinEvent>) -> Vec<String> {
     events
         .into_iter()
         .filter_map(|e| match e {
@@ -32,7 +32,7 @@ fn data(events: Vec<StdinEvent>) -> Vec<String> {
 
 /// Deliver `head`, let the sequence timeout elapse (the reader loop's flush),
 /// then deliver `tail`. Returns everything the consumer would receive as data.
-fn split(build: impl Fn() -> StdinBuffer, head: &str, tail: &str) -> Vec<String> {
+pub(super) fn split(build: impl Fn() -> StdinBuffer, head: &str, tail: &str) -> Vec<String> {
     let mut buffer = build();
     let mut out = data(buffer.process(head));
     // Stand in for the reader loop: the timeout elapsed with no more data,

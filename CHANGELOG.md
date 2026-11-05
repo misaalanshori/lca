@@ -42,6 +42,28 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **Typed input survives the terminal's chatter** (gh #368, three bugs in input reassembly). Each
+  looked like a different fault and each was the same seam.
+  *`Alt+]` froze the session.* A legacy terminal sends `Alt+]` as the OSC introducer `\x1b]` (and
+  `Alt+P`/`Alt+_` as the DCS/APC ones) with nothing after it, so the reassembler waited for a
+  terminator that was never coming - and the key plus **every keystroke after it** accumulated into
+  one glued event no parser can read. The user saw a frozen app. An introducer with no terminator is
+  not a sequence: on expiry the two bytes are the meta pair and the rest is reparsed as input, so a
+  `Ctrl+M` typed after it is still Enter. That does not undo the previous cycle's rule - a fragment
+  that *committed* to a reply we asked for is still dropped with its tail; the two are told apart by
+  the prefix set (`\x1b]` is a keystroke, `\x1b]11;` is a reply), and both directions are pinned.
+  *A reply's tail landed in the prompt.* `DCS > |` (XTVersion) and `APC G i=1` (Kitty graphics) were
+  missing from the reply table, so a split answer's head was delivered as text and its body typed into
+  the composer. They are in the table now, with the terminator each family actually has: `BEL` or
+  `ST` for `OSC`, **`ST` only** for `DCS`/`APC` (a `BEL` inside those is a body byte). Two splits are
+  the accepted cost, pinned as rows rather than implied: a reply split at the *bare* introducer is
+  indistinguishable from the Alt key plus typing, and is recovered as keystrokes - the same line pi
+  draws, and the alternative is a frozen session on every `Alt+]`.
+  *Kitty flag `4` inserted every character twice.* The flag is negotiated by LCA itself, and the
+  echo-dedup parser then rejected the colon sub-parameters that flag produces (`\x1b[97::97u` for a
+  plain `a`), so the raw echo was delivered alongside the sequence. The colon form is accepted now,
+  with pi's grammar, and a malformed one declines rather than guessing - a half-understood sequence
+  would arm the dedup on the wrong codepoint and drop a real keystroke.
 - **A terminal that goes away now ends LCA instead of hanging it, and `Ctrl+Z` on Windows
   says so** (gh #403 gap 4, first half). Two failures with nothing in common but the shape
   "the wrong thing is silent".

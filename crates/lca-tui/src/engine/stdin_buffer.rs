@@ -179,7 +179,32 @@ fn parse_unmodified_kitty_printable_codepoint(sequence: &str) -> Option<u32> {
         return None;
     }
     let codepoint: u32 = std::str::from_utf8(&body[start..i]).ok()?.parse().ok()?;
-    // Only the plain form `ESC [ cp u`, no colons/semicolons.
+    // Gh #368 bug 3: Kitty flag `4` (which LCA itself negotiates) reports a
+    // printable as `ESC [ cp : shifted? : base? u`, so the colon sub-parameters
+    // are part of the protocol rather than noise. pi's grammar is
+    // `^\x1b\[(\d+)(?::\d*)?(?::\d+)?u$`: after the codepoint, an optional
+    // `:` with **zero or more** digits (the shifted field may be empty), then an
+    // optional `:` with one or more (the base-layout field).
+    //
+    // Anything else declines rather than guessing. A parser that half-read the
+    // sequence would arm the echo dedup on the wrong codepoint and then drop a
+    // real keystroke - a worse failure than the duplicate it fixes.
+    for field in 0..2 {
+        if body.get(i) != Some(&b':') {
+            break;
+        }
+        i += 1;
+        let digits_start = i;
+        while i < body.len() && body[i].is_ascii_digit() {
+            i += 1;
+        }
+        // The first sub-parameter may be empty (`97:u` is a legal spelling of
+        // `97::u`); the second may not, or a trailing `97:` would parse as a
+        // complete sequence with a missing field.
+        if field == 1 && i == digits_start {
+            return None;
+        }
+    }
     if i != body.len() {
         return None;
     }
@@ -204,17 +229,48 @@ enum ReplyKind {
     Osc11,
     /// `OSC 7501` program-status support reply: `ESC ] 7501 ; ? [;...] (BEL | ST)`.
     ProgramStatus,
+    /// `DCS > | … ST` - an XTVersion reply (gh #368 bug 1).
+    XtVersion,
+    /// `APC G <params> ; … ST` - a Kitty graphics reply (gh #368 bug 1).
+    KittyGraphics,
 }
 
 impl ReplyKind {
-    /// The final byte, once the sequence has produced one.
+    /// The final byte, once the sequence has produced one. `0` for the
+    /// delimited-string families, which end on a terminator instead.
     fn final_byte(self) -> u8 {
         match self {
             Self::KittyFlags => b'u',
             Self::DeviceAttributes => b'c',
             Self::ColorScheme => b'n',
-            Self::Osc11 | Self::ProgramStatus => 0,
+            Self::Osc11 | Self::ProgramStatus | Self::XtVersion | Self::KittyGraphics => 0,
         }
+    }
+
+    /// Whether this family is a **delimited string** - a body of arbitrary
+    /// printable text ended by a terminator, rather than a parameter run ended
+    /// by a final byte (gh #368 bug 1).
+    ///
+    /// The distinction is what the tail rules hang on: a colour body may
+    /// contain `c` and `n`, and an XTVersion body contains `>`, `|` and `(`,
+    /// so a shared "parameter alphabet" would cut both short and then type the
+    /// rest.
+    fn is_delimited(self) -> bool {
+        !matches!(
+            self,
+            Self::KittyFlags | Self::DeviceAttributes | Self::ColorScheme
+        )
+    }
+
+    /// The sequence this family ends on: `BEL` or `ST` for the `OSC` families,
+    /// **`ST` only** for `DCS`/`APC` (gh #368 design call 4), and the final byte
+    /// for the `CSI` families.
+    ///
+    /// `BEL` is deliberately not a `DCS`/`APC` terminator: inside those strings
+    /// it is an ordinary body byte, so accepting it would cut a version reply in
+    /// half and type the remainder.
+    fn terminates_on_bel(self) -> bool {
+        matches!(self, Self::Osc11 | Self::ProgramStatus)
     }
 }
 
@@ -307,7 +363,46 @@ fn reply_matches_so_far(fragment: &str) -> Option<ReplyKind> {
         }
         return None;
     }
+    // Gh #368 bug 1: the two delimited-string families #366 did not name. Their
+    // heads were delivered as text, so the tail was **typed into the prompt**.
+    //
+    // The commitment point is deliberately past the bare introducer, because the
+    // introducer alone is an `Alt` keystroke (bug 2): `ESC P` is `Alt+P`+`P`, not
+    // a version reply; `ESC P > |` is the reply.
+    if let Some(rest) = body.strip_prefix('P') {
+        return (rest.starts_with(">|")).then_some(ReplyKind::XtVersion);
+    }
+    if let Some(rest) = body.strip_prefix('_') {
+        // `APC G <key=value,>… ;` is the Kitty graphics reply. The commitment is
+        // the first whole parameter, so a user typing `G` after `Alt+_` is still
+        // typing (pi's header pattern requires the same `;`).
+        return graphics_header_committed(rest).then_some(ReplyKind::KittyGraphics);
+    }
     None
+}
+
+/// Whether `rest` (what follows `ESC _`) has committed to the Kitty graphics
+/// reply (gh #368 bug 1).
+///
+/// The commitment is `G` plus a parameter run containing at least one `=`, i.e.
+/// the shape `G i=1` - a key and its value. Deliberately short of pi's
+/// `(?:[a-z]=\d+,)*[a-z]=\d+;`, which needs the complete first pair, because a
+/// flush boundary can fall *inside* the first pair (`ESC _ G i=1` …) and a head
+/// that has not committed is delivered as text - so requiring the `;` would
+/// leave exactly the leak this row set exists to close.
+///
+/// The narrowness that keeps bug 2 recoverable lives on the other side: `ESC _`
+/// alone, and `ESC _ G` alone, have no `=` and stay typing, so `Alt+_` followed
+/// by a `G` is still a keystroke.
+fn graphics_header_committed(rest: &str) -> bool {
+    let Some(rest) = rest.strip_prefix('G') else {
+        return false;
+    };
+    let params: String = rest
+        .chars()
+        .take_while(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == '=' || *c == ',')
+        .collect();
+    params.contains('=') && !params.ends_with('=')
 }
 
 /// Whether `tail` is a permitted continuation of a `CSI ?` parameter run
@@ -347,24 +442,29 @@ fn osc_body_ok(body: &str) -> bool {
 /// Whether a fragment already ended a sequence, so it is not a prefix of
 /// something longer.
 fn fragment_is_finished(fragment: &str, kind: ReplyKind) -> bool {
-    match kind {
-        ReplyKind::Osc11 | ReplyKind::ProgramStatus => {
-            fragment.ends_with("\x1b\\") || fragment.ends_with('\x07')
-        }
-        _ => fragment.bytes().last() == Some(kind.final_byte()),
+    if kind.is_delimited() {
+        return fragment.ends_with("\x1b\\")
+            || (kind.terminates_on_bel() && fragment.ends_with('\x07'));
     }
+    fragment.bytes().last() == Some(kind.final_byte())
 }
 
-/// Whether `c` can appear in the tail of a reply we asked for.
+/// Whether `c` can appear in the tail of a reply of this family.
 ///
-/// A reply tail is parameter data: digits and `;` for `DA1` and the Kitty
-/// flags, digits/`;`/`:` for the scheme report, `?`/`;` for `OSC 7501`, and
-/// printable ASCII for an `OSC 11` colour body (`rgb:1e1e/1e1e/1e1e`). A final
-/// byte (`u`, `c`, `n`) is also admitted here and ends the window separately.
+/// For a **delimited string** (`OSC`, `DCS`, `APC`) the body is arbitrary
+/// printable text - `rgb:1e1e/1e1e/1e1e`, `>|XTerm(390)` - so the only shape
+/// rule is "printable". A control byte ends the window.
 ///
-/// Anything else - a letter in prose, a space, a control byte - is not
-/// reply-shaped, which is what stops the window from ever eating a sentence.
-fn is_reply_tail_char(c: char) -> bool {
+/// For a **parameter run** (`CSI ?`) it is digits and `;`/`:` with a letter
+/// admitted too, because a `CSI ?` head that has not reached its final byte is
+/// *uncommitted*: `ESC [ ? 62` could still become `…62;1;2c` (`DA1`) or `…996n`
+/// (the colour-scheme report), and each ends on a different letter. Which one it
+/// is gets decided by the byte that arrives, so the window admits any letter and
+/// the family's own final byte closes it.
+fn is_reply_tail_char(kind: ReplyKind, c: char) -> bool {
+    if kind.is_delimited() {
+        return (' '..='~').contains(&c);
+    }
     c.is_ascii_digit() || matches!(c, ';' | ':' | '/' | '?' | '#' | '.') || c.is_ascii_alphabetic()
 }
 
@@ -569,7 +669,7 @@ impl StdinBuffer {
             // chunk, because the generic "ESC + one char is a meta pair" rule
             // treats it as such. It terminates an OSC reply, so swallow the
             // chunk whole rather than reading the ESC as prose.
-            if matches!(kind, ReplyKind::Osc11 | ReplyKind::ProgramStatus) && sequence == "\x1b\\" {
+            if kind.is_delimited() && sequence == "\x1b\\" {
                 self.reply_tail = None;
                 return;
             }
@@ -582,16 +682,19 @@ impl StdinBuffer {
                     kept.push(c);
                     continue;
                 }
-                // An OSC reply ends on BEL or on `ST` (`ESC \`); a `CSI ?`
-                // reply ends on its own final byte. Family matters: an `OSC 11`
-                // colour body legitimately contains `c` (`#1e1e2c`) and `n`, so
-                // a blanket "a letter ends it" rule would cut a colour short and
-                // then deliver the rest as typing.
-                let ends = match kind {
-                    ReplyKind::Osc11 | ReplyKind::ProgramStatus => {
-                        c == '\x07' || (previous_esc && c == '\\')
-                    }
-                    _ => c as u8 == kind.final_byte(),
+                // A delimited string ends on its terminator (`ST`, or `BEL` for
+                // the `OSC` families only); a `CSI ?` reply ends on its own final
+                // byte. Family matters: an `OSC 11` colour body legitimately
+                // contains `c` (`#1e1e2c`) and `n`, so a blanket "a letter ends
+                // it" rule would cut a colour short and then deliver the rest as
+                // typing.
+                let ends = if kind.is_delimited() {
+                    (kind.terminates_on_bel() && c == '\x07') || (previous_esc && c == '\\')
+                } else {
+                    // An uncommitted `CSI ?` head ends on **any** of the family's
+                    // final bytes, not just the representative one: which reply it
+                    // turns out to be is only known from the byte that arrives.
+                    matches!(c as u8, b'u' | b'c' | b'n')
                 };
                 previous_esc = c == ESC;
                 if ends {
@@ -599,7 +702,7 @@ impl StdinBuffer {
                     open = false;
                     continue;
                 }
-                if !is_reply_tail_char(c) {
+                if !is_reply_tail_char(kind, c) {
                     // Not reply-shaped: the user is typing. Close and keep it.
                     self.reply_tail = None;
                     open = false;
@@ -688,7 +791,7 @@ impl StdinBuffer {
             }
             return Vec::new();
         }
-        vec![StdinEvent::Data(seq)]
+        revoke_alt_key(&seq)
     }
 
     /// Whether a discarded reply's tail may still be arriving: the characters
@@ -712,9 +815,72 @@ impl StdinBuffer {
     }
 }
 
+/// Split an unterminated control-string remainder back into the keystroke it
+/// was and the typing that followed it (gh #368 bug 2).
+///
+/// # The bug
+///
+/// In a legacy terminal `Alt+]` sends the `OSC` introducer (`ESC ]`), `Alt+P`
+/// the `DCS` one (`ESC P`) and `Alt+_` the `APC` one (`ESC _`). None of them
+/// carries a terminator, so `is_complete_sequence` reports *incomplete* forever
+/// and the buffer keeps accumulating: the key and every character after it
+/// become one glued event (`ESC ] a b c`) that no parser can read. **Every
+/// subsequent keystroke is swallowed** and the session looks frozen.
+///
+/// # The rule
+///
+/// **An introducer with no terminator is not a sequence.** On expiry the first
+/// two bytes are the meta pair the user pressed, and the rest is what they
+/// typed - so the remainder is split back into input rather than delivered
+/// glued, and `parse_key` reads `ESC ]` as `alt+]` exactly as it does when the
+/// key arrives alone.
+///
+/// # Why this does not undo #366
+///
+/// Not every control-string remainder is a keystroke. A fragment that has
+/// **committed** to a reply we asked for (`ESC ] 11 ; …`) is dropped with its
+/// tail window, which `flush` does before it reaches here: a reply is not
+/// typing, and the two are told apart by the prefix set
+/// ([`is_reply_prefix`](is_reply_prefix)), not by the introducer.
+///
+/// # Why reparse rather than emit two chunks
+///
+/// pi's shape (`stdin-buffer.ts`'s flush handler): emit the two-byte introducer
+/// and *reprocess* the tail, so a `Ctrl+M` or a `Ctrl+C` in what the user typed
+/// becomes the key it is. Emitting `ESC ]` + the raw tail as one string per
+/// piece would type the literal two characters into the composer instead of
+/// submitting.
+fn revoke_alt_key(remainder: &str) -> Vec<StdinEvent> {
+    // Only the three control-string introducers. `ESC [` is a **CSI**, and a
+    // `CSI` is not a keystroke plus typing - `ESC [` alone is `ctrl+alt+[` and a
+    // half-arrived arrow key is the same two bytes, so splitting it would trade
+    // one ambiguity for another. pi draws the line in the same place
+    // (`isControlString`).
+    let is_control_string = remainder.starts_with("\x1b]")
+        || remainder.starts_with("\x1bP")
+        || remainder.starts_with("\x1b_");
+    if !is_control_string || remainder.len() <= 2 {
+        // `ESC ]` on its own is already the meta pair `parse_key` reads as
+        // `alt+]`: one event, nothing to split.
+        return vec![StdinEvent::Data(remainder.to_string())];
+    }
+    let split = 2;
+    let mut events = vec![StdinEvent::Data(remainder[..split].to_string())];
+    // Reprocess the tail through a fresh buffer: the keystrokes after an
+    // abandoned introducer are ordinary input and may themselves be sequences.
+    let mut tail = StdinBuffer::new();
+    events.extend(tail.process(&remainder[split..]));
+    events.extend(tail.flush());
+    events
+}
+
 #[cfg(test)]
 #[path = "stdin_buffer/reply_fragment_tests.rs"]
 mod reply_fragment_tests;
+
+#[cfg(test)]
+#[path = "stdin_buffer/recovery_tests.rs"]
+mod recovery_tests;
 
 #[cfg(test)]
 mod tests {
