@@ -131,6 +131,12 @@ const NON_OVERLAY_EXEMPTIONS: &[&str] = &[
     // closing it on a tab switch would be the bug rather than the fix. The panel
     // itself is still `world.panel_open`, which the flag rule below owns.
     "panel_visible",
+    // gh #375 gap 3: the viewport's pin, not an overlay. A tab switch *sets* it (the
+    // restore path resolves the saved scroll into a jump), so dropping it here would
+    // delete the very position the switch exists to restore; `jump_target` beside it is
+    // the same kind of value and is already exempt by not being `Option`-shaped per
+    // overlay semantics.
+    "pinned_jump",
     // Not surfaces: the loop's wake channel, a login URL already handed to the browser,
     // and a "copied" confirmation timestamp belonging to the previous step.
     "waker",

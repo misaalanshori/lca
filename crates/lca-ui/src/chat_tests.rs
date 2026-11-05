@@ -1088,6 +1088,9 @@ mod header_tests;
 #[path = "chat_hub_tests.rs"]
 mod hub_tests;
 
+#[cfg(test)]
+#[path = "chat_jump_tests.rs"]
+mod jump_tests;
 #[path = "chat_viewport_tests.rs"]
 mod viewport_tests;
 

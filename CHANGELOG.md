@@ -42,6 +42,25 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **A prompt jump now stays on its prompt when the pane is resized or the theme changes**
+  (gh #375 gap 3). Jumping to an earlier prompt stored a **document row** — computed at the
+  width and theme in force when the key was pressed — and applied it on a later frame under
+  whatever width and theme were in force then. A row is a derived coordinate: narrowing the
+  pane rewraps every line, and switching theme can change a row's *height* (padding,
+  code-block borders), so the stored number came to name a different message. The target is
+  now the message's **ordinal**, with the row resolved from the rows the frame is about to
+  paint — the same "resolve late, from a stable key" shape as `tab_top` and the layer stack —
+  and the applied jump is pinned so a later size *or* re-render re-resolves it instead of
+  drifting. The mechanism is pi's in-band `OSC 133;A`: each user message's first row carries
+  the marker, so it reflows with its row and one scan finds every prompt. The strip is exact
+  (both the `BEL` and `ST` terminators, and a truncated sequence is left alone rather than
+  eating the row) and happens at the single seam that turns rows into paint, so no marker
+  reaches the screen, a copy destination, a scrollback write or a plain-mode frame — and
+  `visible_width` measures a marked row exactly as its unmarked text, so the ASCII fast path
+  is untouched. `user_offsets` reads those painted rows rather than re-rendering each entry to
+  count its lines, which removes a second measurement pass that could disagree with the
+  frame. Keyboard, scrollbar-stepper clicks and the `Shift`+wheel gesture all call the same
+  `jump_prompt`, so all three land on the same row and all three survive a resize.
 - **A prompt raised over an open picker is now the thing you see and the thing that takes your
   keys, and closing any overlay always hands the keyboard back** (gh #373 gap 5, the last gap on
   #373). Keyboard ownership was a set of independent booleans — `picker_open()`,

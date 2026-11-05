@@ -261,7 +261,7 @@ fn the_prompt_jump_measures_scrolls_against_the_transcript() {
         chat.transcript.finish_assistant();
     }
     let (w, h) = (80u16, 24u16);
-    chat.jump_target = Some(0);
+    chat.jump_target = Some(crate::chat_jump::JumpTarget::Row(0));
     let scroll = chat
         .take_jump_scroll(w, h)
         .expect("a pending jump returns a target");
@@ -442,7 +442,7 @@ fn jump_pins_the_prompt_to_the_top_row() {
     let (w, h) = (80u16, 24u16);
     let offsets = chat.transcript.user_offsets(80, &chat.theme);
     let target = offsets[10];
-    chat.jump_target = Some(target);
+    chat.jump_target = Some(crate::chat_jump::JumpTarget::Row(target));
     let scroll = chat
         .take_jump_scroll(w, h)
         .expect("a pending jump returns a target");

@@ -1,11 +1,9 @@
-//! The transcript, ported from pi's
-//! `coding-agent/src/modes/interactive/components/messages.ts`
+//! The transcript, ported from pi's `coding-agent/…/components/messages.ts`
 //! (`pi-tui-re/src_re/agent-components/messages.md`).
 //!
-//! Owner issues #5 (user prompts in history), #6 (markdown, message
-//! separation) and #4 (streaming) live here: the transcript is a list of
-//! entries rendered to styled lines, updated incrementally as a turn
-//! streams, and the renderer repaints only what changed.
+//! Owner issues #5 (user prompts in history), #6 (markdown, message separation) and #4
+//! (streaming) live here: a list of entries rendered to styled lines, updated
+//! incrementally as a turn streams.
 
 use lca_tui::widgets::image::ImageInfo;
 
@@ -340,13 +338,6 @@ impl Transcript {
     /// The live keybindings a hint renders from.
     pub fn keybindings(&self) -> &std::sync::Arc<lca_tui::engine::keybindings::KeybindingsManager> {
         &self.keybindings
-    }
-
-    /// Drop every cached frame and bump the epoch, so nothing rendered under the
-    /// previous inputs can be served again.
-    fn invalidate_cache(&mut self) {
-        self.cache_epoch = self.cache_epoch.wrapping_add(1);
-        self.cache.borrow_mut().clear();
     }
 
     /// The configured default for thinking runs (R6).
@@ -1105,10 +1096,10 @@ impl Transcript {
 
     /// [`Self::render_for_protocol`] stopped at a chosen stage (gh #324 gap 3).
     ///
-    /// The placement cache rewrites a kitty header into a no-payload `a=p` form
-    /// (gap 1), and a **cropped** header is itself a placement. So the crop has to run
-    /// before the cache, not after: afterwards there is no `a=T` block left to parse,
-    /// and cropping first does one rewrite per frame instead of two.
+    ///
+    /// The placement cache rewrites a kitty header into a no-payload `a=p` form (gap 1),
+    /// and a **cropped** header is itself a placement, so the crop runs before the cache:
+    /// afterwards there is no `a=T` block left to parse.
     pub fn render_for_protocol_at(
         &self,
         width: u16,
@@ -1152,6 +1143,22 @@ impl Transcript {
         if stage == RowStage::Final && protocol == lca_tui::widgets::image::ImageProtocol::Kitty {
             self.uploaded_images.borrow_mut().substitute(&mut out);
         }
+        // Gh #375 gap 3: **the marker is stripped at paint time, and only at the final
+        // stage.** It is in-band so a jump can find its row after any reflow, but it is
+        // a control sequence: leaving it in the frame empties a cell the text wanted.
+        //
+        // The final stage specifically, because `BeforePlacements` is what the image crop
+        // parses - and the crop reads columns, so a row still carrying a marker would be
+        // measured one sequence long there. Stripping here means the marker never
+        // reaches a renderer, a copy destination, or a scrollback write, while the cached
+        // rows keep it for the next jump scan.
+        if stage == RowStage::Final {
+            for line in out.iter_mut() {
+                if line.contains("\x1b]133;") {
+                    *line = crate::prompt_marker::strip_markers(line).into_owned();
+                }
+            }
+        }
         out
     }
 }
@@ -1169,8 +1176,7 @@ pub use nested::{COLLAPSED_CHILDREN, ChildCall, ChildStatus};
 mod preview;
 mod render;
 use render::*;
-// gh #410: the hint formatter is the one thing a sibling module's rows assert on,
-// so it crosses the seam. Everything else in `render` stays private.
+// gh #410: the hint formatter crosses for a sibling module; the rest stays private.
 #[cfg(test)]
 pub(crate) use render::render_key_hint;
 

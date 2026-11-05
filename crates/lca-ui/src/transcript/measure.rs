@@ -61,32 +61,29 @@ impl Transcript {
     /// The document line index where each user message starts, at `width`
     /// (FR-UI-11's prompt jump).
     pub fn user_offsets(&self, width: u16, theme: &Theme) -> Vec<usize> {
-        let mut offsets = Vec::new();
-        let mut line = 0usize;
-        for (i, entry) in self.entries.iter().enumerate() {
-            if i > 0 {
-                line += 1;
-            }
-            if matches!(entry, Entry::User(_)) {
-                offsets.push(line);
-            }
-            let mut tmp = Vec::new();
-            let _ = render_entry(
-                entry,
-                width,
-                theme,
-                lca_tui::widgets::image::detect_image_protocol(),
-                self.tools_expanded,
-                self.thinking,
-                self.codeblock_border,
-                &self.markdown_transformers,
-                &self.tuning,
-                self.keybindings.as_ref(),
-                &mut tmp,
-            );
-            line += tmp.len();
-        }
-        offsets
+        // Gh #375 gap 3: **read from the painted rows**, by the same marker the jump
+        // resolves against. This used to walk the entries and re-render each one to
+        // count its lines - a second measurement pass that could disagree with the
+        // frame (the repo's named failure mode), and that had to be kept in step with
+        // `render_entry`'s row count forever.
+        //
+        // Now there is one number: the marker's row in the rendered document. The
+        // **`BeforePlacements` stage**, not `render`: the final stage strips the marker
+        // for painting (that is the point of it), so scanning the public rows would find
+        // nothing. Scanning the pre-strip rows is the whole reason the marker is in the
+        // cached line rather than beside it. The cache is keyed by (width, epoch), so a
+        // second read at the same width is a scan, not a render.
+        self.render_for_protocol_at(
+            width,
+            theme,
+            lca_tui::widgets::image::detect_image_protocol(),
+            RowStage::BeforePlacements,
+        )
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| crate::prompt_marker::starts_prompt(line))
+        .map(|(row, _)| row)
+        .collect()
     }
 
     /// The height (line count) at a width.
@@ -104,4 +101,23 @@ pub fn image_label(media_type: &str, bytes: &[u8]) -> String {
         _ => "unknown size".to_string(),
     };
     format!("[image {media_type}, {dimensions}, {} bytes]", bytes.len())
+}
+
+impl Transcript {
+    /// The current render epoch (gh #375 gap 3): bumps whenever the cache is
+    /// invalidated, so a caller holding a row resolved under the previous render can
+    /// tell that it may have moved.
+    ///
+    /// Lives here rather than beside the cache because it belongs to the same question
+    /// as `user_offsets`: "is the row I recorded still the row I would get?".
+    pub fn epoch(&self) -> u64 {
+        self.cache_epoch
+    }
+
+    /// Drop every cached frame and bump the epoch, so nothing rendered under the
+    /// previous inputs can be served again.
+    pub(super) fn invalidate_cache(&mut self) {
+        self.cache_epoch = self.cache_epoch.wrapping_add(1);
+        self.cache.borrow_mut().clear();
+    }
 }

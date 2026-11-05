@@ -54,7 +54,9 @@ impl Chat {
             }
         }
         if let Some(&first) = self.search_matches.first() {
-            self.jump_target = Some(first);
+            // A search match is a *row* by definition: the subject is rendered text,
+            // not an entry identity (gh #375 gap 3).
+            self.jump_target = Some(crate::chat_jump::JumpTarget::Row(first));
         }
     }
 
@@ -64,6 +66,8 @@ impl Chat {
             return;
         }
         self.search_index = (self.search_index + 1) % self.search_matches.len();
-        self.jump_target = Some(self.search_matches[self.search_index]);
+        self.jump_target = Some(crate::chat_jump::JumpTarget::Row(
+            self.search_matches[self.search_index],
+        ));
     }
 }

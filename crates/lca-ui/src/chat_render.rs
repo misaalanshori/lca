@@ -236,6 +236,14 @@ impl Chat {
             protocol,
             crate::transcript::RowStage::BeforePlacements,
         );
+        // Gh #375 gap 3: **the prompt marker stops here.**
+        //
+        // The rows above still carry it, because `user_offsets` resolves a jump against
+        // those exact rows and the image crop parses their columns. From this line on
+        // the data is paint: a marker left in would cost a cell of the first content row
+        // and, in plain mode, be the only escape byte in the frame - which is what the
+        // `plain_mode_never_paints_color` row caught the moment the marker existed.
+        crate::prompt_marker::strip_markers_in_place(&mut transcript);
 
         // Extension footer regions (FR-UI-1) ride with the fixed part of
         // the frame: they are status, not history.
@@ -1016,6 +1024,28 @@ impl Chat {
     /// transcript, so the growth it reports is not new output - the
     /// clamp applies and the offset does not move.
     pub fn clamp_scroll(&mut self, scroll: u16, width: u16, height: u16) -> u16 {
+        // Gh #375 gap 3: a jump that is still pinned **owns** the position across a
+        // geometry change. `take_jump_scroll` re-resolved it this frame - which is why
+        // this size can differ from the pin's - and the growth-hold below would
+        // otherwise add the re-wrap's line delta on top and drag the prompt off the top
+        // row by exactly the lines the rewrap added. A reader who has scrolled since
+        // still wins: any scroll but the pin's own value means the position is theirs.
+        if let Some(pin) = self.pinned_jump
+            && (pin.width != width || pin.height != height)
+        {
+            let row = self.resolve_jump_row(pin.target, width).unwrap_or(0);
+            let pinned = self.scroll_pinning(row, width, height);
+            self.last_transcript_len = Some(self.transcript_len(width));
+            self.last_render_width = width;
+            self.pinned_jump = Some(crate::chat_jump::PinnedJump {
+                width,
+                height,
+                ..pin
+            });
+            if scroll == pinned {
+                return scroll;
+            }
+        }
         // Gh #331: the ceiling is `content - window`, and the window already has the
         // tab row taken out of it. Computing it here as `height - dock` made the
         // maximum one row short, so the last line could never reach the top.

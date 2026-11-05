@@ -181,8 +181,10 @@ pub struct Chat {
     pub screen_mode: bool,
     /// Ctrl+X seen, waiting for the chord's second key (external editor).
     pending_ctrl_x: bool,
-    /// A pending prompt-jump target (a document line index).
-    pub(crate) jump_target: Option<usize>,
+    /// A pending viewport target, and the jump already applied (FR-UI-11, gh #173,
+    /// gh #375 gap 3). An **identity**, not a coordinate: see [`crate::chat_jump`].
+    pub(crate) jump_target: Option<crate::chat_jump::JumpTarget>,
+    pub(crate) pinned_jump: Option<crate::chat_jump::PinnedJump>,
     /// When the last lone Escape landed (gh #132): a second one within
     /// pi's 500 ms window acts (tree/fork/none), anything else re-arms.
     pub(crate) last_escape: Option<std::time::Instant>,
@@ -460,6 +462,7 @@ impl Chat {
             screen_mode,
             pending_ctrl_x: false,
             jump_target: None,
+            pinned_jump: None,
             last_escape: None,
             scrollbar_hover: false,
             scroll_drag: None,

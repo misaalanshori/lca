@@ -397,7 +397,8 @@ impl Chat {
             let total = self.transcript_len(width);
             let window = self.window_height(width, height);
             let target = total.saturating_sub(window.saturating_add(scroll as usize));
-            self.jump_target = Some(target);
+            // A tab restore records a scroll *position*, not an entry (gh #375 gap 3).
+            self.jump_target = Some(crate::chat_jump::JumpTarget::Row(target));
         }
         // Scrollback mode cannot erase: the switch appends its
         // transition divider to the scrollback (the issue's rule).

@@ -384,11 +384,27 @@ fn render_user(
     out.push(band_row("", width, &bg));
     for (i, line) in wrapped.iter().enumerate() {
         let prefix = if i == 0 { "› " } else { "  " };
-        out.push(band_row(
-            &format!(" {}{}", prefix, (theme.user)(line)),
-            width,
-            &bg,
-        ));
+        let painted = band_row(&format!(" {}{}", prefix, (theme.user)(line)), width, &bg);
+        // Gh #375 gap 3: the **prompt marker** prefixes the first content row - before
+        // the band's own SGR, exactly as pi writes it (`lines[0] = OSC133_ZONE_START +
+        // lines[0]`).
+        //
+        // In-band, rather than beside the row, because the row it has to survive is the
+        // *reflowed* one: a jump target used to be a document row computed at one width
+        // and theme and applied under another, so a resize or a re-theme after a jump
+        // pointed the viewport at a different line. A marker inside the line moves with
+        // it, and the scan that finds it runs over the rows about to be painted.
+        //
+        // At the very front, so it is a true **prefix**: a marker placed after the band's
+        // opening SGR is not at position 0, and a prefix test (which is what
+        // `starts_prompt` is, and what keeps a message that merely *mentions* the bytes
+        // from counting as a prompt) would miss it. Stripping a prefix is also exactly
+        // `strip_markers`' job, so paint removes it and nothing else.
+        if i == 0 {
+            out.push(format!("{}{painted}", crate::prompt_marker::PROMPT_START));
+        } else {
+            out.push(painted);
+        }
     }
     out.push(band_row("", width, &bg));
 }

@@ -56,6 +56,23 @@
 
 use lca_tui::engine::keybindings::KeybindingsManager;
 
+/// Read one repository file, for a shape guard.
+fn read(rel: &str) -> String {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel);
+    std::fs::read_to_string(&path).unwrap_or_else(|err| panic!("read {path:?}: {err}"))
+}
+
+/// The body of one function, from its signature to the next line closing it at four
+/// spaces of indent.
+fn function_body<'a>(source: &'a str, signature: &str) -> &'a str {
+    let start = source
+        .find(signature)
+        .unwrap_or_else(|| panic!("{signature} exists"));
+    let rest = &source[start..];
+    let end = rest.find("\n    }\n").map_or(rest.len(), |at| at + 6);
+    &rest[..end]
+}
+
 /// The frame builder that paints the scrollbar, so its mechanism can be read.
 fn chat_render_source() -> String {
     std::fs::read_to_string(concat!(
@@ -167,5 +184,126 @@ fn the_scrollbar_keeps_the_background_and_takes_the_foreground() {
     assert!(
         body.contains("\\x1b[49m"),
         "the reopened background is closed at the end of the cell:\n{body}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// gap 3: a jump target is an identity, so a resize cannot move it
+// ---------------------------------------------------------------------------
+//
+// `jump_prompt` stored a **document row** computed at the width and theme in force when
+// the key was pressed, and `take_jump_scroll` applied it on a later frame under whatever
+// width and theme were in force then. A row is a derived coordinate: resize the pane and
+// the wrap changes, switch theme and a row's height changes, and the stored number now
+// names a different line.
+//
+// The behavioural rows live in `crates/lca-ui/src/chat_jump_tests.rs` (and the marker's
+// own unit rows in `prompt_marker.rs`). These pin the shape:
+
+// Verifies: gh #375 gap 3 - **the target is an identity, resolved at paint time.**
+//
+// The one line a future edit could restore is a row stored at keypress. `jump_prompt` must
+// store an ordinal, and the row must come from `user_offsets` at the width the frame is
+// painting - which is the "resolve late, from a stable key" shape this repo has used for
+// #331's `tab_top` and #373's layer stack.
+#[test]
+fn a_jump_target_is_an_identity_not_a_row() {
+    let jump = read("crates/lca-ui/src/chat_jump.rs");
+    let body = function_body(&jump, "pub(crate) fn jump_prompt(");
+    assert!(
+        body.contains("JumpTarget::Prompt("),
+        "the prompt jump stores an ordinal: {body}"
+    );
+    assert!(
+        !body.contains("self.jump_target = Some(JumpTarget::Row("),
+        "and the target it stores is never a row, which is the bug: {body}"
+    );
+    let resolve = function_body(&jump, "pub(crate) fn resolve_jump_row(");
+    assert!(
+        resolve.contains("user_offsets("),
+        "and the row is resolved from the offsets at paint time: {resolve}"
+    );
+    // The offsets themselves must come from the painted rows, not a second measurement
+    // pass over the entries (the repo's named "measured one thing, painted another").
+    let measure = read("crates/lca-ui/src/transcript/measure.rs");
+    let offsets = function_body(&measure, "pub fn user_offsets(");
+    assert!(
+        offsets.contains("render_for_protocol_at("),
+        "the offsets scan the rows the painter will produce: {offsets}"
+    );
+    assert!(
+        !offsets.contains("render_entry("),
+        "not a per-entry re-render that can disagree with the frame: {offsets}"
+    );
+}
+
+// Verifies: gh #375 gap 3 - **the pin survives the clamp**, and records the render epoch.
+//
+// `take_jump_scroll` clears the request; the pin is what a later frame re-resolves. Two
+// things must hold: the clamp must not add the re-wrap's growth on top (which drags the
+// prompt off the top row), and the pin must notice a theme change - which moves row
+// heights without moving the pane, so geometry alone cannot see it.
+#[test]
+fn the_pin_outlives_the_request_and_notices_a_rerender() {
+    let jump = read("crates/lca-ui/src/chat_jump.rs");
+    let take = function_body(&jump, "pub fn take_jump_scroll(");
+    assert!(
+        take.contains("self.pinned_jump = Some("),
+        "taking the request leaves a pin behind: {take}"
+    );
+    assert!(
+        take.contains("epoch: self.transcript.epoch()"),
+        "and records the render epoch it resolved under: {take}"
+    );
+    let render = read("crates/lca-ui/src/chat_render.rs");
+    let clamp = function_body(&render, "pub fn clamp_scroll(");
+    assert!(
+        clamp.contains("pinned_jump"),
+        "the clamp knows about a live pin, or the growth-hold moves it: {clamp}"
+    );
+}
+
+// Verifies: gh #375 gap 3 - **the marker is in-band, exact and stripped before paint.**
+//
+// In-band so it reflows with its row; exact so no escape bytes reach the screen (#366's
+// class one layer up); stripped at the one seam that turns rows into paint, so a copy, a
+// scrollback write or a plain-mode frame cannot inherit it.
+#[test]
+fn the_prompt_marker_is_in_band_and_never_painted() {
+    let render = read("crates/lca-ui/src/transcript/render.rs");
+    let user = function_body(&render, "fn render_user(");
+    assert!(
+        user.contains("PROMPT_START"),
+        "the user band carries the marker: {user}"
+    );
+
+    let chat_render = read("crates/lca-ui/src/chat_render.rs");
+    assert!(
+        chat_render.contains("strip_markers_in_place"),
+        "and the paint seam strips it"
+    );
+
+    // The module, not one function body: `function_body` stops at the first four-space
+    // closing brace, which here is an inner block. The claims are about the strip path as
+    // a whole anyway.
+    let marker = read("crates/lca-ui/src/prompt_marker.rs");
+    assert!(
+        marker.contains("pub(crate) fn strip_markers("),
+        "the strip exists"
+    );
+    assert!(
+        marker.contains("BEL") && marker.contains("string-terminator"),
+        "and names both terminators it must handle, so the strip is exact"
+    );
+    let strip = &marker[marker
+        .find("pub(crate) fn strip_markers(")
+        .expect("the strip is defined")..];
+    assert!(
+        strip.contains("find('\\x07')") && strip.contains("find(\"\\x1b\\\\\")"),
+        "both are located in the implementation"
+    );
+    assert!(
+        strip.contains("malformed"),
+        "and a truncated sequence is left in place rather than eating the row"
     );
 }
