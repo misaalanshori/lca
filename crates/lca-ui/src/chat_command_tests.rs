@@ -552,6 +552,48 @@ fn double_escape_opens_the_tree() {
     assert!(chat.tree_picker.is_some(), "the second escape acts");
 }
 
+// Verifies: gh #339 finding 7 - `ui.tree_filter_mode` is **not** inert, which is why
+// its config accessor's old "inert by documentation" note was deleted rather than left
+// standing.
+//
+// The note was true when it was written (a `/tree` that listed sessions has nothing to
+// filter) and stopped being true in gh #231 without the comment following it. A doc
+// claim about behaviour is only worth the row behind it, so this is that row: the host's
+// configured mode reaches the navigator's opening filter, for every mode in the
+// vocabulary.
+#[test]
+fn the_configured_tree_filter_mode_opens_the_navigator() {
+    for (configured, expected) in [
+        ("default", crate::chat_pickers::TreeFilter::Default),
+        ("no-tools", crate::chat_pickers::TreeFilter::NoTools),
+        ("user-only", crate::chat_pickers::TreeFilter::UserOnly),
+        ("labeled-only", crate::chat_pickers::TreeFilter::LabeledOnly),
+        ("all", crate::chat_pickers::TreeFilter::All),
+    ] {
+        let mut opts = options();
+        opts.hooks.session_tree = Some(Arc::new(|| vec![tree_row("root", 0, "root (session)")]));
+        let mode = configured.to_string();
+        opts.hooks.tree_filter_mode = Some(Arc::new(move || mode.clone()));
+        let mut chat = Chat::new(opts, Arc::new(KeybindingsManager::new()));
+        chat.open_tree_picker();
+        let picker = chat.tree_picker.as_ref().expect("the navigator opens");
+        assert_eq!(
+            picker.filter, expected,
+            "`ui.tree_filter_mode = {configured}` is the opening filter"
+        );
+    }
+
+    // Absent hook: the navigator still opens, on the default view.
+    let mut opts = options();
+    opts.hooks.session_tree = Some(Arc::new(|| vec![tree_row("root", 0, "root (session)")]));
+    let mut chat = Chat::new(opts, Arc::new(KeybindingsManager::new()));
+    chat.open_tree_picker();
+    assert_eq!(
+        chat.tree_picker.as_ref().expect("opens").filter,
+        crate::chat_pickers::TreeFilter::Default
+    );
+}
+
 // Verifies: gh #132 - the fork action opens the fork picker instead,
 // and none does nothing at all.
 #[test]
