@@ -245,3 +245,37 @@ fn only_the_interactive_entry_installs_the_signal_handler() {
         );
     }
 }
+
+// Verifies: gh #403 gap 4 - **nothing is printed into a terminal that is gone.**
+//
+// This one came from CI rather than from review: the macOS leg failed the pty row
+// with exit **101**, not 129. The close-out's resume hint writes to stdout, and on a
+// hung-up pty that write fails and `println!` panics - so a clean dead-tty exit became
+// a crash-shaped one, on the platform whose pty semantics differ. The hint now asks
+// the same process-wide flag the loop sets.
+//
+// A guard rather than only the behavioural row, because the failure mode is a *panic*
+// in a path three crates away from the detection: any future line printed on the way
+// out re-opens it, and this scan is what notices.
+#[test]
+fn the_exit_path_prints_nothing_once_the_terminal_is_gone() {
+    let host = read("crates/lca-cli/src/tui/close.rs");
+    let hint = function_body(&host, "pub(super) fn exit_resume_hint(");
+    let gate = hint
+        .find("signals::requested()")
+        .unwrap_or_else(|| panic!("the hint asks the hangup flag: {hint}"));
+    let id = hint
+        .find("session.id()")
+        .unwrap_or_else(|| panic!("and only then builds the command: {hint}"));
+    assert!(
+        gate < id,
+        "the gate must be ahead of everything that formats or prints: {hint}"
+    );
+    // And the loop is what records it for that caller, which holds no terminal.
+    let runtime = read("crates/lca-ui/src/run_terminal.rs");
+    let body = function_body(&runtime, "pub(crate) fn hangup_requested(");
+    assert!(
+        body.contains("signals::request()"),
+        "the loop records the hangup process-wide so an outside caller can ask: {body}"
+    );
+}

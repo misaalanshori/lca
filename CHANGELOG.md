@@ -58,6 +58,10 @@ Dates are UTC.
   rather than attempted. 129 is `128 + SIGHUP` - the shell's own convention, so a script
   that never heard of LCA can read it - and it is the one non-zero code that is not a
   failure: the records and the clean-exit marker are written exactly as on a quit.
+  The exit path prints nothing once the terminal is gone, for a reason CI found rather
+  than review: the resume hint is the one line written to stdout on the way out, and on
+  a hung-up pty that write fails and `println!` panics - turning a clean 129 into a
+  crash-shaped 101 on macOS. The hint now asks the same flag the loop sets.
   *`Ctrl+Z` on Windows.* `SIGTSTP` does not exist there, so the key did nothing at all -
   no frame change, no message. A prompt that cannot work is worse than no prompt, so it now
   says suspend is unsupported and names the thing that gets the same result. Still a

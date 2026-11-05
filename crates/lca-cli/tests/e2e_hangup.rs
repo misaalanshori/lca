@@ -389,6 +389,15 @@ fn the_last_record_survives_a_dead_terminal() {
         text.contains("\"session-end\""),
         "the shutdown completed rather than being cut off: {text}"
     );
+    // And **nothing was printed into the dead terminal.** The close-out's resume hint
+    // is the one line the exit path writes to stdout, and on a hung-up pty that write
+    // fails - `println!` panics, and the exit becomes 101 instead of 129. So the hint
+    // asks the same hangup flag the loop does (`signals::requested`), which is what
+    // makes this an exit rather than a crash. Found by this row failing 101 on macOS.
+    assert!(
+        !text.contains("lca -r"),
+        "no resume hint is printed to a terminal that is gone: {text}"
+    );
 }
 
 // Verifies: gh #403 gap 4, the control - **a terminal that stays put is not

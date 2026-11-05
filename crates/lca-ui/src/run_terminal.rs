@@ -37,6 +37,11 @@ pub(crate) fn hangup_requested(terminal: &dyn Terminal) -> bool {
     let gone = hangup_decision(terminal.hangup(), signals::requested());
     if gone {
         terminal.note_hangup();
+        // And record it process-wide, so a caller **outside** this loop can ask
+        // without holding the terminal. The close-out is that caller: a resume hint
+        // printed into a terminal that is gone panics on macOS (`println!` on a
+        // closed pty fails) - found by this cycle's own pty row failing 101 there.
+        signals::request();
     }
     gone
 }

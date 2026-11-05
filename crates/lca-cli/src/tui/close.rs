@@ -38,6 +38,14 @@ impl Ui {
         if !session.log_path().is_file() {
             return None;
         }
+        // Gate 0, ahead of the other two: **nobody is there to read it.** A hint
+        // printed into a terminal that has gone away is not just useless - on macOS
+        // the write fails and `println!` panics, turning a clean dead-tty exit (129)
+        // into a crash-shaped 101. The loop records the hangup process-wide for
+        // exactly this caller, which holds no terminal of its own.
+        if lca_tui::engine::signals::requested() {
+            return None;
+        }
         let id = session.id().to_string();
         let dir = session.dir().to_path_buf();
         // A session under the default data home needs only `--resume <id>`;
