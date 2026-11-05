@@ -396,3 +396,48 @@ fn an_osc_reply_split_at_the_bare_introducer_is_the_accepted_cost() {
     let dropped = across_the_timeout("\x1b]1", "1;rgb:1e1e/1e1e/1e1e\x07");
     assert_eq!(typed(&dropped), "", "one byte of commitment is enough");
 }
+
+// Verifies: gh #368 bug 2 - **a burst of introducers must not overflow the stack.**
+//
+// The tail after an abandoned introducer is itself input, and it may be another
+// introducer. My first version recursed once per introducer, so a few thousand of
+// them (a hostile paste, a terminal echoing garbage, an SSH link repeating a byte)
+// grew the stack linearly - `cargo nextest` reported `has overflowed its stack /
+// fatal runtime error: stack overflow, aborting`, which is a **process abort**, not
+// a failed parse. The recovery is a loop now, and each turn consumes at least two
+// bytes.
+//
+// A hostile-input row rather than a nicety: a panic aborts the TUI and leaves the
+// terminal in raw mode, which is the crash class this crate's lints exist to
+// prevent.
+#[test]
+fn a_burst_of_introducers_does_not_overflow_the_stack() {
+    let hostile = "\x1b]".repeat(4000);
+    let mut buffer = StdinBuffer::new();
+    let mut out = data(buffer.process(&hostile));
+    out.extend(data(buffer.flush()));
+    assert!(
+        out.len() >= 4000,
+        "every introducer comes back as its own keystroke ({} events)",
+        out.len()
+    );
+    assert_eq!(
+        out.concat(),
+        hostile,
+        "and nothing is lost or invented at that scale"
+    );
+    // The other half of the same defect: the first *iterative* version was O(n²)
+    // (a fresh buffer per pass, 8.8 s for this input), which is a freeze rather
+    // than an abort. The bound is generous - a linear pass over 8 KiB costs
+    // microseconds - so it catches a return to per-byte rescans without measuring
+    // the machine.
+    let started = std::time::Instant::now();
+    let mut buffer = StdinBuffer::new();
+    let mut out = data(buffer.process(&hostile));
+    out.extend(data(buffer.flush()));
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(500),
+        "and the recovery is linear: {} ms for 8 KiB",
+        started.elapsed().as_millis()
+    );
+}

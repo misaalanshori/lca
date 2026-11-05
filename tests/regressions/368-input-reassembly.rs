@@ -57,17 +57,29 @@ fn function_body<'a>(source: &'a str, signature: &str) -> &'a str {
 fn the_alt_key_recovery_splits_the_introducer_and_reparses() {
     let source = source();
     let body = function_body(&source, "fn revoke_alt_key(");
-    let split = body
-        .find("let split = 2;")
-        .unwrap_or_else(|| panic!("the split point is the two introducer bytes: {body}"));
-    let first = body
-        .find("remainder[..split]")
-        .unwrap_or_else(|| panic!("and the introducer is emitted alone: {body}"));
-    assert!(split < first, "the split comes before the emission: {body}");
+    // The two introducer bytes are emitted **alone**, as their own event.
+    assert!(
+        body.contains("rest[..2].to_string()"),
+        "the introducer is its own two-byte event: {body}"
+    );
     assert!(
         body.contains("StdinBuffer::new()") && body.contains("tail.process("),
         "and the tail is reparsed through a buffer, so a `Ctrl+M` in it is still \
          Enter rather than two literal characters: {body}"
+    );
+    // A **loop**, not recursion: the tail is itself input and may be another
+    // introducer. Recursion aborted the process on a burst (stack overflow) and a
+    // fresh buffer per pass was O(n^2); both are recorded in the function's own
+    // comment, and the loop is the shape that is neither.
+    assert!(
+        body.contains("loop {"),
+        "the recovery iterates rather than recursing: {body}"
+    );
+    // The body includes the signature itself, so "no call" is "mentioned once".
+    assert_eq!(
+        body.matches("revoke_alt_key(").count(),
+        1,
+        "and never calls itself: {body}"
     );
     for intro in ["\\x1b]", "\\x1bP", "\\x1b_"] {
         assert!(

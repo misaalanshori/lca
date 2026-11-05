@@ -851,27 +851,55 @@ impl StdinBuffer {
 /// piece would type the literal two characters into the composer instead of
 /// submitting.
 fn revoke_alt_key(remainder: &str) -> Vec<StdinEvent> {
-    // Only the three control-string introducers. `ESC [` is a **CSI**, and a
-    // `CSI` is not a keystroke plus typing - `ESC [` alone is `ctrl+alt+[` and a
-    // half-arrived arrow key is the same two bytes, so splitting it would trade
-    // one ambiguity for another. pi draws the line in the same place
-    // (`isControlString`).
-    let is_control_string = remainder.starts_with("\x1b]")
-        || remainder.starts_with("\x1bP")
-        || remainder.starts_with("\x1b_");
-    if !is_control_string || remainder.len() <= 2 {
-        // `ESC ]` on its own is already the meta pair `parse_key` reads as
-        // `alt+]`: one event, nothing to split.
-        return vec![StdinEvent::Data(remainder.to_string())];
+    /// The three control-string introducers, and deliberately not `ESC [`.
+    ///
+    /// A `CSI` is not a keystroke plus typing: `ESC [` alone is `ctrl+alt+[` *and*
+    /// the head of a half-arrived arrow key, so splitting it would trade one
+    /// ambiguity for another. pi draws the line in the same place
+    /// (`isControlString`).
+    fn is_introducer(text: &str) -> bool {
+        text.starts_with("\x1b]") || text.starts_with("\x1bP") || text.starts_with("\x1b_")
     }
-    let split = 2;
-    let mut events = vec![StdinEvent::Data(remainder[..split].to_string())];
-    // Reprocess the tail through a fresh buffer: the keystrokes after an
-    // abandoned introducer are ordinary input and may themselves be sequences.
+
+    let mut events = Vec::new();
+    let mut rest = remainder.to_string();
+    // **One buffer, one loop.** Two earlier shapes are recorded here rather than
+    // forgotten: recursing once per introducer made the depth grow with the input
+    // and a burst of a few thousand aborted the process with a stack overflow, and
+    // rebuilding a fresh buffer per pass over the whole tail was O(n²) - 4000
+    // introducers took 8.8 s, a freeze of its own. Every pass here either emits
+    // bytes or ends.
     let mut tail = StdinBuffer::new();
-    events.extend(tail.process(&remainder[split..]));
-    events.extend(tail.flush());
-    events
+    loop {
+        while rest.len() > 2 && is_introducer(&rest) {
+            // The two introducer bytes are the meta pair the user pressed.
+            events.push(StdinEvent::Data(rest[..2].to_string()));
+            rest = rest[2..].to_string();
+        }
+        if rest.is_empty() {
+            return events;
+        }
+        if rest.len() <= 2 && is_introducer(&rest) {
+            // A lone introducer is already the meta pair `parse_key` reads as
+            // `alt+]`: one event, nothing to split.
+            events.push(StdinEvent::Data(rest));
+            return events;
+        }
+        // Whatever is left is typing, and may itself contain sequences - so it goes
+        // through the buffer, which is drained here and reused next pass.
+        events.extend(tail.process(&rest));
+        let buffered = tail.buffered().to_string();
+        if buffered.is_empty() {
+            return events;
+        }
+        if !is_introducer(&buffered) || buffered.len() <= 2 {
+            events.push(StdinEvent::Data(buffered));
+            return events;
+        }
+        // The tail *ended* on an abandoned introducer: peel it and go again.
+        events.push(StdinEvent::Data(buffered[..2].to_string()));
+        rest = buffered[2..].to_string();
+    }
 }
 
 #[cfg(test)]
