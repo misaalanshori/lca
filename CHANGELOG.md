@@ -42,6 +42,24 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **An overlay spliced at the caret no longer eats the IME anchor** (gh #378 gap 3, which
+  closes the issue). The last silent-loss bug in the renderer. Overlay compositing
+  (`extract_segments`) copies an escape into the right-hand segment only once that segment
+  has *started*, because the first grapheme there prepends the style tracker's consolidated
+  state — copy the code too and the style is applied twice, which is exactly what the
+  previous gap fixed in the other direction. That reasoning is right for a style and wrong
+  for an APC marker: `\x1b_pi:c\x07` (`CURSOR_MARKER`) carries no attribute, so no tracker
+  will ever re-emit it, and its *position* is its entire payload. An overlay that ended
+  exactly on the caret — a tooltip's right edge, a picker frame, the drawer tab — dropped the
+  marker, and the terminal was handed a frame with no anchor: the IME candidate window
+  opened in the wrong place or not at all, with nothing in any log. A zero-width APC marker
+  now passes through before the first grapheme; nothing else does. The predicate names the
+  channel rather than a property, deliberately: "zero-width and unmodelled" is true of a CSI
+  erase and an OSC title too, and replaying either at a seam acts on the frame mid-row — so
+  the widening is stated on the one channel that is inert by contract, which is why the SGR
+  it must not duplicate is now pinned in both directions. The marker is still **one** per
+  frame (gh #371 gap 3's ownership), still **stripped** by the engine before paint, and still
+  **zero width** (#378 gap 1's fast path), each as its own row.
 - **A prompt jump now stays on its prompt when the pane is resized or the theme changes**
   (gh #375 gap 3). Jumping to an earlier prompt stored a **document row** — computed at the
   width and theme in force when the key was pressed — and applied it on a later frame under

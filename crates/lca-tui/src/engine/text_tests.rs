@@ -445,3 +445,285 @@ fn a_hot_width_is_not_evicted_by_cold_measurements() {
     // And it is still right after the flood, not merely non-panicking.
     assert_eq!(visible_width(hot), expected);
 }
+
+// ==== gh #378 gap 3: an APC marker spliced at the seam ====
+//
+// `extract_segments` copies an escape code into `after` only once `after` has
+// started, because the tracker re-emits the consolidated style on the first
+// `after` grapheme and copying it twice would double-apply it (that is gap 2 in
+// the other direction). An APC marker is not a style: no tracker models it, so
+// `active_codes()` cannot re-emit it, and dropping it loses the caret/IME anchor
+// silently - there is no error, only a caret in the wrong place.
+
+/// The engine's caret marker, spelled out rather than imported: these rows are
+/// about *any* APC at the seam, and `core::CURSOR_MARKER` is one instance.
+const CARET: &str = "\x1b_pi:c\x07";
+
+// Verifies: gh #378 gap 3 - **the row from the issue**: an APC marker sitting
+// exactly at `after_start` survives extraction, at its own column.
+#[test]
+fn an_apc_marker_at_the_seam_survives_extraction() {
+    let line = format!("\x1b[31mabc{CARET}def\x1b[0m");
+    let (before, before_width, after, after_width) = extract_segments(&line, 3, 3, 3, false);
+    assert_eq!(before, "\x1b[31mabc", "the left side is untouched");
+    assert_eq!(before_width, 3);
+    assert!(
+        after.starts_with(CARET),
+        "the marker keeps its own column - it is the first thing in `after`: {after:?}"
+    );
+    assert_eq!(
+        strip_terminal_sequences(&after),
+        "def",
+        "and the text it anchors is unchanged: {after:?}"
+    );
+    assert_eq!(after_width, 3, "the marker adds no width: {after:?}");
+    assert_eq!(
+        after.matches(CARET).count(),
+        1,
+        "exactly once - the pass-through copies, it does not repeat: {after:?}"
+    );
+}
+
+// Verifies: gh #378 gap 3 - the marker keeps the column it names, and the
+// splice's own geometry is unaffected by its survival.
+//
+// A marker that survives but lands somewhere else is a different bug: it would
+// put the IME candidate window at the wrong column. `before` is what the overlay
+// is placed after, so its measured width is the position, and `after` must start
+// at visible column 0.
+#[test]
+fn a_surviving_marker_does_not_move_the_splice() {
+    // `splice_segment`'s geometry: `extract_segments(base, x, x + width, ...)`.
+    let line = format!("{}{CARET}xxyy", "a".repeat(6));
+    let (_, before_width, after, after_width) = extract_segments(&line, 6, 6, 64, false);
+    assert_eq!(before_width, 6, "the overlay sits after six columns");
+    assert_eq!(after_width, 4, "and the marker is zero cells of it");
+    assert!(
+        after.starts_with(CARET),
+        "the marker is at the seam: {after:?}"
+    );
+    assert_eq!(strip_terminal_sequences(&after), "xxyy");
+    // The marker's own column, counted the way the engine counts: the row prefix
+    // before it plus everything `after` has emitted so far.
+    let at = after.find(CARET).expect("present");
+    assert_eq!(
+        visible_width(&after[..at]),
+        0,
+        "it opens `after`, so it sits at exactly the seam's column"
+    );
+}
+
+// Verifies: gh #378 gap 3 - the mirror row: a marker that is **not in the output
+// range** is still dropped. The fix is "pass a marker through at the seam", not
+// "pass every APC everywhere", and this is the row that says so.
+//
+// The gap here is `before_end < after_start`, which `splice_segment` never
+// produces (it sets both to `x`) but the tab-restore and selection paths can: a
+// marker in the skipped span belongs to neither segment.
+#[test]
+fn a_marker_outside_the_output_range_is_still_dropped() {
+    // Columns 0-5 are `before`; the marker sits at column 6 in the gap; `after`
+    // starts at 8.
+    let line = format!("{}{CARET}xy", "a".repeat(6));
+    let (before, before_width, after, _) = extract_segments(&line, 6, 8, 64, false);
+    assert_eq!(before_width, 6);
+    assert!(
+        !before.contains(CARET),
+        "a marker past `before_end` does not ride along in `before`: {before:?}"
+    );
+    assert!(
+        !after.contains(CARET),
+        "nor is it resurrected at the seam - it is not in the output range: {after:?}"
+    );
+    // And a marker before the seam is copied to exactly one side, never both:
+    // two markers in one line would break gh #371's one-owner rule by building.
+    let line = format!("{}{CARET}abcdef", "a".repeat(3));
+    let (before, _, after, _) = extract_segments(&line, 4, 4, 64, false);
+    let copies = usize::from(before.contains(CARET)) + usize::from(after.contains(CARET));
+    assert_eq!(
+        copies, 1,
+        "one marker in, one marker out: before={before:?} after={after:?}"
+    );
+    assert!(
+        before.contains(CARET),
+        "and it stays where it was, on the left of the seam: {before:?}"
+    );
+}
+
+// Verifies: gh #378 gap 3 - the drawer tab's real geometry: a one-cell window.
+//
+// `paint_drawer_tab` splices one glyph, i.e. `after_len == 1`. A marker at the
+// window's left edge still survives, which is the narrowest seam the product has.
+#[test]
+fn a_one_cell_splice_keeps_a_marker_at_its_left_edge() {
+    let line = format!("{}{CARET}xyz", "a".repeat(6));
+    let (_, _, after, _) = extract_segments(&line, 6, 6, 1, false);
+    assert!(
+        after.starts_with(CARET),
+        "the tab's window starts with the marker: {after:?}"
+    );
+    assert_eq!(strip_terminal_sequences(&after), "x");
+}
+
+// Verifies: gh #378 gap 2, pinned **against** gap 3's widening: an SGR arriving
+// at the seam is still consolidated into **one** sequence, never copied *and*
+// re-emitted.
+//
+// This is the property the narrow predicate exists to protect, and it needs the
+// codes to sit exactly *at* `after_start` - a code before `before_end` rides in
+// `before` and never reaches `after`, so a row built that way would pass under a
+// predicate widened to any escape at all.
+#[test]
+fn sgr_at_the_seam_is_still_consolidated_not_duplicated() {
+    // `before` is `abc`; both styles sit at column 3, the seam itself.
+    let line = "abc\x1b[1m\x1b[31mdef";
+    let (before, _, after, after_width) = extract_segments(line, 3, 3, 3, false);
+    assert_eq!(before, "abc", "the styles are not in `before`");
+    assert_eq!(
+        after.matches("\x1b[").count(),
+        1,
+        "one consolidated sequence - copies plus a re-emit would be three: {after:?}"
+    );
+    assert!(
+        after.contains('1') && after.contains("31"),
+        "and it carries the net style: {after:?}"
+    );
+    assert_eq!(strip_terminal_sequences(&after), "def");
+    assert_eq!(after_width, 3, "nor does it add width: {after:?}");
+}
+
+// Verifies: gh #378 gap 3 - a marker and a style at the same seam coexist: the
+// style is consolidated once and the marker survives, in that order.
+#[test]
+fn a_marker_and_a_style_at_one_seam_both_survive() {
+    let line = format!("abc{CARET}\x1b[31mdef");
+    let (_, _, after, _) = extract_segments(&line, 3, 3, 3, false);
+    assert_eq!(after.matches(CARET).count(), 1, "{after:?}");
+    assert_eq!(
+        after.matches("\x1b[").count(),
+        1,
+        "the consolidated style, once: {after:?}"
+    );
+    let marker = after.find(CARET).expect("present");
+    let style = after.find("\x1b[31m").expect("present");
+    assert!(
+        marker < style,
+        "the marker opens the segment, so the caret stays at the seam's column: {after:?}"
+    );
+    assert_eq!(strip_terminal_sequences(&after), "def");
+}
+
+// Verifies: gh #378 gap 3 - a truncated APC is not treated as a marker.
+//
+// `extract_ansi_code` declines a sequence with no terminator, so its bytes are
+// scanned as text. The fix must not make that look like a marker: a synthesized
+// half-marker would put raw `BEL` on the screen, which is worse than the text
+// leak the sanitizer exists to bound (gh #405).
+#[test]
+fn a_truncated_apc_never_becomes_a_marker() {
+    let line = "ab\x1b_pi:c";
+    let (before, _, after, _) = extract_segments(line, 2, 2, 3, false);
+    assert!(!before.contains(CARET));
+    assert!(
+        !after.contains(CARET),
+        "no marker is invented from an unterminated sequence: {after:?}"
+    );
+    assert!(
+        !after.contains('\x07'),
+        "and no stray `BEL` is emitted: {after:?}"
+    );
+}
+
+// Verifies: gh #371 bug 3's interaction: the pass-through **copies** a marker, it
+// never synthesizes one.
+//
+// Ownership decides which field emits (`Chat::keyboard_owner`), and the composer
+// strips its own marker before compositing when an overlay has the keyboard. A
+// seam that invented a marker would resurrect exactly the background caret that
+// work suppressed, so "no marker in the line" must stay "no marker in the
+// output".
+#[test]
+fn the_seam_never_synthesizes_a_marker() {
+    for line in ["abc", "abcdef", "abc\x1b[31mdef"] {
+        let (_, _, after, _) = extract_segments(line, 3, 3, 3, false);
+        assert!(
+            !after.contains(CARET),
+            "no marker in, no marker out: {line:?} -> {after:?}"
+        );
+    }
+}
+
+// Verifies: gh #378 gap 1's property against gap 3's change: an APC marker is
+// zero-width, so the fast path's answer is unchanged.
+//
+// A marker that measured one cell would re-break every row it survived on - the
+// reason this is its own row rather than a line in the equivalence table.
+#[test]
+fn an_apc_marker_adds_no_width() {
+    let marked = format!("abc{CARET}def");
+    assert_eq!(visible_width(&marked), 6);
+    assert_eq!(
+        ascii_visible_width(&marked),
+        Some(6),
+        "the fast path decides a marked row, and decides it the same way"
+    );
+    assert_eq!(visible_width("\x1b_pi:c\x07"), 0, "and on its own");
+}
+
+// Verifies: gh #378 gap 3 - the predicate is APC only, not "any escape".
+//
+// Asserted through the seam rather than through the predicate: what matters is
+// which codes the pass-through **copies**, and a row asserting
+// `is_apc_marker("\x1b[2J") == false` would still pass if the seam used a wider
+// test. The widening is deliberately narrow because `extract_ansi_code`'s
+// vocabulary also holds OSC and the CSI control finals, and neither may be
+// replayed at a seam: an OSC can set the window title or reach the clipboard from
+// document text, and a CSI erase acts on the frame mid-row.
+#[test]
+fn only_apc_is_a_seam_marker() {
+    // The marker survives at the seam ...
+    let marked = format!("{CARET}def");
+    let (_, _, after, _) = extract_segments(&marked, 0, 0, 3, false);
+    assert!(
+        after.starts_with(CARET),
+        "the APC marker opens `after`: {after:?}"
+    );
+
+    // ... and nothing else at the seam is *copied*. Each of these is zero-width
+    // from the tracker's point of view, which is exactly why "zero-width and
+    // unmodelled" cannot be the test: an erase and a title OSC are both, and
+    // neither is inert.
+    //
+    // "Copied" is the right word, not "present": an OSC 8 hyperlink legitimately
+    // comes back from `active_codes()`, because the tracker models it and the
+    // first `after` grapheme re-emits the net state. The property is that a seam
+    // never *adds* a copy on top, so an OSC 8 appears once, and the codes the
+    // tracker does not model do not appear at all.
+    for (code, reemitted) in [
+        ("\x1b[2J", false),                        // erase display
+        ("\x1b[K", false),                         // erase line
+        ("\x1b[3G", false),                        // cursor move
+        ("\x1b]8;;https://example.com\x07", true), // OSC 8: the tracker's own
+        ("\x1b]0;a title\x07", false),             // OSC title: unmodelled, inert
+    ] {
+        let line = format!("{code}def");
+        let (_, _, after, _) = extract_segments(&line, 0, 0, 3, false);
+        let copies = after.matches(code).count();
+        if reemitted {
+            assert_eq!(
+                copies, 1,
+                "{code:?} is re-emitted once by the tracker and not copied on top: {after:?}"
+            );
+        } else {
+            assert_eq!(
+                copies, 0,
+                "{code:?} must not be replayed at a seam: {after:?}"
+            );
+        }
+        assert_eq!(
+            strip_terminal_sequences(&after),
+            "def",
+            "and the text is still what it was: {after:?}"
+        );
+    }
+}

@@ -186,3 +186,171 @@ fn the_hit_counter_is_gated_on_test() {
         "and it is a thread-local, so no cross-thread sharing"
     );
 }
+
+// ==== gh #378 gap 3: an APC marker at the seam ====
+//
+// `extract_segments` copies an escape into `after` only once `after` has started,
+// because the tracker re-emits the consolidated style on the first `after`
+// grapheme. That is right for SGR and fatal for a zero-width APC marker, which no
+// tracker models and whose *position* is the whole payload: an overlay spliced
+// exactly at a `CURSOR_MARKER` ate the caret/IME anchor with no error to notice.
+//
+// The rows below pin the shape from outside, because the failure is silent: the
+// behavioural rows say the marker survives, and these say *why* it can only
+// survive through the narrow door.
+
+/// Both files the seam spans: `text.rs` holds `extract_segments`, and the
+/// predicate lives beside the tracker in `text/ansi.rs` (split at the ceiling).
+fn seam_source() -> String {
+    format!(
+        "{}\n{}",
+        text_source(),
+        read("crates/lca-tui/src/engine/text/ansi.rs")
+    )
+}
+
+// Verifies: gh #378 gap 3 - the `after` gate is `after_started` OR an APC marker.
+//
+// Anchored on the gate itself, not on "the file mentions APC somewhere": a
+// pass-through that is computed and never consulted is the shape this bug
+// already had once.
+#[test]
+fn the_after_gate_lets_a_marker_through_before_the_first_grapheme() {
+    let source = seam_source();
+    let body = function_body(&source, "pub fn extract_segments(");
+    let gate_start = body
+        .find("} else if current_col >= after_start")
+        .expect("the `after` escape branch exists");
+    let gate_end = body[gate_start..]
+        .find("after.push_str(&code);")
+        .map_or(body.len(), |at| gate_start + at);
+    let gate = &body[gate_start..gate_end];
+    assert!(
+        gate.contains("after_started"),
+        "the original gate must still be there, so SGR is not duplicated: {gate}"
+    );
+    assert!(
+        gate.contains("is_apc_marker("),
+        "and a marker must be able to pass before `after` starts: {gate}"
+    );
+    assert!(
+        gate.contains("||"),
+        "the widening is a disjunction with the old gate, not a replacement: {gate}"
+    );
+}
+
+// Verifies: gh #378 gap 3 - the predicate is APC and nothing wider.
+//
+// Two ways to get this wrong, and both are the previous bug wearing a new name:
+// widening to "any escape" duplicates the SGR the tracker already re-emits
+// (gap 2, reversed), and widening to "any zero-width code" replays a CSI erase or
+// an OSC title at a seam, which is worse than a lost caret.
+#[test]
+fn the_pass_through_is_narrow() {
+    let source = seam_source();
+    let body = function_body(&source, "fn is_apc_marker(");
+    assert!(
+        body.contains("starts_with(\"\\x1b_\")"),
+        "APC is `ESC _`, and that is the whole test: {body}"
+    );
+    assert!(
+        !body.contains("contains("),
+        "a substring test would match a marker mid-line, which is not the seam's question: {body}"
+    );
+    // The CSI and OSC introducers must not appear in the predicate.
+    for other in ["b'm'", "\\x1b[", "\\x1b]"] {
+        assert!(
+            !body.contains(other),
+            "the predicate must not widen to {other}: {body}"
+        );
+    }
+}
+
+// Verifies: gh #378 gap 3 - the marker is still stripped before paint, so the
+// pass-through cannot put raw APC bytes on the screen.
+//
+// This is the row that keeps the fix from becoming a leak: the seam's job is to
+// carry the marker *to* the renderer, and the renderer's job is to consume it.
+#[test]
+fn the_engine_still_consumes_the_marker_before_paint() {
+    let core = read("crates/lca-tui/src/engine/core.rs");
+    let body = function_body(&core, "pub fn extract_cursor_position(");
+    assert!(
+        body.contains("line.find(CURSOR_MARKER)"),
+        "the engine locates the marker: {body}"
+    );
+    assert!(
+        body.contains("replace(CURSOR_MARKER, \"\")"),
+        "and removes it from the row it hands the terminal: {body}"
+    );
+}
+
+// Verifies: gh #378 gap 1's property against gap 3's change - the marker is
+// zero-width, so no measurement moved.
+//
+// A pass-through that measured one cell would re-break every row it survived on,
+// which is exactly the optimisation gap 1 bought.
+#[test]
+fn the_width_path_still_treats_an_apc_as_zero_width() {
+    let source = text_source();
+    let skip = function_body(&source, "fn ansi_code_length(");
+    assert!(
+        skip.contains("b'_'"),
+        "the skip treats APC as an escape, not as text: {skip}"
+    );
+    let walk = function_body(&source, "pub fn ascii_visible_width(");
+    assert!(
+        walk.contains("ansi_code_length(") || walk.contains("extract_ansi_code("),
+        "and the fast path walks it by that length: {walk}"
+    );
+}
+
+// Verifies: gh #378 gap 3 - **the product seam**: an overlay that ends exactly on
+// the caret keeps the caret.
+//
+// The behavioural rows in `text_tests.rs` drive `extract_segments` directly with
+// `before_end == after_start` (no gap). The splice the product actually builds is
+// `extract_segments(base, x, x + width, ...)`, so the marker sits at a column the
+// window *ends* on rather than one it starts at - and that is the shape a tooltip's
+// right edge, a picker's frame, or a drawer tab produces. Driving the real painter
+// is the difference between "the seam is fixed" and "the seam is fixed where the
+// product calls it".
+//
+// Before the fix this row fails: the marker is skipped because `after` has not
+// started, `extract_cursor_position` then finds no marker at all, and the frame has
+// no IME anchor.
+#[test]
+fn an_overlay_ending_on_the_caret_keeps_the_caret() {
+    use lca_tui::engine::core::extract_cursor_position;
+    use lca_tui::engine::text::visible_width;
+    use lca_ui::render::paint_tooltip;
+    use lca_ui::theme::Theme;
+
+    const MARKER: &str = "\x1b_pi:c\x07";
+    // A composer-like row: 20 cells of text with the caret at column 20.
+    let row = format!("{}hello{MARKER}", "x".repeat(15));
+    let tip = "TIP-ABCD"; // eight visible cells
+    let blank = "        ";
+    let mut rows = vec![row];
+    // The tooltip's right edge lands on column 20, exactly where the caret is.
+    paint_tooltip(&mut rows, 12, 0, &[tip.to_string()], &Theme::plain());
+
+    let painted = &rows[0];
+    assert!(
+        painted.contains(MARKER),
+        "the marker survives a splice that ends on it: {painted:?}"
+    );
+    assert_eq!(
+        visible_width(painted),
+        20,
+        "and the row keeps its width - the marker is zero cells: {painted:?}"
+    );
+    assert_eq!(blank.len(), tip.len(), "the fixture's two edges agree");
+    let (_, position) = extract_cursor_position(&rows);
+    let (row_index, column, _) = position.expect("the frame still has an IME anchor");
+    assert_eq!(row_index, 0);
+    assert_eq!(
+        column, 20,
+        "the anchor sits at the seam its marker named: {painted:?}"
+    );
+}

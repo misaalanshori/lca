@@ -25,8 +25,8 @@ pub use stream_safety::sanitize_incomplete_escapes;
 #[cfg(test)]
 #[path = "text/stream_safety_tests.rs"]
 mod stream_safety_tests;
-use ansi::update_tracker_from_text;
 pub use ansi::{AnsiCodeTracker, get_active_background_ansi};
+use ansi::{is_apc_marker, update_tracker_from_text};
 use osc8::get_active_osc8_close;
 pub use osc8::{ActiveHyperlink, Osc8Terminator, linkify_urls, parse_osc8_hyperlink};
 
@@ -1032,7 +1032,19 @@ pub fn extract_segments(
             tracker.process(&code);
             if current_col < before_end {
                 pending_ansi_before.push_str(&code);
-            } else if current_col >= after_start && current_col < after_end && after_started {
+            } else if current_col >= after_start
+                && current_col < after_end
+                && (after_started || is_apc_marker(&code))
+            {
+                // Gh #378 gap 3: a code is copied into `after` only once `after`
+                // has started, because the first `after` grapheme prepends the
+                // tracker's consolidated state and copying twice would double it
+                // (gap 2, in the other direction). That is right for a style and
+                // wrong for an APC marker: nothing re-emits a marker, so skipping
+                // one at the seam drops it silently and the caret/IME anchor
+                // moves or disappears. A marker therefore passes through even
+                // before the first grapheme - it is zero-width, so the splice's
+                // column is unaffected.
                 after.push_str(&code);
             }
             i += len;

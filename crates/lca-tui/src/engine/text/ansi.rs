@@ -219,6 +219,28 @@ impl AnsiCodeTracker {
     }
 }
 
+/// Whether `code` is an **APC marker**: a zero-width private sequence whose only
+/// purpose is to be *found* at a position (gh #378 gap 3).
+///
+/// `ESC _ … BEL`/`ST` is the one form in `extract_ansi_code`'s vocabulary that
+/// is both **unmodelled** - it carries no SGR attribute, so
+/// [`AnsiCodeTracker::active_codes`] cannot re-emit it - and **inert**: an APC is
+/// private to the application, so a terminal does nothing with it. Its payload is
+/// its position. `CURSOR_MARKER` is one instance; the seam that loses it loses
+/// the caret and IME anchor with no error to notice.
+///
+/// The predicate is the introducer, which is the honest test rather than a lazy
+/// one. "Zero-width and unmodelled" can be *asked of the tracker* - it reports
+/// nothing active for a CSI erase or an OSC terminator too - but those two are
+/// **not inert**: an OSC can retitle the window or reach the clipboard, and a CSI
+/// erase or cursor move acts on the frame mid-row. So the widening has to be
+/// stated on the channel that is inert by contract, and APC is that channel.
+/// OSC 8 is excluded for a second reason: the tracker does model it, so copying
+/// an OSC 8 across the seam would duplicate the hyperlink.
+pub(super) fn is_apc_marker(code: &str) -> bool {
+    code.starts_with("\x1b_")
+}
+
 pub(super) fn update_tracker_from_text(text: &str, tracker: &mut AnsiCodeTracker) {
     let mut i = 0;
     while i < text.len() {
