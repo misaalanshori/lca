@@ -263,6 +263,13 @@ pub fn tui_keybindings() -> &'static [(&'static str, KeybindingDefinition)] {
             "app.editor.external",
             def!(&["ctrl+x"], "Open the external editor"),
         ),
+        // Gh #403 gap 4: pi's `app.suspend`. Unbound on Windows, where `SIGTSTP`
+        // does not exist - and rather than leaving the key dead there, the *action*
+        // is registered with a notice (`run_terminal::suspend_refusal`), because a
+        // key that silently does nothing reads as a broken key. The table is one
+        // table (no per-platform forks), so `ctrl+z` is listed and Windows answers
+        // honestly instead of pretending the binding does not exist.
+        ("app.suspend", def!(&["ctrl+z"], "Suspend to background")),
         ("app.interrupt", def!(&["escape"], "Interrupt the turn")),
         (
             "app.clear",

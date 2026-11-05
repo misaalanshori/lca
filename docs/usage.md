@@ -474,5 +474,7 @@ shown per row. `/fullscreen` flips between the scrollback renderer
 (the default: the terminal owns scroll and selection) and the
 alt-screen renderer (the app owns them). `/theme` picks the palette.
 `~/.lca/keybindings.toml` remaps keys; `/hotkeys` shows the
-effective map. When the terminal misbehaves, see
-[Terminal setup](terminal-setup.md).
+effective map. `Ctrl+Z` suspends LCA to the background where the platform has job
+control, and says so instead of doing nothing where it does not (Windows) - see
+[Platform notes](platform-notes.md#suspend-ctrlz-exists-on-unix-and-says-so-on-windows-gh-403-gap-4).
+When the terminal misbehaves, see [Terminal setup](terminal-setup.md).

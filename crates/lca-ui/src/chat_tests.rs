@@ -1168,6 +1168,10 @@ mod compaction_tests;
 #[path = "chat_thinking_save_tests.rs"]
 mod thinking_save_tests;
 
+// Gh #403 gap 4: `Ctrl+Z` asks the loop to suspend, in every dialect.
+#[path = "chat_keybindings_suspend_tests.rs"]
+mod suspend_tests;
+
 // Gh #371 bug 3: exactly one `CURSOR_MARKER` per frame, owned by whichever
 // field has the keyboard (the IME anchor).
 #[path = "chat_focus_tests.rs"]

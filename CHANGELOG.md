@@ -42,6 +42,27 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **A terminal that goes away now ends LCA instead of hanging it, and `Ctrl+Z` on Windows
+  says so** (gh #403 gap 4, first half). Two failures with nothing in common but the shape
+  "the wrong thing is silent".
+  *A dead pty.* Closing a terminal under a running LCA - an SSH session dropped, a terminal
+  emulator killed, a tmux server exiting - used to leave the reader loop spinning at ~92% of
+  a core forever. `wait_stdin` asked `poll` only about `POLLIN`, the read that followed
+  returned end-of-file, and the loop read "no bytes" as "nothing yet". A second route, a
+  `SIGHUP`, killed the process before its last records landed. Both are the same event, so
+  both now reach one decision: **mark the terminal dead, write nothing more to it, flush the
+  session, exit 129**. `poll` already knows (`POLLHUP`/`POLLERR`/`POLLNVAL`, classified
+  *above* `POLLIN` - a hung-up pty is also readable, so the other order sees a permanent key
+  and spins), and the ordering is the whole fix: every write passes one gate, `stop` joins
+  the reader without restoring a terminal that is not there, and the exit dump is skipped
+  rather than attempted. 129 is `128 + SIGHUP` - the shell's own convention, so a script
+  that never heard of LCA can read it - and it is the one non-zero code that is not a
+  failure: the records and the clean-exit marker are written exactly as on a quit.
+  *`Ctrl+Z` on Windows.* `SIGTSTP` does not exist there, so the key did nothing at all -
+  no frame change, no message. A prompt that cannot work is worse than no prompt, so it now
+  says suspend is unsupported and names the thing that gets the same result. Still a
+  notice, not an error: nothing failed. On unix the sequence is leave → stop → `SIGTSTP` to
+  the process group → start → enter, and a rebind reaches all of it through `app.suspend`.
 - **An overlay spliced at the caret no longer eats the IME anchor** (gh #378 gap 3, which
   closes the issue). The last silent-loss bug in the renderer. Overlay compositing
   (`extract_segments`) copies an escape into the right-hand segment only once that segment

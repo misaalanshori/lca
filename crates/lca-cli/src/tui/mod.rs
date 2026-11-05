@@ -296,6 +296,8 @@ pub fn run(
     // #96: installed here too, so the TUI entry restores the terminal
     // even when reached without `main` (embedding, tests). Idempotent.
     lca_tui::install_panic_hook();
+    // Gh #403 gap 4: `SIGHUP` becomes an orderly exit, not a signal death.
+    startup::install_hangup_handler();
     // The interface needs a terminal for raw mode and key events; without
     // one the input read fails with an opaque error. Say what to do instead
     // (the headless path is the scripted one).
@@ -1138,10 +1140,9 @@ fn initial_view(
     (head, read.records)
 }
 
-/// The configured model, or the first model *in the enabled scope* when
-/// the provider is ready and the configuration names none (the honest
-/// "no model" state otherwise): a scope narrower than the provider's list
-/// must not start the session on a model its own cycle cannot reach (gh #8).
+/// The configured model, or the first model *in the enabled scope* when the
+/// provider is ready and the configuration names none: a narrower scope must not
+/// start the session on a model its own cycle cannot reach (gh #8).
 fn resolve_model_id(config: &Config, provider_is_ready: bool, provider: &dyn Provider) -> String {
     let configured = config.model().unwrap_or_default();
     if !configured.is_empty() {

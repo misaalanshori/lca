@@ -22,6 +22,15 @@ pub struct FakeTerminal {
     /// sync asserts the arm/disarm edges, which the byte stream alone
     /// cannot distinguish from a keepalive refresh.
     progress: bool,
+    /// Whether the terminal is gone (gh #403 gap 4). An `Arc<AtomicBool>` for the
+    /// same reason `output` is shared: `Terminal::hangup` takes `&self` and the
+    /// real terminal reads an atomic its *reader thread* sets, so the double has to
+    /// be able to answer from either side.
+    ///
+    /// A hung-up double **accepts no writes**, exactly like a real one - that is
+    /// what makes "nothing reaches a dead terminal" assertable on the byte stream
+    /// instead of merely implied by an early return someone could delete.
+    hangup: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl FakeTerminal {
@@ -99,6 +108,12 @@ impl Terminal for FakeTerminal {
     fn drain_input(&mut self, _max_ms: u64, _idle_ms: u64) {}
 
     fn write(&mut self, data: &str) {
+        // Gh #403 gap 4: a terminal that is gone receives nothing. The real one
+        // gates in `raw_write`; the double gates here, so a row can assert the byte
+        // stream rather than trusting a caller-side early return.
+        if self.hangup.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
         self.output
             .lock()
             .unwrap_or_else(|p| p.into_inner())
@@ -158,6 +173,14 @@ impl Terminal for FakeTerminal {
         } else {
             "\x1b]9;4;0\x07"
         });
+    }
+
+    fn hangup(&self) -> bool {
+        self.hangup.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn note_hangup(&self) {
+        self.hangup.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     fn set_program_status(&mut self, state: ProgramState) {

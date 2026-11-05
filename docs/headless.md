@@ -165,8 +165,9 @@ refresh).
 | 4 | Permission denied: an action needed approval and headless mode cannot prompt (FR-TOOL-3). For an endpoint host the environment configured and no grant covers, the message names that host and both fixes - run interactively once, or `--allow-host <host>` for this run (gh #29). |
 | 5 | Turn aborted: tool timeout, iteration limit (FR-CORE-9), or a rejection from a hook or `context-transform` extension (FR-CTX-3). |
 | 6 | Session error: the named session is missing, malformed, or belongs to another project. |
+| 129 | The terminal went away: its pty hung up, or the process received `SIGHUP` (gh #403 gap 4). `128 + SIGHUP`, the shell's own convention for a signal death, but here it is a real exit - the session is flushed and a `session-end` is written, because the whole point is that a closed terminal is not a crash. Both directions earn the same number: they are one event. |
 
-A run that ends non-zero still writes its session records; whatever completed before the failure is durable (FR-CONC-3).
+A run that ends non-zero still writes its session records; whatever completed before the failure is durable (FR-CONC-3). 129 is the one non-zero code that is **not** a failure: the terminal left, nothing went wrong, and the records and the clean-exit `session-end` are written exactly as on a quit. A script that treats every non-zero code as an error should treat 129 as "the terminal closed", not "the run failed".
 
 For `auth check` the codes are pi's credential table — 0/1/2 is
 ready/not_ready/invalid — not the turn rows above.

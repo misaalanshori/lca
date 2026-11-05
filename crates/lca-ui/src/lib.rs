@@ -70,6 +70,8 @@ mod run_keybindings;
 mod run_mouse;
 mod run_selection;
 mod run_status;
+/// Gh #403 gap 4: the three things the loop does *to* the terminal.
+mod run_terminal;
 pub mod separator;
 pub mod startup_header;
 pub mod state;

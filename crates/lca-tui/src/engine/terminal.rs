@@ -195,6 +195,25 @@ pub trait Terminal: Send {
     /// when the terminal opted in (see `program_status`); otherwise a
     /// silent no-op.
     fn set_program_status(&mut self, state: ProgramState);
+
+    /// Whether the terminal has gone away (gh #403 gap 4).
+    ///
+    /// **Defaulted to `false`** so every implementation and every caller compiles
+    /// unchanged: a fake terminal, an embedder's own double, and the pre-#403
+    /// behaviour all answer "still here". A real terminal answers the flag its
+    /// reader sets, so the loop learns about a closed pty or a `SIGHUP` through the
+    /// same question.
+    fn hangup(&self) -> bool {
+        false
+    }
+
+    /// Record that the terminal is gone, from a path outside the reader.
+    ///
+    /// The `SIGHUP` handler cannot reach a `ProcessTerminal` (it may only touch
+    /// atomics), so the loop copies [`crate::engine::signals::requested`] in here
+    /// once per iteration. After this every write is skipped and `stop` restores
+    /// nothing - the dispose-before-touch ordering gh #403 gap 4 is about.
+    fn note_hangup(&self) {}
 }
 
 /// Read one process environment variable as an injected-`env` reader:
@@ -285,6 +304,12 @@ struct Shared {
     /// Set by the reader thread as it leaves, so `stop` can retry the
     /// Windows synchronous-I/O cancel until the reader is actually gone.
     reader_done: AtomicBool,
+    /// The terminal is **gone** (gh #403 gap 4): set by the reader when `poll`
+    /// reports a hangup or a read returns end-of-file, and by the loop when a
+    /// `SIGHUP` is recorded. Once set the process stops touching the tty - a write
+    /// to a dead fd either blocks or raises again, and restoring modes on a closed
+    /// terminal is a no-op at best.
+    hangup: AtomicBool,
 }
 
 impl Shared {
@@ -390,6 +415,7 @@ impl ProcessTerminal {
                 rows: AtomicU16::new(rows),
                 shutdown: AtomicBool::new(false),
                 reader_done: AtomicBool::new(false),
+                hangup: AtomicBool::new(false),
             }),
             raw_state: None,
             raw_mode_error: None,
@@ -415,6 +441,12 @@ impl ProcessTerminal {
     }
 
     fn raw_write(&mut self, data: &str) {
+        // Gh #403 gap 4: nothing leaves for a terminal that is gone. This is the
+        // single gate every write passes (`write`, the OSC helpers, the renderers),
+        // so the ordering is one check rather than a caller-by-caller rule.
+        if self.shared.hangup.load(Ordering::SeqCst) {
+            return;
+        }
         let mut out = std::io::stdout();
         let _ = out.write_all(data.as_bytes());
         let _ = out.flush();
@@ -500,6 +532,34 @@ impl Terminal for ProcessTerminal {
     }
 
     fn stop(&mut self) {
+        // Gh #403 gap 4: **dispose before touching the terminal.** Once the tty is
+        // known to be gone, every sequence below is at best a no-op and at worst a
+        // block or a second raise on a dead fd - and `restore_raw_mode` on a closed
+        // terminal cannot do anything either. So the teardown is: stop the reader,
+        // drop the raw-mode state without writing, and say nothing.
+        //
+        // The reader must still be joined: it is a thread, and leaving it parked is
+        // the other half of the defect. It is already unblocked (its own flag is
+        // set, and `poll` returns immediately on a hung-up fd).
+        if self.shared.hangup.load(Ordering::SeqCst) {
+            self.shared.shutdown.store(true, Ordering::SeqCst);
+            if let Some(handle) = self.reader.take() {
+                #[cfg(windows)]
+                {
+                    let deadline = Instant::now() + Duration::from_millis(500);
+                    while !self.shared.reader_done.load(Ordering::SeqCst)
+                        && Instant::now() < deadline
+                    {
+                        cancel_blocking_read(&handle);
+                        std::thread::sleep(Duration::from_millis(2));
+                    }
+                }
+                let _ = handle.join();
+            }
+            // Dropped, not restored: there is no terminal to restore.
+            self.raw_state = None;
+            return;
+        }
         // Gh #213: reset the tab badge when reporting flowed (a
         // no-op when it never did).
         self.set_program_status(ProgramState::Clear);
@@ -597,6 +657,14 @@ impl Terminal for ProcessTerminal {
 
     fn raw_mode_error(&self) -> Option<String> {
         self.raw_mode_error.clone()
+    }
+
+    fn hangup(&self) -> bool {
+        self.shared.hangup.load(Ordering::SeqCst)
+    }
+
+    fn note_hangup(&self) {
+        self.shared.hangup.store(true, Ordering::SeqCst);
     }
 
     fn move_by(&mut self, lines: i32) {
@@ -786,14 +854,34 @@ fn reader_loop(shared: Arc<Shared>, escape_timeout_ms: u64) {
     let mut buf = [0u8; 4096];
 
     while !shared.shutdown.load(Ordering::SeqCst) {
+        // Gh #403 gap 4: a terminal already known to be gone is not waited on.
+        // The loop's own copy is the one to check: the process-wide flag may be
+        // set by a *different* terminal's hangup (a test owning two).
+        if shared.hangup.load(Ordering::SeqCst) {
+            break;
+        }
         // Gh #323 defect 4: a resize record wakes this loop **and is acted on
         // now**, rather than being swallowed and noticed on the next tick. The
         // size check below runs on every arm, so the only difference is latency -
         // but latency is the whole defect: a dropped record means the app paints
         // at the old width until something else happens to wake it (#522's class).
         match sys::wait_stdin(50) {
+            // Gh #403 gap 4: the terminal left. `poll` says so directly
+            // (`POLLHUP`/`POLLERR`/`POLLNVAL`), which is the classification that
+            // keeps this loop from reading "no bytes" as "nothing yet" - the shape
+            // that spun at ~92% of a core forever on a closed pty.
+            Ok(outcome) if outcome.is_hangup() => {
+                shared.hangup.store(true, Ordering::SeqCst);
+                break;
+            }
             Ok(outcome) if outcome.is_key() => match sys::read_stdin(&mut buf) {
-                Ok(0) => {}
+                // End-of-file on a terminal means the same thing one layer down:
+                // the pty is closed. A terminal that reports `POLLIN` and then
+                // returns 0 would otherwise be a permanent "key" and spin.
+                Ok(0) => {
+                    shared.hangup.store(true, Ordering::SeqCst);
+                    break;
+                }
                 Ok(n) => {
                     last_data = Instant::now();
                     for event in buffer.process_bytes(&buf[..n]) {

@@ -385,6 +385,17 @@ fn plural(word: &str, count: usize) -> String {
 /// product knob) sleeps here so a live check can type into a startup that is
 /// genuinely slow: the real window is far too short to type into by hand, and a
 /// fix for "the window is too long" has to be demonstrable *in* the window.
+/// Make `SIGHUP` mean "the terminal left" rather than "die now" (gh #403 gap 4).
+///
+/// A disposition is process-wide and permanent, so it is installed by the
+/// **interactive host** and not by the engine: a headless run has no loop to poll a
+/// flag, and would then ignore a hangup instead of dying, which is worse than the
+/// behaviour this replaces. Called before the terminal is claimed, so a hangup
+/// during the startup window is recorded too.
+pub(super) fn install_hangup_handler() {
+    lca_tui::engine::signals::install();
+}
+
 pub(super) fn claim_terminal() -> (lca_ui::run_early_input::EarlyInput, tmux_doctor::Cell) {
     let early = lca_ui::run_early_input::EarlyInput::start();
     // Gh #400 gap 4: start the tmux keyboard probe **here**, before the load.

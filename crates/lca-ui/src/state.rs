@@ -1091,6 +1091,13 @@ pub enum Action {
     /// same shape as [`Action::ExternalEditor`], because a fullscreen program on
     /// a pipe either refuses or blocks waiting for keys.
     InteractiveShell(String),
+    /// Suspend to the background (gh #403 gap 4): `Ctrl+Z` where job control
+    /// exists, and an honest notice where it does not.
+    ///
+    /// An [`Action`] rather than a message because the *loop* owns the terminal:
+    /// handing the tty back is `leave` + `stop`, and naming that here keeps the
+    /// interface from reaching for a screen it does not hold.
+    Suspend,
     /// Exit the interface.
     Exit,
 }

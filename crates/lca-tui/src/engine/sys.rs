@@ -200,12 +200,53 @@ pub(crate) enum WaitOutcome {
     /// that pins "a resize is not a key" on every platform.
     #[cfg_attr(not(windows), allow(dead_code))]
     Resize,
+    /// The terminal is **gone** (gh #403 gap 4): the pty's master side closed, so
+    /// the fd is at end-of-file and will never report input again.
+    ///
+    /// This is a distinct outcome and not "no bytes" for the reason that made the
+    /// defect: a reader that reads `Ok(0)` as "nothing yet" loops forever at ~92%
+    /// of a core, on a terminal nobody is watching. `poll` already knows - it
+    /// reports `POLLHUP`/`POLLERR`/`POLLNVAL` - so the classification belongs here,
+    /// where the readiness is read, rather than as an inference in the reader.
+    ///
+    /// Unix-only in practice: a Windows console reports its loss as a failed
+    /// `ReadFile`, which reaches the same place through the reader's `Ok(0)` arm, so
+    /// there is no separate record to raise there. Declared on every platform so the
+    /// reader matches one enum.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    Hangup,
 }
 
 impl WaitOutcome {
     /// Whether a key is pending, for callers that only drain input.
     pub(crate) fn is_key(self) -> bool {
         matches!(self, WaitOutcome::Key)
+    }
+
+    /// Whether the terminal is gone, and the caller must stop touching it.
+    pub(crate) fn is_hangup(self) -> bool {
+        matches!(self, WaitOutcome::Hangup)
+    }
+}
+
+/// How a `poll(2)` result is classified (gh #403 gap 4).
+///
+/// Split out from [`wait_stdin`] so the rule is assertable without a pty: the flags
+/// are the same numbers on every unix, and a fake can hand them in.
+///
+/// **`HUP` outranks `IN`.** A closed pty reports `POLLIN|POLLHUP` together (the
+/// hangup also makes the fd "readable", so the next `read` returns 0), so a check
+/// ordered the other way sees a permanent key and the reader spins - which is
+/// exactly the shape the defect had, one layer down.
+#[cfg(unix)]
+fn classify_poll_revents(revents: i16) -> WaitOutcome {
+    const GONE: i16 = libc::POLLHUP | libc::POLLERR | libc::POLLNVAL;
+    if revents & GONE != 0 {
+        WaitOutcome::Hangup
+    } else if revents & libc::POLLIN != 0 {
+        WaitOutcome::Key
+    } else {
+        WaitOutcome::Timeout
     }
 }
 
@@ -228,10 +269,11 @@ pub(crate) fn wait_stdin(timeout_ms: i32) -> io::Result<WaitOutcome> {
             return Err(err);
         }
         // A unix terminal has no console-record channel: a resize arrives as
-        // `SIGWINCH`, which the process catches separately, so poll readiness only
-        // ever means "a key is waiting".
-        if rc > 0 && (pfd.revents & libc::POLLIN) != 0 {
-            Ok(WaitOutcome::Key)
+        // `SIGWINCH`, which the process catches separately, so `POLLIN` only ever
+        // means "a key is waiting". `POLLHUP` and friends mean the opposite - the
+        // terminal left - and outrank it (gh #403 gap 4).
+        if rc > 0 {
+            Ok(classify_poll_revents(pfd.revents))
         } else {
             Ok(WaitOutcome::Timeout)
         }

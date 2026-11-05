@@ -154,6 +154,21 @@ The `wasm32-wasip2` build, per FR-WEB-1, has no real filesystem, no real process
 
 The extension hosting mechanism itself, sibling instantiation through `jco` rather than a nested WASM runtime, is specified in ADR-0018 and is the reason none of the above needed a second, WASM-specific capability-enforcement implementation: the same capability grants and the same host imports apply, only the transport connecting an extension's calls to the host's implementation of them differs between the native and web builds.
 
+## Suspend: `Ctrl+Z` exists on unix and says so on Windows (gh #403 gap 4)
+
+`SIGTSTP` is a unix job-control signal with no Windows equivalent, so `Ctrl+Z` cannot suspend LCA there. pi's answer is a one-line status ("Suspend to background is not supported on Windows"); LCA does the same rather than leaving the key dead, because silence reads as a broken key. Nothing is torn down on the refusal: the alternate screen is only left once a suspend is certain, so a platform that cannot suspend keeps its frame.
+
+On unix the sequence is `leave` (restore the tty) → `stop` (drop the reader) → `SIGTSTP` to the **process group** (so a shell child stops with us) → `start` → `enter`. `TSTP` rather than `STOP` because it is catchable and a parent `strace`/job-control layer can see it; and the group rather than the pid because a suspend that leaves a child in the foreground is worse than no suspend.
+
+Two guards pi carries are **not** ported, and the reason is structural rather than an omission:
+
+- pi keeps a Node timer alive across the stop (`setInterval(…, 2**30)`) so the event loop has a ref'ed handle while suspended. Rust threads are not tied to an event loop, so the suspend is a process stop and holds by construction.
+- pi shields `SIGINT` while suspended so `Ctrl+C` in the shell does not kill the backgrounded process. LCA's reader thread owns input under raw mode, and the signal disposition is the shell's while we are stopped - if a live `Ctrl+C` in the background turns out to kill a suspended LCA, that is a real defect and the shield is the fix; it is listed in the #403 gap 4 report as still owed rather than assumed fixed.
+
+## A dead terminal
+
+A closed pty (`POLLHUP`, or a read that returns 0) and a `SIGHUP` are the **same event from two directions**, and both exit 129 after flushing. `poll` reports `POLLHUP|POLLERR|POLLNVAL`, which outranks `POLLIN` - a hung-up pty is also "readable", so a classification ordered the other way sees a permanent key and the reader spins. Windows has no `SIGHUP`: a closed console surfaces as a failed `ReadFile`, which the reader's end-of-file arm classifies the same way.
+
 ## Cross-cutting: what "works everywhere" actually means here
 
 A requirement stated as applying to all platforms, in the requirements and design document, means the behavior is identical from the perspective of the agent's own logic and the extension ABI; it does not mean the underlying mechanism is identical. The `fs` scope-escape check is one function with one contract everywhere and two different, platform-specific canonicalization implementations underneath it. The cancellation flow is one behavior, kill everything a turn started, with a process-group kill on POSIX and a Job Object kill on Windows underneath it. Extension authors and first-party contributors alike should write to the contract, not to a mechanism, and platform-specific tests, not just platform-specific code, are what keeps the two from drifting apart silently; the Windows CI job being non-optional, per the testing plan, is the concrete enforcement of that principle rather than a formality.

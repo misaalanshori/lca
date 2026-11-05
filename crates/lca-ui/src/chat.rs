@@ -894,16 +894,14 @@ impl Chat {
         }
     }
 
-    /// The `ui.theme` setting currently in force.
-    ///
-    /// Exposed for `/reload` (gh #387 gap 5), which must re-apply whatever is
-    /// active rather than the picker default.
+    /// The `ui.theme` setting in force, for `/reload` (gh #387 gap 5): it must
+    /// re-apply what is active, not the picker default.
     pub(crate) fn theme_setting(&self) -> &str {
         &self.theme_setting
     }
 
-    /// Whether the theme currently follows terminal detection: a `system` theme is
-    /// rebuilt from the OSC 11 answer, so re-applying it by name on reload would drop a
+    /// Whether the theme follows terminal detection: a `system` theme is rebuilt
+    /// from the OSC 11 answer, so re-applying it by name on reload would drop a
     /// background the terminal already reported.
     pub(crate) fn theme_follows_detection(&self) -> bool {
         self.theme_auto
@@ -1059,6 +1057,10 @@ impl Chat {
             self.world.ctrl_c_armed = false;
             return self.double_escape();
         }
+        // Gh #403 gap 4: a suspend is about the process, not the prompt.
+        if self.keybindings.matches(data, "app.suspend") {
+            return Action::Suspend;
+        }
         if self.keybindings.matches(data, "app.interrupt") {
             return if self.cancellable_turn_visible() {
                 Action::CancelTurn
@@ -1190,11 +1192,9 @@ pub(crate) mod tests;
 #[path = "usage_tests.rs"]
 mod usage_tests;
 
-/// The caret's paint decision, for tests outside this crate (gh #371 bug 4).
-///
-/// `paint_caret` is the composition itself; this exists so the CLI's
-/// config-to-frame rows can assert the same arithmetic the interface uses
-/// without constructing a whole `Chat`.
+/// The caret's paint decision for rows outside this crate (gh #371 bug 4): a
+/// wrapper, not a `pub use`, because `chat_focus::paint_caret` is `pub(crate)` -
+/// widening *that* would put a helper on every embedder's surface.
 pub fn paint_caret_for_tests(theme_is_colored: bool, show_hardware_cursor: bool) -> bool {
     crate::chat_focus::paint_caret(theme_is_colored, show_hardware_cursor)
 }

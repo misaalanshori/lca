@@ -16,6 +16,8 @@ pub mod lru;
 pub mod main_screen;
 pub mod program_status;
 pub mod selection;
+/// Gh #403 gap 4: what the process does when a signal says the terminal is gone.
+pub mod signals;
 pub mod stdin_buffer;
 pub(crate) mod sys;
 pub mod terminal;

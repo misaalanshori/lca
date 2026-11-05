@@ -42,7 +42,7 @@ impl Screen {
         matches!(self, Screen::Alt(_))
     }
 
-    fn enter(&mut self, term: &mut dyn Terminal) {
+    pub(crate) fn enter(&mut self, term: &mut dyn Terminal) {
         if let Screen::Alt(r) = self {
             r.enter(term);
         }
@@ -53,7 +53,7 @@ impl Screen {
     /// so the returning shell prompt cannot overwrite it (gh #33).
     /// `preserve = true` is a mid-run handoff - the external editor and the
     /// fullscreen switch - and leaves the terminal exactly as it was.
-    fn leave(&mut self, term: &mut dyn Terminal, preserve: bool) {
+    pub(crate) fn leave(&mut self, term: &mut dyn Terminal, preserve: bool) {
         match self {
             Screen::Alt(r) => r.leave(term, preserve),
             Screen::Main(r) if !preserve => r.finish(term),
@@ -549,6 +549,25 @@ fn handle_input(
                 chat.say("this host cannot hand the terminal to a command".to_string());
             }
         }
+        Action::Suspend => {
+            // Gh #403 gap 4: on a platform with no job control the frame is not
+            // touched at all - tearing it down to attempt a suspend that cannot
+            // happen would be a visible fault for no gain - and the refusal is a
+            // notice, not an error, because nothing failed.
+            let supported = lca_tui::engine::signals::suspend_supported();
+            if let Some(notice) = crate::run_terminal::suspend_refusal(supported) {
+                chat.say(notice);
+                return InputResult::Continue;
+            }
+            crate::run_terminal::suspend(
+                screen,
+                terminal,
+                input_tx,
+                resize_tx,
+                early_receiver,
+                supported,
+            );
+        }
         Action::Exit => return InputResult::Exit,
     }
     InputResult::Continue
@@ -687,6 +706,13 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
     let mut seen_generation = chat.transcript.generation();
 
     let result = 'main: loop {
+        // Gh #403 gap 4: a terminal that is gone ends the loop with the documented
+        // code. Checked every iteration because the `SIGHUP` handler can only set an
+        // atomic and the tick is the floor for sources with no producer - one tick of
+        // latency at worst, never a hang.
+        if crate::run_terminal::hangup_requested(&terminal) {
+            break 'main Ok(lca_tui::engine::signals::EXIT_CODE);
+        }
         // Turn lifecycle (R16: `TurnState` owns the running turn).
         if turns.reap(&mut chat) {
             frames.request_stream();
@@ -889,7 +915,7 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
                 }
             }
             if exit {
-                break 'main Ok(());
+                break 'main Ok(0);
             }
             // Tier 2: input preempts the pace. It is never paced, because the throttle
             // exists to bound a stream nobody typed into.
@@ -906,10 +932,17 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> anyhow::Result<i32> {
     };
 
     turns.shutdown();
-    screen.leave(&mut terminal, false);
-    terminal.drain_input(1000, 50);
+    // Gh #403 gap 4: **dispose before touching the terminal.** The writes below are
+    // gated at `raw_write`, so this is about not *trying*: a dead fd must not be left
+    // to `drain_input` (which would spin on `POLLHUP` for its full window) and the
+    // exit dump has nowhere to go. `terminal.stop` still runs - it joins the reader
+    // thread - and skips its own writes on a hung-up terminal.
+    if !crate::run_terminal::hangup_requested(&terminal) {
+        screen.leave(&mut terminal, false);
+        terminal.drain_input(1000, 50);
+    }
     terminal.stop();
-    result.map(|()| 0)
+    result
 }
 
 /// The running turn's mutable state (R16), so the loop body stays a loop.

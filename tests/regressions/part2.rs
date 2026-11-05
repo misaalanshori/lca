@@ -263,6 +263,13 @@ mod trap_attribution;
 #[path = "403-stale-selection-cleared.rs"]
 mod stale_selection_cleared;
 
+// Gh #403 gap 4 (first half): a dead tty hangs or lies, and `Ctrl+Z` is silent on
+// Windows. The real-pty rows live in `crates/lca-cli/tests/e2e_hangup.rs`; this pins
+// the shapes - `HUP` above `IN`, end-of-file as a hangup, dispose-before-touch, one
+// question for both directions, the documented 129, and the refusal before teardown.
+#[path = "403-dead-tty-and-windows-suspend.rs"]
+mod dead_tty_and_windows_suspend;
+
 // Gh #391: collapsed previews keep the tail, the timer ticks and freezes,
 // and `!`/`!!` are distinguishable without colour.
 #[path = "391-tool-card-preview-and-timer.rs"]
