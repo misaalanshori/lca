@@ -11,6 +11,11 @@ repository.workspace = true
 # ADR-0036: the port's own dependencies (unicode tables + OS backend).
 unicode-width.workspace = true
 unicode-segmentation.workspace = true
+# gh #405 gap 4: the streaming UTF-8 decoder, which `lca-core` uses on the same bytes.
+# `lca-protocol` performs no I/O (ADR-0002) and is already in this dependency graph
+# transitively, so this adds an edge, not a crate — and it is the alternative to a
+# second decoder in the engine, which is the class this repo keeps closing.
+lca-protocol = { path = "../lca-protocol" }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

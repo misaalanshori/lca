@@ -171,23 +171,42 @@ fn replacement_characters_are_visible_but_bounded() {
     );
 }
 
-// Verifies: gh #405 gap 4 design point 8 - **bounded.** The tail search never
-// looks back more than `MAX_TRAILING_SEQUENCE`, so a stream that emits an ESC and
-// then megabytes of text costs a bounded scan rather than an unbounded one. Past
-// the cap the ESC is out of the window and the text is returned as-is: the sequence
-// is no longer "trailing" in any sense a renderer cares about, and truncating a
-// megabyte of legitimate text to chase it would be the worse bug.
+// Verifies: gh #405 gap 4 design point 8 - **bounded, and the bound is honest.**
+//
+// Past `MAX_TRAILING_SEQUENCE` an `ESC` cannot be a legitimate sequence - no SGR or
+// link here is 4 KiB long - so it is a malformed opener in front of real payload. Two
+// wrong answers are available and the first version took one of them: *dropping the
+// tail* would eat kilobytes of the user's output, and *returning the text unchanged*
+// (what it did) let the raw `ESC` reach the terminal, which is the injection this
+// function exists to prevent. Measured before this row existed:
+//
+// ```text
+// sanitize("\x1b]8;;" + "x" * 5000) -> 5005 bytes, still contains ESC
+// ```
+//
+// So the control byte alone is dropped and the payload is kept. The visible text is
+// unchanged, nothing is eaten, and no `ESC` survives.
 #[test]
-fn a_very_long_unterminated_sequence_is_scanned_in_bounded_work() {
-    // 64 KiB is far past the cap; the scan must not walk it all.
+fn a_very_long_unterminated_sequence_keeps_its_payload_and_drops_the_control_byte() {
+    // 64 KiB is far past the cap.
     let mut text = String::from("keep");
     text.push(ESC);
     text.push_str(&"x".repeat(64 * 1024));
     let out = sanitize_incomplete_escapes(&text);
+    assert!(
+        !out.contains(ESC),
+        "no raw control byte survives, however long the opener is (that is the \
+         injection the function exists to prevent)"
+    );
     assert_eq!(
         out.len(),
-        text.len(),
-        "past the cap the text is returned unchanged rather than truncated"
+        text.len() - 1,
+        "exactly the ESC is gone - not the payload with it, and not the text \
+         returned untouched"
+    );
+    assert!(
+        out.starts_with("keep") && out.ends_with("xxx"),
+        "the payload on both sides of the dropped byte survives"
     );
     // Inside the cap the drop still happens, which is the case that matters.
     let mut near = String::from("keep");
@@ -198,6 +217,51 @@ fn a_very_long_unterminated_sequence_is_scanned_in_bounded_work() {
         "keep",
         "a trailing unterminated sequence within the window is dropped"
     );
+}
+
+// Verifies: gh #405 gap 4 - **a complete sequence followed by text keeps the text.**
+//
+// This is the backward-scan defect, and it is a *data-loss* bug rather than a
+// rendering nit: the scan looked back for an `ESC`, found the one inside an `ST`
+// terminator, `extract_ansi_code` answered `None` for it (the next byte is `\\`, not
+// `[`/`]`/`_`), and everything from there was dropped. Measured on the shipped tree
+// before this row:
+//
+// ```text
+// "a\x1b]0;title\x1b\\b"  ->  "a\x1b]0;title"   (the trailing "b" is gone)
+// "a\x1b\\b"              ->  "a"               (a bare ST eats the rest of the row)
+// ```
+//
+// A title set or a link followed by more text on the same row lost that text. The
+// existing row only covered the case where `ST` ends the string, which is exactly the
+// case a backward scan happens to get right - so it passed while both of these
+// silently truncated.
+#[test]
+fn text_after_a_complete_sequence_survives() {
+    for (label, text, tail) in [
+        ("OSC title then text", "a\x1b]0;title\x1b\\b", "b"),
+        ("OSC title, leading", "\x1b]0;title\x1b\\b", "b"),
+        ("bare ST then text", "a\x1b\\b", "b"),
+        ("CSI then text", "a\x1b[1mb", "b"),
+        (
+            "link then more text on the row",
+            "\x1b]8;;https://x\x1b\\lbl\x1b]8;;\x1b\\tail",
+            "tail",
+        ),
+    ] {
+        let out = sanitize_incomplete_escapes(text);
+        // The assertion is on the *tail*, not on a flattened "ab": a complete
+        // sequence legitimately stays in the string (the renderer consumes it later),
+        // so what this row is about is whether the text after it was eaten.
+        assert!(
+            out.ends_with(tail),
+            "{label}: the text after the sequence survives ({out:?} does not end with {tail:?})"
+        );
+        assert_eq!(
+            out, text,
+            "{label}: a complete sequence is left exactly as it was"
+        );
+    }
 }
 
 // Verifies: gh #405 gap 4 - an empty string and plain text are untouched, so the

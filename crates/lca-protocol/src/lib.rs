@@ -20,6 +20,8 @@ pub mod tool;
 pub mod turn;
 pub mod ui;
 pub mod usage;
+/// Streaming UTF-8 decoding (gh #405 gap 4): hold a split codepoint, keep text valid.
+pub mod utf8;
 
 pub use capability::CapabilityError;
 pub use dispatch::{
@@ -50,3 +52,4 @@ pub use turn::{
 };
 pub use ui::{DialogAnswer, TextStyle, UiDialog, UiEffect, UiInput, Widget, WidgetTree};
 pub use usage::Usage;
+pub use utf8::{REPLACEMENT, Utf8Stream};

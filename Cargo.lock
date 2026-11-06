@@ -1913,6 +1913,7 @@ dependencies = [
 name = "lca-tui"
 version = "0.6.0"
 dependencies = [
+ "lca-protocol",
  "libc",
  "proptest",
  "serde_json",

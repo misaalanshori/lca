@@ -181,6 +181,55 @@ A closed pty (`POLLHUP`, or a read that returns 0) and a `SIGHUP` are the **same
 
 **Two ambiguous heads are the accepted cost**, pinned as rows rather than implied: a reply split at the *bare* `OSC`/`DCS` introducer is indistinguishable from the corresponding Alt key plus typing, and is therefore recovered as keystrokes. pi draws the line in the same place. The reported splits - mid-body, or one byte past the introducer - are closed.
 
+## Streamed text: a read boundary is a byte boundary, not a character one (gh #405 gap 4)
+
+A pipe read ends wherever the kernel's buffer ends, so a UTF-8 codepoint can straddle
+two reads. Every `String::from_utf8_lossy(&chunk)` therefore invents a `U+FFFD` for a
+character that is not invalid, merely late — and once the bytes are decoded that way the
+information needed to fix it is gone, because the leading bytes were replaced rather than
+kept.
+
+Measured on this box, before the fix, on the two paths that read bytes:
+
+| path | input | before |
+|---|---|---|
+| tool output (`lca-core`) | `"日本語の日本語の日本語の日本語"` in 8-byte reads | **10** × `U+FFFD`, painted in the bash card |
+| keyboard (`stdin_buffer`) | `"日本語"` split after byte 2 | `"��本語"` |
+
+Both now decode through `lca_protocol::Utf8Stream`, which holds a partial codepoint until
+the next read completes it. Three states, deliberately distinguishable:
+
+- **incomplete** — a valid prefix of a codepoint. Held, silent, and `has_pending()` says so
+  (a UI that shows a spinner cares). Never replaced: this is the case the bug got wrong.
+- **invalid** — a byte that cannot begin any UTF-8 sequence, or a continuation that
+  contradicts its lead. Replaced **once, visibly**, and decoding continues after it, so
+  one bad byte cannot swallow the rest. Silently dropping it would hide a real fault.
+- **incomplete at end of stream** — a transfer cut mid-codepoint. Reported **once** by
+  `finish()`, because nothing can ever complete it and losing it invisibly is worse.
+
+`str::from_utf8`'s own `valid_up_to` / `error_len` are the authority for which state a
+buffer is in, so there is no hand-rolled byte-class table to drift from the standard.
+
+**The text accumulator was never the problem.** `lca-ui`'s transcript appends `&str`
+deltas to a `String` and renders the whole accumulated text, so a document with a
+true-colour SGR, an OSC 8 link, CJK and an emoji renders byte-identically in 1 chunk and
+in 200. A guard aimed at the accumulator would have passed while the card painted
+replacement characters, which is why `tests/regressions/405-stream-chunk-boundaries.rs`
+pins the decoder and the equality rather than the string building.
+
+**And an incomplete *escape* is a different case from a split one.** A sequence split
+across reads reassembles in the accumulator; what needed handling is a sequence that is
+incomplete **in the final text** (a truncated `\x1b[38;5` at end of stream), which is why
+`sanitize_incomplete_escapes` drops a trailing tail rather than the renderer tolerating a
+broken one — a truncated escape can never be repaired once its bytes are gone, so the
+buffer is the only place the information still exists. Two defects in that sanitizer
+were found by measuring it, not by reading it: a **backward** scan mistook an OSC's `ST`
+terminator (`ESC \`) for an unterminated opener and dropped every character after it
+(`"a\x1b]0;title\x1b\\b"` lost the `b`; a bare `ST` ate the rest of the row), and past
+its 4 KiB bound it returned the text **unchanged**, letting a raw `ESC` reach the terminal
+— the control-byte injection the function exists to prevent. It is a forward scan now,
+and past the bound it drops the one control byte and keeps the payload.
+
 ## Cross-cutting: what "works everywhere" actually means here
 
 A requirement stated as applying to all platforms, in the requirements and design document, means the behavior is identical from the perspective of the agent's own logic and the extension ABI; it does not mean the underlying mechanism is identical. The `fs` scope-escape check is one function with one contract everywhere and two different, platform-specific canonicalization implementations underneath it. The cancellation flow is one behavior, kill everything a turn started, with a process-group kill on POSIX and a Job Object kill on Windows underneath it. Extension authors and first-party contributors alike should write to the contract, not to a mechanism, and platform-specific tests, not just platform-specific code, are what keeps the two from drifting apart silently; the Windows CI job being non-optional, per the testing plan, is the concrete enforcement of that principle rather than a formality.

@@ -172,13 +172,21 @@ fn the_render_entry_sanitizes_before_parsing() {
     );
 }
 
-// Verifies: gh #405 gap 4 design point 5/8 - **only a trailing incomplete sequence
-// is dropped, and the search is bounded.** A sanitizer that stripped every `ESC`
-// would break styling; one that scanned without a cap would be an unbounded loop on
-// hostile input.
+// Verifies: gh #405 gap 4 design point 5/8 - **only an incomplete sequence is
+// dropped, and the work is bounded.** A sanitizer that stripped every `ESC` would
+// break styling; one that walked without a bound would be unbounded work on hostile
+// input.
+//
+// **Revised in this cycle** (gh #405 gap 4, second round), and said out loud rather
+// than quietly: the row used to pin the *implementation* lines `&text[..pos]` and
+// `extract_ansi_code(text, pos).is_some()`, which were the backward scan — i.e. it
+// was pinning the bug. The property it existed for is unchanged and is pinned below
+// against the new shape; the two rows added at the end of this file pin the defect
+// itself (`the_tail_scan_is_forward_and_steps_over_complete_sequences`,
+// `past_the_bound_the_escape_is_dropped_and_the_text_kept`).
 #[test]
 fn the_sanitizer_drops_only_a_bounded_trailing_sequence() {
-    // Split out of `text.rs` for the ceiling (gate 11); the behaviour is the same.
+    // Split out of `text.rs` for the ceiling (gate 11).
     let text = code_only(&read("crates/lca-tui/src/engine/text/stream_safety.rs"));
     let seam = text
         .find("pub fn sanitize_incomplete_escapes(")
@@ -188,20 +196,31 @@ fn the_sanitizer_drops_only_a_bounded_trailing_sequence() {
     let body = &body[..end];
     assert!(
         text.contains("const MAX_TRAILING_SEQUENCE"),
-        "the look-back is capped"
+        "how far back a tail may start is a named constant, not a literal"
     );
     assert!(
         body.contains("MAX_TRAILING_SEQUENCE"),
-        "and the sanitizer uses that cap"
+        "and the sanitizer is the thing that consults it"
     );
-    // The drop is `&text[..pos]` from the LAST escape - not a blanket strip.
+    // The drop is a *prefix kept, tail dropped* — not a blanket strip of every ESC.
     assert!(
-        body.contains("&text[..pos]"),
-        "it truncates at the unterminated sequence rather than filtering"
+        body.contains("Borrowed(&text[..at])"),
+        "it truncates at the unterminated sequence rather than filtering escapes out"
     );
+    // A complete sequence anywhere means the scan moves past it instead of stopping —
+    // and the scanning lives in one named helper, so the sanitizer and the entry it
+    // guards cannot disagree about what a sequence is.
     assert!(
-        body.contains("extract_ansi_code(text, pos).is_some()"),
-        "a complete sequence at the tail means nothing is dropped"
+        body.contains("first_opener("),
+        "the sanitizer delegates the walk to `first_opener` rather than re-deriving it"
+    );
+    let opener = text
+        .split("fn first_opener")
+        .nth(1)
+        .expect("`first_opener` exists");
+    assert!(
+        opener.contains("extract_ansi_code"),
+        "and that walk uses the shared scanner, not a second parser"
     );
 }
 
@@ -256,5 +275,126 @@ fn image_protocol_is_none_under_a_multiplexer() {
     assert!(
         body.contains("return ImageProtocol::None"),
         "and it refuses rather than guessing"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// gh #405 gap 4, second round: the sanitizer's two defects and the seam that was
+// actually losing characters.
+// ---------------------------------------------------------------------------
+
+// Verifies: gh #405 gap 4 - **the tail scan is forward, and it does not eat text
+// after a complete sequence.**
+//
+// The first version searched *backward* from the end for an `ESC`, found the one
+// inside an `ST` terminator (`ESC \`), asked `extract_ansi_code` about it — which
+// answers `None` for `\` — and dropped everything from there. Measured on the tree
+// that shipped it:
+//
+// ```text
+// "a\x1b]0;title\x1b\\b"  ->  "a\x1b]0;title"   // the trailing "b" is gone
+// "a\x1b\\b"              ->  "a"               // a bare ST eats the rest of the row
+// ```
+//
+// A title or a link followed by more text on the same row lost that text. The row
+// that existed only covered `ST` *at the end of the string*, which is exactly the case
+// a backward scan gets right.
+#[test]
+fn the_tail_scan_is_forward_and_steps_over_complete_sequences() {
+    let source = code_only(&read("crates/lca-tui/src/engine/text/stream_safety.rs"));
+    let body = source
+        .split("pub fn sanitize_incomplete_escapes")
+        .nth(1)
+        .expect("the sanitizer exists");
+    let body = body.split("\n}\n").next().unwrap_or(body);
+    assert!(
+        !body.contains("window_start"),
+        "no backward window: the scan walks forward from the start ({body})"
+    );
+    assert!(
+        body.contains("first_opener("),
+        "and the walk itself is one named helper, not an inline copy"
+    );
+    assert!(
+        source.contains("fn first_opener"),
+        "the scan is one named function, so the two callers cannot drift"
+    );
+    // The `ST` case is a step-over, not a stop.
+    let opener = source
+        .split("fn first_opener")
+        .nth(1)
+        .expect("first_opener exists");
+    assert!(
+        opener.contains("b'\\\\'"),
+        "an `ESC \\` (ST) is recognised as a complete unit: {opener}"
+    );
+}
+
+// Verifies: gh #405 gap 4 - **past the bound the control byte is dropped and the
+// payload kept.** The first version returned the text **unchanged** past the cap, so
+// `"\x1b]8;;" + "x" * 5000` reached the terminal with its raw `ESC` — the injection the
+// function exists to prevent, at >4 KiB. Dropping the whole tail instead would eat
+// kilobytes of the user's output, which is the other wrong answer.
+#[test]
+fn past_the_bound_the_escape_is_dropped_and_the_text_kept() {
+    let source = code_only(&read("crates/lca-tui/src/engine/text/stream_safety.rs"));
+    let body = source
+        .split("pub fn sanitize_incomplete_escapes")
+        .nth(1)
+        .expect("the sanitizer exists");
+    assert!(
+        body.contains("MAX_TRAILING_SEQUENCE"),
+        "the bound is consulted: {body}"
+    );
+    assert!(
+        body.contains("Cow::Owned"),
+        "the long case must build a new string, because a slice cannot express \
+         'this one byte removed' — returning a slice was the bug"
+    );
+    assert!(
+        body.contains("&text[at + 1..]") || body.contains("rest[next + 1..]"),
+        "and it resumes after the dropped byte rather than at it"
+    );
+}
+
+// Verifies: gh #405 gap 4 - **the loss was in the byte decoder, and the turn uses
+// the shared one.**
+//
+// This is the finding that reframes the issue: the text accumulator was already
+// correct (`lca-ui`'s `Transcript` concatenates `&str` deltas), so 200 chunks of a
+// document render identically to one. What lost characters was
+// `String::from_utf8_lossy` **per pipe read** in `execute.rs`, which turned every
+// codepoint straddling a read into `U+FFFD`. A guard that only looked at the
+// accumulator would have passed while the bash card painted replacement characters.
+#[test]
+fn the_tool_output_sink_decodes_through_the_stream_decoder() {
+    let execute = code_only(&read("crates/lca-core/src/turn/execute.rs"));
+    let seam = execute
+        .find("ToolOutputChunk")
+        .expect("the sink emits tool output chunks");
+    let around = &execute[seam.saturating_sub(1200)..seam];
+    assert!(
+        !around.contains("from_utf8_lossy"),
+        "no per-chunk lossy decode at the sink (that is the defect): {around}"
+    );
+    assert!(
+        around.contains("Utf8Stream"),
+        "the chunk is decoded through the stream decoder: {around}"
+    );
+    assert!(
+        execute.contains("decoder.finish()"),
+        "and the tail is flushed, so a transfer cut mid-codepoint is reported once \
+         rather than lost silently"
+    );
+    // The decoder exists once, in the shared crate.
+    let utf8 = read("crates/lca-protocol/src/utf8.rs");
+    assert!(
+        utf8.contains("pub struct Utf8Stream"),
+        "one decoder, in `lca-protocol` (no I/O, so every reader can reach it)"
+    );
+    assert!(
+        utf8.contains("valid_up_to") && utf8.contains("error_len"),
+        "it lets `str::from_utf8` answer 'incomplete' vs 'invalid' rather than \
+         guessing with a byte-class table"
     );
 }

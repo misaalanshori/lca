@@ -545,6 +545,12 @@ pub struct StdinBuffer {
     /// tail arrives as ordinary text, so content is the only way the buffer can
     /// still recognise it (see [`REPLY_TAIL_MAX_CHARS`]).
     reply_tail: Option<(ReplyKind, usize)>,
+    /// A codepoint whose continuation bytes have not arrived yet (gh #405 gap 4).
+    /// `process_bytes` feeds the bytes it has; the decoder holds the incomplete
+    /// suffix here until the next read completes it. Without this a read that ends
+    /// mid-codepoint - an ordinary occurrence on a pty - reached `process` as
+    /// `U+FFFD`.
+    partial_utf8: lca_protocol::Utf8Stream,
 }
 
 impl Default for StdinBuffer {
@@ -565,6 +571,7 @@ impl StdinBuffer {
             pending_kitty_printable_codepoint: None,
             discarded_fragments: 0,
             reply_tail: None,
+            partial_utf8: lca_protocol::Utf8Stream::new(),
         }
     }
 
@@ -589,20 +596,27 @@ impl StdinBuffer {
 
     /// Feed raw bytes, applying pi's legacy single-high-byte rule:
     /// a lone byte > 127 becomes `ESC + (byte - 128)`.
+    ///
+    /// **A codepoint split across two reads is held, not replaced** (gh #405 gap 4).
+    /// This used to fall back to `from_utf8_lossy` whenever the read was not valid
+    /// UTF-8, which is every read that ends mid-codepoint: measured, `"日本語"` fed in
+    /// two reads after byte 2 arrived as `"��本語"` - two replacement characters for
+    /// two bytes that were merely late, and the composer then held text nobody typed.
+    /// The bytes of a partial codepoint are kept in `partial_utf8` and joined to the
+    /// next read, so the decision "incomplete, or invalid" is made once the bytes are
+    /// in, exactly as `str::from_utf8` makes it.
+    ///
+    /// A byte that is genuinely invalid still costs one visible
+    /// `lca_protocol::Utf8Stream` replacement rather than a silently dropped
+    /// keystroke.
     pub fn process_bytes(&mut self, data: &[u8]) -> Vec<StdinEvent> {
-        if data.len() == 1 && data[0] > 127 {
+        if data.len() == 1 && data[0] > 127 && !self.partial_utf8.has_pending() {
             let mut s = String::from(ESC);
             s.push((data[0] - 128) as char);
             return self.process(&s);
         }
-        match std::str::from_utf8(data) {
-            Ok(s) => self.process(s),
-            Err(_) => {
-                // Lossy fallback: never drop bytes.
-                let s = String::from_utf8_lossy(data).into_owned();
-                self.process(&s)
-            }
-        }
+        let text = self.partial_utf8.push(data);
+        self.process(&text)
     }
 
     fn drain(&mut self) -> Vec<StdinEvent> {

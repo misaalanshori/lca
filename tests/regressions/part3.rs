@@ -574,3 +574,11 @@ mod webfetch_input_cut;
 // it was supposed to match, and the sentence that explains a `connecting` row.
 #[path = "582-mcp-list-window.rs"]
 mod mcp_list_window;
+
+// Gh #405 gap 4, second round: where the characters were actually lost. The text
+// accumulator was already correct (200 char-chunks == 1 chunk); `lca-core`'s per-read
+// `from_utf8_lossy` was not, and the incomplete-escape sanitizer had two defects of
+// its own. This pins the chunking invariant end to end plus the three endings a byte
+// stream can have.
+#[path = "405-stream-chunk-boundaries.rs"]
+mod stream_chunk_boundaries;

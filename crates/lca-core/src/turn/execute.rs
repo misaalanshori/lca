@@ -516,16 +516,39 @@ impl Agent<'_> {
         }
 
         let cancel_for_tool = cancel.clone();
+        // Gh #405 gap 4: a pipe read is a **byte** boundary, so a codepoint can
+        // straddle two of them. `from_utf8_lossy` per read turned every such codepoint
+        // into `U+FFFD` — measured on this path, a CJK line in 8-byte reads painted 10
+        // replacement characters. The stream decoder holds a partial codepoint until
+        // the next read completes it, so the text a card shows is the text the
+        // command wrote.
+        let mut decoder = lca_protocol::Utf8Stream::new();
         let mut sink_chunk = |chunk: &[u8]| {
+            let text = decoder.push(chunk);
+            if text.is_empty() {
+                // Mid-codepoint: nothing decodable yet, and an empty chunk would
+                // invalidate the transcript's cache for no new text.
+                return;
+            }
             sink.on_event(TurnEvent::ToolOutputChunk {
                 call_id: call.call_id.clone(),
-                chunk: String::from_utf8_lossy(chunk).into_owned(),
+                chunk: text,
             });
         };
         let result = self
             .tools
             .execute(call, &mut sink_chunk, &cancel_for_tool)
             .await;
+        // A transfer cut mid-codepoint leaves bytes the decoder can never complete.
+        // Reporting them once is the visible half of "incomplete is not invalid":
+        // dropped, the last character of a result would vanish silently.
+        let tail = decoder.finish();
+        if !tail.is_empty() {
+            sink.on_event(TurnEvent::ToolOutputChunk {
+                call_id: call.call_id.clone(),
+                chunk: tail,
+            });
+        }
         Ok(result)
     }
 

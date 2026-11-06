@@ -42,6 +42,22 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **Streamed output can no longer lose a character at a read boundary** (gh #405 gap 4,
+  second round). The loss was not where the issue assumed: the text accumulator was already
+  correct, and rendering parses the whole accumulated string — measured, a document with a
+  true-colour SGR, an OSC 8 link, CJK and an emoji renders identically in 1 chunk and in 200.
+  What did lose characters was the **byte** decoder: `lca-core` decoded every pipe read with
+  `String::from_utf8_lossy`, so a codepoint straddling two reads became `U+FFFD` — a CJK line
+  delivered in 8-byte reads painted **10** replacement characters in its bash card — and
+  `stdin_buffer::process_bytes` had the same fallback, turning `"日本語"` split after byte 2
+  into `"��本語"`. Both now decode through one shared `lca_protocol::Utf8Stream`, which
+  **holds** a partial codepoint until the next read completes it and keeps "incomplete",
+  "invalid" and "cut off at end of stream" as three different, visible answers. The
+  incomplete-escape sanitizer had two defects of its own, found by measuring it: a backward
+  scan mistook an OSC's `ST` terminator for an unterminated opener and dropped every
+  character after it (`"a\x1b]0;title\x1b\\b"` lost the `b`), and past its 4 KiB bound it
+  returned the text **unchanged**, letting a raw `ESC` reach the terminal — the injection it
+  exists to prevent.
 - **`lca mcp list` no longer calls a healthy-but-slow server dead** (gh #582). The window
   it gave a handshake was 10 seconds, borrowed from `DEFAULT_STARTUP_WAIT_MS` — how long a
   *turn* waits before it answers the user. A handshake is a different question, and its own

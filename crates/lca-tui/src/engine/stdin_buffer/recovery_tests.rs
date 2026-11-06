@@ -441,3 +441,67 @@ fn a_burst_of_introducers_does_not_overflow_the_stack() {
         started.elapsed().as_millis()
     );
 }
+
+// Verifies: gh #405 gap 4 - **a codepoint split across two reads is held, not
+// replaced.** `process_bytes` fell back to `from_utf8_lossy` whenever the read was
+// not valid UTF-8, which is *every* read that ends mid-codepoint - an ordinary
+// occurrence on a pty. Measured before the fix, `"日本語"` fed in two reads after
+// byte 2 arrived as `"��本語"`: two replacement characters for two bytes that were
+// merely late, and the composer then held text nobody typed.
+//
+// Every split point where the first read holds **more than one byte**, because those
+// are unambiguous and used to break. The one-byte case is a different question with
+// its own row below: a single byte > 127 could be `Alt+letter` or the start of a
+// character, and pi resolves it as the key.
+#[test]
+fn a_codepoint_split_across_reads_is_never_replaced() {
+    for text in ["日本語", "output: 日本語 🎉", "é", "👨‍👩‍👧‍👦"] {
+        let bytes = text.as_bytes();
+        for split in 2..bytes.len() {
+            let mut buffer = StdinBuffer::new();
+            let mut events = data(buffer.process_bytes(&bytes[..split]));
+            events.extend(data(buffer.process_bytes(&bytes[split..])));
+            let joined = events.concat();
+            assert_eq!(
+                joined, text,
+                "a read boundary after byte {split} of {text:?} produced {joined:?}"
+            );
+            assert!(
+                !joined.contains('\u{FFFD}'),
+                "no replacement character for a codepoint that merely arrived late \
+                 (split after byte {split} of {text:?}): {joined:?}"
+            );
+        }
+    }
+}
+
+// Verifies: gh #405 gap 4 - **the one ambiguous read keeps pi's answer.** A read of
+// exactly one byte > 127 is either `Alt+letter` (a legacy terminal's high-bit
+// encoding) or the first byte of a UTF-8 character, and nothing in the byte says
+// which. pi's `stdin-buffer` resolves it as the key; LCA keeps that, because the
+// alternative would turn every `Alt+<letter>` into a held byte that may never
+// complete. What the fix *does* guarantee is that the ambiguity cannot spread: only a
+// genuinely single-byte read can be read that way, so a character arriving in larger
+// reads is text.
+#[test]
+fn a_one_byte_read_of_a_high_byte_keeps_pis_alt_meaning() {
+    // 0xE6 is the first byte of 日, and on its own it is indistinguishable from
+    // `Alt+f`. pi answers the key, and so does LCA.
+    let mut buffer = StdinBuffer::new();
+    assert_eq!(
+        data(buffer.process_bytes(&[0xE6])).concat(),
+        "\x1bf",
+        "a single high byte is the legacy Alt pair, as in pi"
+    );
+
+    // The same character arriving in a two-byte read is unambiguous text, and the
+    // held prefix completes across the *next* read rather than being replaced.
+    let mut buffer = StdinBuffer::new();
+    let mut events = data(buffer.process_bytes(&[0xE6, 0x97]));
+    events.extend(data(buffer.process_bytes(&[0xA5])));
+    assert_eq!(
+        events.concat(),
+        "日",
+        "a two-byte read is decoded as text, and the held prefix completes it"
+    );
+}
