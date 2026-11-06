@@ -1038,60 +1038,6 @@ fn the_job_object_reaps_a_grandchild_on_windows() {
     let _ = std::fs::remove_dir_all(&ws);
 }
 
-// The `pty` capability's engine (ADR-0016): a program spawned under a
-// pseudo-terminal sees a real terminal and its output reaches the reader.
-#[test]
-fn pty_spawn_delivers_program_output_and_exit_code() {
-    let ws = scratch("pty-spawn");
-    let mut pty = if cfg!(unix) {
-        lca_tools::PtyChild::spawn("echo", &["hello-pty".into()], &ws, 24, 80, &[]).expect("spawn")
-    } else {
-        lca_tools::PtyChild::spawn(
-            "cmd",
-            &["/C".into(), "echo".into(), "hello-pty".into()],
-            &ws,
-            24,
-            80,
-            &[],
-        )
-        .expect("spawn")
-    };
-    let mut out = String::new();
-    // Read until the session closes; echo is short-lived.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while out.len() < 64 && std::time::Instant::now() < deadline {
-        if let Some(chunk) = pty.read(1024).expect("read") {
-            out.push_str(&String::from_utf8_lossy(&chunk));
-        } else {
-            break;
-        }
-    }
-    assert!(out.contains("hello-pty"), "terminal output: {out:?}");
-    let code = pty.wait().expect("wait");
-    assert_eq!(code, 0, "output was {out:?}");
-}
-
-// Interactive echo: what we write reaches the program, what it writes
-// reaches us (the keystroke-forwarding contract of the catalog).
-#[cfg(unix)]
-#[test]
-fn pty_forwards_keystrokes_both_ways() {
-    let ws = scratch("pty-keys");
-    let mut pty = lca_tools::PtyChild::spawn("cat", &[], &ws, 24, 80, &[]).expect("spawn");
-    pty.write(b"round-trip\n").expect("write");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    let mut out = String::new();
-    while !out.contains("round-trip") && std::time::Instant::now() < deadline {
-        if let Some(chunk) = pty.read(1024).expect("read") {
-            out.push_str(&String::from_utf8_lossy(&chunk));
-        } else {
-            break;
-        }
-    }
-    assert!(out.contains("round-trip"), "got {out:?}");
-    pty.kill();
-}
-
 // Verifies: a model-supplied huge `limit` cannot overflow the read tool's
 // offset arithmetic (offset.saturating_sub(1).saturating_add(limit)).
 #[tokio::test]

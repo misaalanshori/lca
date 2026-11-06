@@ -418,7 +418,27 @@ fn pty_spawn_delivers_terminal_output() {
         )))
         .expect("runs");
     assert_eq!(result.status, ToolResultStatus::Ok, "{}", result.content);
-    assert!(result.content.contains("pty-ok"), "{}", result.content);
+    // Gh #535: **this row is not a sampling loop, so its flake was the product's.**
+    //
+    // `execute` runs the conformance guest's `pty` mode, which loops
+    // `pty.read` until the host answers end-of-stream and only then reports. So a
+    // result that says `exit 0` with empty output is the host having *decided the
+    // session ended* before the child's tail was readable - not this row reading
+    // too early. It failed twice on macOS CI that way (runs 42069077201 and
+    // 42166657159, both `exit 0 ` at 3.5-4.7 s), which is why the fix went into
+    // `read_impl`'s drain phase (4 ms, once, -> a measured 100 ms ceiling) rather
+    // than into a wait here.
+    //
+    // The message now separates the two possible worlds so the next failure is
+    // diagnosable in one read: an empty result with a zero exit code means the
+    // session was called drained, while a non-zero code or a guest error means the
+    // program itself failed.
+    assert!(
+        result.content.contains("pty-ok"),
+        "the pty result lost the child's output: {result:?}. `exit 0` with no \
+         text means the host declared the session drained before the tail was \
+         readable (a product defect, gh #535); any other shape is the program."
+    );
 }
 
 // Verifies: FR-PERM-3's ui shape and the catalog's ui denial behavior

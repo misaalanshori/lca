@@ -582,3 +582,11 @@ mod mcp_list_window;
 // stream can have.
 #[path = "405-stream-chunk-boundaries.rs"]
 mod stream_chunk_boundaries;
+
+// Gh #535: a pty's post-exit drain gave a late tail one 4 ms window, and macOS CI
+// lost `echo pty-ok` twice in a fortnight (`exit 0` with an empty result). The row
+// that failed was not sampling - the conformance guest loops until end-of-stream - so
+// the defect was the host declaring the session drained too early. This pins a bounded
+// drain phase whose every attempt waits, so it cannot become gh #477's spin.
+#[path = "535-pty-drain-window.rs"]
+mod pty_drain_window;

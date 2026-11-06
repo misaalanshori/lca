@@ -42,6 +42,20 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **A pty's post-exit drain gives a late tail real time, so `echo pty-ok` stops vanishing**
+  (gh #535). `pty_spawn_delivers_terminal_output` failed twice on macOS CI with `exit 0` and
+  an empty result. That row is **not** a sampling loop — the conformance guest loops
+  `pty.read` until the host answers end-of-stream and only then reports — so the fault was the
+  host declaring a session drained while the child's output was still in flight. gh #477 had
+  already met this shape and answered it with **one** 4 ms window after a confirmed child exit;
+  on macOS a drained master stays permanently readable (a read answers zero bytes), so 4 ms
+  was a guess rather than a measurement. The drain phase is now a bounded number of attempts
+  (20 × 5 ms = a 100 ms ceiling), every attempt waits, and a platform that can say "nothing
+  more is coming" (Linux reports `POLLHUP`, never `POLLIN`, on a drained master) still exits at
+  once instead of sleeping out the ceiling. The `lca-tools` pty row also stopped sampling: it
+  waits for the marker rather than for 64 bytes, so a partial line can no longer satisfy it,
+  and its failure message now says whether the pty closed without the marker (product) or the
+  deadline expired (runner).
 - **The darwin release-targets lane builds again, after `macos-14` was retired** (gh #583).
   GitHub retired the `macos-14` hosted image on 2026-11-02, and a job naming a label no runner
   matches is **cancelled in about a second** with an empty `runner_name` and no steps — which

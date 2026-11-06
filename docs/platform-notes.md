@@ -230,6 +230,37 @@ its 4 KiB bound it returned the text **unchanged**, letting a raw `ESC` reach th
 — the control-byte injection the function exists to prevent. It is a forward scan now,
 and past the bound it drops the one control byte and keeps the payload.
 
+## A pty's end-of-stream is a platform-specific claim (gh #535)
+
+`pty.read` answering `None` means "the session ended" — and the hard part is that a pty's
+master reports its end on terms of its own. The child exiting does **not** mean the bytes it
+wrote have been drained, and the platform that keeps proving it is macOS: there a
+*drained* master stays **permanently readable** (a read answers zero bytes), so `poll`
+reporting `POLLIN` cannot distinguish a late tail from the end of the stream.
+
+That combination produced the same failure twice, in `pty_spawn_delivers_terminal_output` on
+macOS CI, as `exit 0` with an empty result — the host having declared the session drained
+while `echo pty-ok`'s output was still in flight. gh #477 met the shape first and answered it
+with **one** 4 ms grace window after a confirmed child exit; that is a guess, and 4 ms is
+what the guess was. The phase is now:
+
+| aspect | value | why |
+|---|---|---|
+| attempts | `DRAIN_ATTEMPTS = 20` | a bound you can multiply, unlike a single sample |
+| step | `DRAIN_STEP = 5 ms` | a real window per attempt |
+| ceiling | 100 ms | spent **once** per session, at shutdown, never in steady state |
+| who pays it | only a platform whose drained master still claims readability | macOS |
+| who does not | a platform whose kernel answers "nothing more is coming" | Linux sets `POLLHUP` and never `POLLIN`, so the zero-timeout probe answers `false` and the loop returns at once |
+
+The sleep is **unconditional in that branch on purpose**, which is the exact opposite of
+gh #477's bug: that one re-read with no wait at all and ran at a measured 614,104 calls per
+second. A branch that only slept when a read returned no data would spin on macOS, because
+"readable and empty" is precisely the state there; a branch that sleeps whenever the master
+claims readability costs at most 100 ms where the kernel cannot be trusted and nothing where
+it can. `tests/regressions/535-pty-drain-window.rs` pins all three properties structurally —
+attempts, the wait, and the immediate exit — so a future simplification cannot quietly restore
+either the one-shot window or the spin.
+
 ## Cross-cutting: what "works everywhere" actually means here
 
 A requirement stated as applying to all platforms, in the requirements and design document, means the behavior is identical from the perspective of the agent's own logic and the extension ABI; it does not mean the underlying mechanism is identical. The `fs` scope-escape check is one function with one contract everywhere and two different, platform-specific canonicalization implementations underneath it. The cancellation flow is one behavior, kill everything a turn started, with a process-group kill on POSIX and a Job Object kill on Windows underneath it. Extension authors and first-party contributors alike should write to the contract, not to a mechanism, and platform-specific tests, not just platform-specific code, are what keeps the two from drifting apart silently; the Windows CI job being non-optional, per the testing plan, is the concrete enforcement of that principle rather than a formality.

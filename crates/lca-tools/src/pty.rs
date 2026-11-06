@@ -288,16 +288,35 @@ fn spawn_impl(
 #[cfg(unix)]
 const READY_WAIT: std::time::Duration = std::time::Duration::from_millis(8);
 
-/// How long to give a tail that may still be in flight after the child exited
-/// (gh #477).
+/// How long each attempt in the post-exit drain phase waits for a late tail
+/// (gh #477, gh #535).
 ///
 /// A pty's master reports its end on terms of its own: the child exiting does
-/// not mean the bytes it wrote have been drained, and the platform that failed
-/// (`exit 0 ` with no output) reported the end before the tail was readable.
-/// This is spent **once**, on the first EOF-looking read after a confirmed
-/// child exit, so it costs nothing on the normal path.
+/// not mean the bytes it wrote have been drained, and the platform that keeps
+/// failing (`exit 0 ` with an empty result) reported the end before the tail
+/// was readable. gh #477 spent a single 4 ms window on that; **macOS CI then
+/// lost the whole of `echo pty-ok` twice in a fortnight**, at 3.5-4.7 s into a
+/// run whose typed id starts with `candidate-share`, so 4 ms was a guess rather
+/// than a measurement.
+///
+/// The attempt count and the step are separate because the platforms differ in
+/// what they can tell us: on Linux an EOF is conclusive (`poll` reports
+/// `POLLHUP`, never `POLLIN`, so no step is ever spent and the loop exits at
+/// once), while on macOS a **drained** master polls readable forever and
+/// answers a read with zero bytes - so the only way to give a late tail real
+/// time there is to sleep, and the only way to keep that from becoming gh
+/// #477's 614,104-calls-per-second spin is to make the sleep unconditional in
+/// the branch that would otherwise spin.
 #[cfg(unix)]
-const DRAIN_GRACE: std::time::Duration = std::time::Duration::from_millis(4);
+const DRAIN_STEP: std::time::Duration = std::time::Duration::from_millis(5);
+
+/// How many post-exit drain attempts may spend a [`DRAIN_STEP`] each.
+///
+/// 20 x 5 ms = a **100 ms ceiling**, reached only on a platform whose drained
+/// master still claims readability. The phase runs once per session, at the end,
+/// so this is a shutdown cost and never a steady-state one.
+#[cfg(unix)]
+const DRAIN_ATTEMPTS: u32 = 20;
 
 /// Has the child exited? `try_wait` caches the status, so the `wait` that
 /// every caller runs afterwards still reports the real exit code.
@@ -309,13 +328,11 @@ fn child_exited(inner: &mut Inner) -> std::io::Result<bool> {
 #[cfg(unix)]
 fn read_impl(inner: &mut Inner, max: usize) -> std::io::Result<Option<Vec<u8>>> {
     let deadline = std::time::Instant::now() + READY_WAIT;
-    // A tail gets exactly one second chance, never a loop. macOS leaves a
-    // drained master *permanently readable* (a read answers 0 bytes at once),
-    // so "poll says readable" cannot distinguish a late tail from the end -
-    // a grace loop against it would spin until the test budget expired, which
-    // is exactly how the first version of this fix turned a lost-output flake
-    // into a 120-second timeout on macOS CI.
-    let mut drain_retry_used = false;
+    // Post-exit drain attempts already spent (gh #535). Bounded by count *and*
+    // by the fact that each one waits, so a macOS master that stays readable
+    // after it is drained costs at most `DRAIN_ATTEMPTS * DRAIN_STEP` and never
+    // a spin - which is why this is not the loop gh #477 had to remove.
+    let mut drain_attempt = 0u32;
     loop {
         // Read first: output may already be buffered, and a read that returns
         // data costs nothing. Only an *empty* answer has to wait.
@@ -337,15 +354,29 @@ fn read_impl(inner: &mut Inner, max: usize) -> std::io::Result<Option<Vec<u8>>> 
             // Not the end while the child is still alive: it may write again.
             if !child_exited(inner)? {
                 // fall through to the wait below and look again
-            } else if drain_retry_used {
-                // Child gone, end seen twice: the buffer is genuinely drained.
+            } else if drain_attempt >= DRAIN_ATTEMPTS {
+                // Child gone, drain phase spent: the buffer is genuinely empty.
                 return Ok(None);
             } else {
-                // Child gone and an end seen - give a late tail one window to
-                // appear before believing it. Whatever it finds is returned by
-                // the next iteration, because this only waits; it never reads.
-                drain_retry_used = true;
-                let _ = unsafe_ptmx::wait_readable(&inner.master, DRAIN_GRACE.as_millis() as i32)?;
+                // Child gone and an end seen - a late tail may still be in
+                // flight. **Spend a real window on it, and spend it only where
+                // that window is the only signal there is** (gh #535):
+                //
+                // - Linux makes an EOF conclusive: `poll` reports `POLLHUP` and
+                //   never `POLLIN`, so the probe below answers `false`, this
+                //   breaks out at once, and the loop costs microseconds.
+                // - macOS leaves a *drained* master permanently readable and
+                //   answers a read with zero bytes, so there `POLLIN` is still
+                //   set and the sleep is the only source of elapsed time. The
+                //   sleep is therefore unconditional in this branch - the exact
+                //   opposite of gh #477's spin, which had no wait at all.
+                drain_attempt += 1;
+                if unsafe_ptmx::wait_readable(&inner.master, 0)? {
+                    std::thread::sleep(DRAIN_STEP);
+                } else {
+                    // The kernel says nothing more is coming on this platform.
+                    return Ok(None);
+                }
                 continue;
             }
         }
