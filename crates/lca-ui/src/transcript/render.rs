@@ -554,18 +554,66 @@ fn json_string_field(args: &str, key: &str) -> Option<String> {
                 'n' => out.push('\n'),
                 't' => out.push('\t'),
                 'r' => out.push('\r'),
-                'u' => {
-                    for _ in 0..4 {
-                        chars.next()?;
-                    }
-                    out.push('\u{fffd}');
-                }
+                'b' => out.push('\u{8}'),
+                'f' => out.push('\u{c}'),
+                'u' => out.push(decode_unicode_escape(&mut chars)?),
                 other => out.push(other),
             },
             c => out.push(c),
         }
     }
     None
+}
+
+/// Decode one `\\uXXXX` escape body (the `u` is already consumed) into its character.
+///
+/// Gh #405 gap 4: this used to skip the four hex digits and push `U+FFFD`, so **every
+/// non-ASCII character in a tool argument became a replacement character in the card's
+/// headline**. Measured live: a `printf '日本語…'` command painted as
+/// `printf '�����������'` while the command ran correctly and its output was right. JSON
+/// escapes every non-ASCII character by default, so this was not an edge case — it was
+/// every CJK, Cyrillic, Greek and emoji argument.
+///
+/// Surrogate pairs are decoded properly (`\\ud83c\\udf89` → 🎉), because half a pair
+/// is not a character and emitting one is how mojibake starts. A pair that is not well
+/// formed yields `U+FFFD` once for the pair, which is the honest answer for input that
+/// cannot be text.
+fn decode_unicode_escape(chars: &mut std::str::Chars<'_>) -> Option<char> {
+    /// Four hex digits, ASCII only.
+    fn four_hex(chars: &mut std::str::Chars<'_>) -> Option<u32> {
+        let mut value = 0u32;
+        for _ in 0..4 {
+            value = value.checked_mul(16)? + chars.next()?.to_digit(16)?;
+        }
+        Some(value)
+    }
+    let first = four_hex(chars)?;
+    // A high surrogate must be followed by `\u` and a low surrogate. The lookahead runs
+    // on a **clone** of the iterator so a byte that is not the start of a pair stays in
+    // the input: consuming it and finding "not a backslash" would silently eat the
+    // character after a malformed escape (measured: `"a\ud83cb"` lost the `b`).
+    if (0xD800..0xDC00).contains(&first) {
+        let mut lookahead = chars.clone();
+        let low = (|| {
+            if lookahead.next()? != '\\' || lookahead.next()? != 'u' {
+                return None;
+            }
+            four_hex(&mut lookahead)
+        })();
+        return match low {
+            Some(low) if (0xDC00..0xE000).contains(&low) => {
+                // Both halves are surrogates, so the combined scalar is in range.
+                *chars = lookahead;
+                char::from_u32(0x1_0000 + ((first - 0xD800) << 10) + (low - 0xDC00))
+            }
+            // A lone or mismatched high surrogate: replaced once, and the input after it
+            // is untouched.
+            _ => Some('\u{FFFD}'),
+        };
+    }
+    // `char::from_u32` already refuses a lone surrogate (and anything above `0x10FFFF`)
+    // by answering `None`, so that case is the replacement character and nothing else.
+    Some(char::from_u32(first).unwrap_or('\u{FFFD}'))
 }
 
 fn render_tool(
@@ -995,3 +1043,10 @@ pub(super) fn format_duration_ms(ms: u64) -> String {
         format!("{hours}h {minutes}m {seconds}s")
     }
 }
+
+// gh #405 gap 4: a tool argument's `\uXXXX` escapes must reach the card headline as
+// text. Registered here because `format_tool_args` lives here, and `mod.rs` is at the
+// 1,200-line ceiling (gate 11).
+#[cfg(test)]
+#[path = "tool_args_escape_tests.rs"]
+mod tool_args_escape_tests;

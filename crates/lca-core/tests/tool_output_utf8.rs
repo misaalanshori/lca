@@ -10,7 +10,18 @@
 //! A shell that writes a byte at a time is the worst case a real pipe can produce, and
 //! it is the case a `from_utf8_lossy`-per-read cannot survive at all — so it is the
 //! fixture.
+//!
+//! **Unix only, and not because the bug is.** The decoder is platform-neutral and its
+//! own rows (`lca-protocol/tests/utf8_stream.rs`) run everywhere; what cannot run on
+//! Windows is the *fixture*, which needs `od`/`while`/`printf` to emit one byte per
+//! `write(2)` from a POSIX shell. `cmd.exe` has none of those, and the first version of
+//! this row failed on `test (windows-latest)` exactly there — printing the command's own
+//! help text as the "output". Gating the shape it cannot express is honest; editing the
+//! assertion until Windows passed would have hidden the seam it exists to pin.
 
+// The fixture is a POSIX shell pipeline (see the module doc): the *decoder* is
+// platform-neutral and is pinned on every OS by `lca-protocol`'s rows.
+#![cfg(unix)]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code.
 mod common;
 
