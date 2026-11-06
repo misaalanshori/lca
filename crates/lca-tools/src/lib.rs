@@ -9,6 +9,7 @@
 #![deny(unsafe_code)]
 
 mod bridge;
+mod cancel;
 mod capabilities;
 mod diff;
 mod edit;
@@ -25,6 +26,7 @@ mod specs;
 pub mod truncate;
 
 pub use bridge::{BridgeError, bridge_stream};
+pub use cancel::CancelFlag;
 pub use capabilities::CompletionBackend;
 pub use capabilities::SharedBackend;
 /// The inbound HTTP listener (gh #363, ADR-0049): the host owns the socket,
@@ -62,61 +64,6 @@ pub use image::{
     IMAGE_RESIZE_EXTRA, IMAGE_VISION_EXTRA, ImagePolicy, ImageResize, ImageVision, NO_VISION_NOTE,
     clipboard_png,
 };
-
-/// Cooperative cancellation for one turn's work (FR-CONC-3).
-#[derive(Clone)]
-pub struct CancelFlag {
-    inner: Arc<(tokio::sync::Notify, std::sync::atomic::AtomicBool)>,
-}
-
-impl Default for CancelFlag {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl CancelFlag {
-    /// A fresh, uncancelled flag.
-    pub fn new() -> CancelFlag {
-        CancelFlag {
-            inner: Arc::new((
-                tokio::sync::Notify::new(),
-                std::sync::atomic::AtomicBool::new(false),
-            )),
-        }
-    }
-
-    /// Trigger cancellation; every waiter wakes.
-    pub fn cancel(&self) {
-        self.inner
-            .1
-            .store(true, std::sync::atomic::Ordering::SeqCst);
-        self.inner.0.notify_waiters();
-    }
-
-    /// Whether cancellation has been triggered.
-    pub fn is_cancelled(&self) -> bool {
-        self.inner.1.load(std::sync::atomic::Ordering::SeqCst)
-    }
-
-    /// Wait until cancellation triggers (returns immediately when already
-    /// cancelled, so a cancel between poll wakeups is never missed).
-    pub async fn wait_cancelled(&self) {
-        loop {
-            if self.is_cancelled() {
-                return;
-            }
-            let notified = self.inner.0.notified();
-            tokio::pin!(notified);
-            // Register interest before re-checking the flag.
-            notified.as_mut().enable();
-            if self.is_cancelled() {
-                return;
-            }
-            notified.await;
-        }
-    }
-}
 
 /// Pi's line budget for `read` (`DEFAULT_MAX_LINES` in pi's
 /// `tools/truncate.ts`): at most this many lines reach the model from one
