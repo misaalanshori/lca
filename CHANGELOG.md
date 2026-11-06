@@ -42,6 +42,16 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **The darwin release-targets lane builds again, after `macos-14` was retired** (gh #583).
+  GitHub retired the `macos-14` hosted image on 2026-11-02, and a job naming a label no runner
+  matches is **cancelled in about a second** with an empty `runner_name` and no steps — which
+  means the run's conclusion reads `cancelled` rather than `failed`. So the lane built nothing
+  for a day without anything turning red, and `main` never looked broken. All five occurrences
+  of the pin moved together (`ci.yml`'s release-targets job, `publish.yml` twice,
+  `unstable.yml` twice) to **`macos-15`**, which keeps the deliberate pinning that gh #580 put
+  there — `macos-latest` now resolves to `macos-26`, the rolling behaviour the pin exists to
+  prevent — and the comments at all three sites now record both retirements, because a label is
+  a dependency and this is the second one to move under the pipeline.
 - **Streamed output can no longer lose a character at a read boundary** (gh #405 gap 4,
   second round). The loss was not where the issue assumed: the text accumulator was already
   correct, and rendering parses the whole accumulated string — measured, a document with a

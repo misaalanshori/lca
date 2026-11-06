@@ -146,6 +146,14 @@ jobs:
           # must not roll on its own. When `ubuntu-latest` moved 24.04 ->
           # 26.04, apt.llvm.org published no suite for the new codename and
           # every release build died in the LLVM19 step. Bump deliberately.
+          #
+          # A pin can also be **retired out from under you** (gh #583): a label
+          # that matches no runner cancels the job in about a second with no
+          # `runner_name`, and a cancelled job leaves the run reading
+          # `cancelled` rather than `failed`. `macos-14` went that way on
+          # 2026-11-02. The labels below are bumped together with `ci.yml` and
+          # `unstable.yml`, because a release lane that never ran is how a
+          # release ships with a missing artifact.
           - os: ubuntu-26.04
             name: linux
             targets: x86_64-unknown-linux-musl aarch64-unknown-linux-musl
@@ -158,10 +166,10 @@ jobs:
           # queued for hours with no runner picking it up; this keeps
           # NFR-9 (built natively on macOS) without betting the
           # release queue on Intel hardware supply.
-          - os: macos-14
+          - os: macos-15
             name: darwin-x86_64
             targets: x86_64-apple-darwin
-          - os: macos-14
+          - os: macos-15
             name: darwin-aarch64
             targets: aarch64-apple-darwin
     runs-on: ${{ matrix.os }}

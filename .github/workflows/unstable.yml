@@ -131,17 +131,20 @@ jobs:
           # Pinned, not `ubuntu-latest` (gh #580): same reason as publish.yml
           # and the ci.yml release-targets job - a release lane's OS must not
           # roll underneath it, and apt.llvm.org publishes no suite for the
-          # 26.04 codename every `ubuntu-latest` runner now uses.
+          # 26.04 codename every `ubuntu-latest` runner now uses. A pin can
+          # also be retired (gh #583, `macos-14` on 2026-11-02): the job then
+          # cancels with no runner and the run reads `cancelled`, not `failed`.
+          # All five occurrences across the three workflows move together.
           - os: ubuntu-26.04
             name: linux
             targets: x86_64-unknown-linux-musl aarch64-unknown-linux-musl
           - os: ubuntu-26.04
             name: windows
             targets: x86_64-pc-windows-msvc aarch64-pc-windows-msvc
-          - os: macos-14
+          - os: macos-15
             name: darwin-x86_64
             targets: x86_64-apple-darwin
-          - os: macos-14
+          - os: macos-15
             name: darwin-aarch64
             targets: aarch64-apple-darwin
     runs-on: ${{ matrix.os }}

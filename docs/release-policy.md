@@ -78,6 +78,8 @@ Every release builds six native targets. The seventh row is deferred with NFR-11
 
 Linux and Windows targets cross-compile from Linux runners, using `cargo-zigbuild` and `cargo-xwin`. macOS targets build natively on macOS runners, because Apple's toolchain wants a real macOS host. Nothing is code-signed or notarized in 0.1: trust rests on reproducibility plus the provenance attestation below.
 
+The runner images are **pinned by name, never `-latest`**, and the pins are dependencies that retire: `ubuntu-latest` rolled from 24.04 to 26.04 and took the LLVM step with it (gh #580), and `macos-14` was retired outright on 2026-11-02 (gh #583). A job naming a retired label is **cancelled in about a second with no runner assigned**, and because it is cancelled rather than failed the run's own conclusion reads `cancelled` — so a release lane can stop building without anything turning red. The pins today: `ubuntu-26.04` (linux and windows legs) and `macos-15` (both darwin legs, whose universal SDK builds both apple targets on one runner). Five occurrences carry the macOS pin — `ci.yml`'s release-targets job, `publish.yml` twice, `unstable.yml` twice — and they move together or not at all, because a CI-only bump leaves the release lanes cancelled and ships a release with no darwin artifact while CI looks healthy.
+
 Each artifact ships with a SHA-256 checksum. The checksum file for the whole release is published alongside the artifacts.
 
 ## Reproducibility

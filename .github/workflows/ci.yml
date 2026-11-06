@@ -424,10 +424,32 @@ jobs:
           # this job went red on every push, and a floating label is invisible
           # in a diff and unbisectable. Bump this deliberately, with a green
           # run, or not at all - the LLVM step below asserts the consequence.
+          #
+          # **A pin dies too, and silently** (gh #583). `macos-14` was retired as
+          # a GitHub-hosted image on 2026-11-02; a job targeting a label that
+          # matches no runner is **cancelled** in about a second, with an empty
+          # `runner_name` and no steps, and because it is cancelled rather than
+          # failed the whole run reads `cancelled` - so this lane built nothing
+          # for a day without anything turning red. That is the cost of the pin
+          # and the reason for the rule below, which is the same rule as the
+          # `ubuntu-latest` one: a label is a dependency, and a dependency that
+          # stops existing must be noticed by a person, not by a release.
+          #
+          # So: when the image beneath a pin is announced retired, bump it to a
+          # named successor **in all five places at once** (`ci.yml`, `publish.yml`
+          # x2, `unstable.yml` x2) and cite a green run of this job. Do not fall
+          # back to `macos-latest`: it now resolves to `macos-26`, which is the
+          # rolling behaviour this pin exists to prevent. Do not split the bump
+          # across cycles either - a CI-only bump leaves the release lanes
+          # cancelled, which ships a release with no darwin artifact while CI
+          # looks healthy, and that is strictly worse than today.
           - os: ubuntu-26.04
             name: linux+windows
             targets: x86_64-unknown-linux-musl aarch64-unknown-linux-musl x86_64-pc-windows-msvc aarch64-pc-windows-msvc
-          - os: macos-14
+          # `macos-15` (arm64; `macos-15-intel` is the x86_64 sibling). Both
+          # apple targets build here on one runner - the SDK is universal, so
+          # `rustup target add` plus a normal build crosses the other arch.
+          - os: macos-15
             name: darwin
             targets: x86_64-apple-darwin aarch64-apple-darwin
     steps:
