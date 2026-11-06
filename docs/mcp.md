@@ -78,7 +78,7 @@ stdout.
 | `env` | Variables overlaid on the inherited environment. `${NAME}` expands; a name that is not set is an error naming that variable. |
 | `cwd` | A directory. A leading `~` expands to your home; anything else resolves against the session's working directory. Omitted means the session's working directory. |
 | `description` | One line for the system prompt, so the model knows what the server is for without a tool call. |
-| `timeout` | HTTP only; ignored here. |
+| `timeout` | HTTP only; ignored here. A stdio handshake is bounded by `lca mcp list`'s own window instead — 60 s, matching the HTTP default — because a slow-to-start interpreter is healthy, not dead (gh #582). |
 
 `env` and `args` both expand `${NAME}` against **LCA's own environment**, which is
 what makes a server's credential a variable rather than a literal in a file. Two
@@ -466,6 +466,21 @@ and `headers` carry tokens — so it is written **owner-only (`0600`)** and
 renamed over the target. An interrupted write leaves the previous file intact
 rather than truncating your server configs and credentials. On Windows the file
 gets the same owner-only ACL the credential store applies.
+
+### `list`
+
+Connects every enabled server and reports its state, tool count, and any error. A server
+that is still handshaking when the window closes is reported `connecting` with the window
+named, and the command exits 1 — a *turn* would have answered by then, so a script should
+know.
+
+That window is **60 seconds**, not the 10-second first-turn startup budget it used to
+borrow (gh #582). Measured on the failure that opened the issue: a child that answers at
+11 s was reported `connecting`, exited 1, and never connected on any later run, because
+the budget expired before the handshake it was waiting for could finish. 60 s is the
+handshake's own default — the same number the HTTP transport uses and pi's
+`DEFAULT_TIMEOUT_SECONDS` — so a cold Windows interpreter start is no longer mistaken for
+a dead server.
 
 ### `remove`
 

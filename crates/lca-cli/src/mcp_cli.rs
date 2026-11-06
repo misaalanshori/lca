@@ -31,10 +31,21 @@ const DEFAULT_LOGIN_TIMEOUT_SECONDS: u64 = 300;
 ///
 /// pi has no bound here (its connections are promise-based and it awaits them
 /// all); LCA's are on worker threads, so a hung server would otherwise make a
-/// scriptable command hang. This is the same 10-second startup window the
-/// first turn uses (gh #418 Phase E), and a server still connecting is
-/// reported honestly rather than dropped.
-const LIST_WAIT_SECONDS: u64 = 10;
+/// scriptable command hang, and a script needs *an* upper bound.
+///
+/// **It is not the 10-second first-turn window** (gh #582). That number is
+/// `DEFAULT_STARTUP_WAIT_MS` — how long a *turn* waits before answering the user — and
+/// borrowing it here made `list` call a healthy server dead. Measured: a child that
+/// answers at 11 s is reported `connecting`, exits 1, and never connects however many
+/// times you re-run it, because the budget expires before the handshake it is waiting
+/// for can finish. On a loaded Windows runner that is not exotic: a whole turn using
+/// this same fixture took **7.5 s** on the job where `list` failed at 10.5 s.
+///
+/// 60 s is the handshake's own window — `lca_mcp::HttpServerConfig::timeout`'s
+/// documented default, which is also pi's (`DEFAULT_TIMEOUT_SECONDS`), so the stdio and
+/// HTTP transports no longer disagree about what a slow-but-healthy server is. A script
+/// still has a ceiling; it just is not one a cold interpreter can cross.
+const LIST_WAIT_SECONDS: u64 = 60;
 
 /// Run one `lca mcp` verb and return the process exit code.
 pub(crate) fn run(cmd: &McpCmd, cwd: &Path, trusted: bool) -> i32 {

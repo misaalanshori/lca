@@ -406,7 +406,8 @@ impl CliMcp {
                         // budget without saying so is a label that lies.
                         still_connecting.contains(&status.name).then(|| {
                             format!(
-                                "did not answer within {}s - it may still be                                  starting, or it may be stuck",
+                                "did not answer within {}s - it may still be \
+                                 starting, or it may be stuck",
                                 budget.as_secs()
                             )
                         }),

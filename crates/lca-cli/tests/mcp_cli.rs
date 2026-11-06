@@ -37,6 +37,28 @@ fn mcp(sandbox: &common::Sandbox, args: &[&str]) -> std::process::Output {
     sandbox.run(None, &full)
 }
 
+/// Everything a failing `mcp` invocation can tell a reader, in one string.
+///
+/// Gh #582: the row that opened this issue failed on Windows with `Some(1)` and an empty
+/// stderr, which is the signature of *either* a child that never started *or* a deadline
+/// that expired — and nothing in the message could tell them apart, so every fire of it
+/// was a blind re-run. `mcp list` prints its report on **stdout** (an empty stderr is
+/// normal and proves nothing), so the failure message has to carry stdout, stderr, the
+/// exit status, and how long the call took. The last one is what names the real cause:
+/// a deadline shows up as "as long as the budget".
+fn diagnostics(label: &str, output: &std::process::Output, elapsed: std::time::Duration) -> String {
+    format!(
+        "{label}: exit={:?} in {:.2}s\n  stdout: {}\n  stderr: {}",
+        output.status.code(),
+        elapsed.as_secs_f64(),
+        common::stdout(output).replace('\n', "\n          "),
+        match common::stderr(output).is_empty() {
+            true => "(empty — `mcp list` reports on stdout, so this proves nothing)".to_string(),
+            false => common::stderr(output).replace('\n', "\n          "),
+        }
+    )
+}
+
 /// The user-level `mcp.json`, parsed.
 fn user_config(home: &Path) -> serde_json::Value {
     let path = home.join(".lca/mcp.json");
@@ -204,6 +226,43 @@ fn remove_reports_the_other_scope_and_exits_one() {
     );
 }
 
+// Verifies: gh #582 - **a failing `mcp` invocation says why.** The row that opened this
+// issue failed on Windows with `Some(1)` and an empty stderr, and that message cannot
+// distinguish "the child never started" from "a deadline expired" — so every fire was a
+// blind re-run. This row drives the failure path deliberately (a command that cannot
+// resolve) and asserts the diagnostic carries the child-side error, not just the code.
+//
+// It is a test of the *diagnostic*, not of the product: the same string is what a red CI
+// run will now show, which is the durable half of the fix.
+#[test]
+fn a_failing_list_names_the_cause_not_just_the_exit_code() {
+    let sandbox = sandbox("mcp-list-diagnosable");
+    let added = mcp(
+        &sandbox,
+        &["add", "ghost", "--", "definitely-not-a-real-program-582"],
+    );
+    assert_eq!(added.status.code(), Some(0), "{}", common::stderr(&added));
+    let started = std::time::Instant::now();
+    let output = mcp(&sandbox, &["list"]);
+    let message = diagnostics("a server that cannot start", &output, started.elapsed());
+    assert_eq!(output.status.code(), Some(1), "{message}");
+    // The cause, as the product words it: the spawn error names the program.
+    assert!(
+        message.contains("did not start") && message.contains("definitely-not-a-real-program-582"),
+        "the message carries the spawn error, not just a code: {message}"
+    );
+    // And the shape of the report is in it too, so the reader can see the state.
+    assert!(
+        message.contains("ghost: failed"),
+        "the report's own state line is in the message: {message}"
+    );
+    // An empty stderr is explained rather than left to look like silence.
+    assert!(
+        message.contains("reports on stdout"),
+        "a reader is told why stderr is empty: {message}"
+    );
+}
+
 // Verifies: gh #418 Phase F - `list` connects and reports a tool, exiting 0.
 #[test]
 fn list_reports_a_connected_server_and_exits_zero() {
@@ -213,13 +272,20 @@ fn list_reports_a_connected_server_and_exits_zero() {
     }
     let sandbox = sandbox("mcp-list-ok");
     let added = mcp(&sandbox, &["add", "echo", "--", "python3", &fixture()]);
-    assert_eq!(added.status.code(), Some(0), "{}", common::stderr(&added));
+    assert_eq!(
+        added.status.code(),
+        Some(0),
+        "{}",
+        diagnostics("mcp add", &added, std::time::Duration::from_secs(0))
+    );
+    let started = std::time::Instant::now();
     let output = mcp(&sandbox, &["list"]);
+    let elapsed = started.elapsed();
     assert_eq!(
         output.status.code(),
         Some(0),
-        "a connected server exits 0: {}",
-        common::stderr(&output)
+        "{}",
+        diagnostics("a connected server exits 0", &output, elapsed)
     );
     let text = common::stdout(&output);
     assert!(
@@ -234,8 +300,60 @@ fn list_reports_a_connected_server_and_exits_zero() {
     );
 }
 
-// Verifies: gh #418 Phase F - `list` exits 1 when an enabled server cannot
-// connect, and the failure names the cause.
+// Verifies: gh #582 - **a slow but healthy server is not called dead.** This is the row
+// that would have caught the red `main`: `list`'s budget was the 10-second *first-turn*
+// window, so a child that needs 11 s to answer was reported `connecting`, exited 1, and
+// stayed that way on every re-run.
+//
+// Why it reproduces CI's failure rather than approximating it: the failing job's own
+// timing says the handshake did not finish inside 10 s (`FAIL 10.561s`, while a whole
+// turn using the same fixture `PASS 7.542s` on the same runner). The fixture's
+// `LCA_PROBE_DELAY` makes exactly that shape deterministic at any speed — the delay is
+// the *child's*, not the machine's, so the row asserts the same thing on an idle box.
+//
+// The delay is one second past the old budget and the row asserts the outcome, not the
+// wall clock: 11 s is not a performance claim, it is "longer than the number that used to
+// be here". A future budget smaller than the handshake window fails this row again.
+#[test]
+fn a_slow_but_healthy_server_is_not_called_dead() {
+    if !python3_available() {
+        eprintln!("skip: python3 is not installed");
+        return;
+    }
+    let sandbox = sandbox("mcp-list-slow-healthy");
+    let added = mcp(
+        &sandbox,
+        &[
+            "add",
+            "slowpoke",
+            "--env",
+            "LCA_PROBE_DELAY=11",
+            "--",
+            "python3",
+            &fixture(),
+        ],
+    );
+    assert_eq!(
+        added.status.code(),
+        Some(0),
+        "{}",
+        diagnostics("mcp add", &added, std::time::Duration::from_secs(0))
+    );
+    let started = std::time::Instant::now();
+    let output = mcp(&sandbox, &["list"]);
+    let message = diagnostics("an 11 s handshake", &output, started.elapsed());
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a server that answers eventually is connected, not failed: {message}"
+    );
+    assert!(
+        common::stdout(&output).contains("slowpoke: connected, 1 tool"),
+        "and the report says so: {message}"
+    );
+}
+
+// Verifies: gh #482 facts
 #[test]
 fn list_exits_one_when_a_server_cannot_connect() {
     let sandbox = sandbox("mcp-list-fail");

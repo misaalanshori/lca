@@ -42,6 +42,18 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **`lca mcp list` no longer calls a healthy-but-slow server dead** (gh #582). The window
+  it gave a handshake was 10 seconds, borrowed from `DEFAULT_STARTUP_WAIT_MS` — how long a
+  *turn* waits before it answers the user. A handshake is a different question, and its own
+  default is 60 s (the HTTP transport's, and pi's `DEFAULT_TIMEOUT_SECONDS`). Measured: a
+  child that answers at 11 s was reported `connecting`, exited 1, and **never connected on
+  any later run**, because the window expired before the handshake it was waiting for could
+  finish; a missing interpreter, by contrast, fails in 68 ms with a named spawn error. That
+  is why `main` went red on `windows-latest` with an exit code and an empty stderr — on the
+  failing job a whole *turn* using the same fixture took 7.5 s, so a cold interpreter start
+  passing 10 s was ordinary. The window is now 60 s, matching the transport it waits on, and
+  the `connecting` row's message no longer carries a 34-space gap from a broken line
+  continuation.
 - **The settle contract row no longer races its own poll interval, so `main` is green again**
   (gh #489, third round on that file). The positive `wait_until_painted` row spawned
   `echo head; sleep 0.1; echo border` and asserted the settled frame carried both paints —

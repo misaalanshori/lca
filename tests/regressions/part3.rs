@@ -564,3 +564,13 @@ mod deleted_duplicates;
 // rather than inferred from the loop's budget.
 #[path = "351-webfetch-input-cut-is-reported.rs"]
 mod webfetch_input_cut;
+
+// Gh #582: `lca mcp list` borrowed the 10-second first-turn window as its handshake
+// window, so a healthy server that needed 11 s was reported `connecting`, exited 1, and
+// never connected on any later run - which is what made `main` red on `windows-latest`
+// with an empty stderr. The behavioural rows drive the real binary
+// (`crates/lca-cli/tests/mcp_cli.rs`: a slow-but-healthy server, and a failing one whose
+// message now names the cause); this pins the number, its agreement with the HTTP default
+// it was supposed to match, and the sentence that explains a `connecting` row.
+#[path = "582-mcp-list-window.rs"]
+mod mcp_list_window;
