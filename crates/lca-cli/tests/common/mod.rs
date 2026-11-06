@@ -32,7 +32,7 @@ pub use sockets::reap_stale_sockets;
 #[cfg(unix)]
 mod readiness;
 #[cfg(unix)]
-pub use readiness::{retry_once, settle_stats};
+pub use readiness::{POLL, retry_once, settle_stats};
 // The contract rows read these; most e2e binaries use only `tmux_socket`, so
 // the unused-in-this-binary warning is expected and silenced with the module's
 // own `dead_code` allowance.

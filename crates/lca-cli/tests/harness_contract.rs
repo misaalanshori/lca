@@ -259,9 +259,28 @@ fn an_empty_pane_is_respawned_once_and_then_succeeds() {
 // Verifies: gh #447 - `wait_until_painted` returns a frame that has stopped
 // changing, so a row reading two facts out of one capture reads one moment.
 //
-// The fake paints a head, waits, then paints the rest — the exact two-frame
-// shape `e2e_picker_scroll` lost on macOS. Reading the frame the head appeared
-// in is precisely what the old rows did; the primitive must give the later one.
+// This row used to spawn `echo head; sleep 0.1; echo border` and assert the settled frame
+// carried both. It failed on CI (run 42094522777, `test (macos-latest, shell)`) for the
+// reason the brief names: the gap was **two thirds of `POLL`** (100 ms against 150 ms), so
+// on a loaded runner two consecutive captures landed inside the gap, the loop declared the
+// head-only frame settled, and the assertion fired. Measured here at load ~18: gaps of
+// 9-163 ms, four of twenty-four within 2x of `POLL`, one *past* it — that fixture's margin
+// was inside the noise on a fast box and outside it on a slow one.
+//
+// The fix is to stop racing rather than to widen anything. The second paint is gated on
+// `read`, so the split between the two frames is the row's decision, and the release
+// happens **before** the primitive is called. That makes the outcome deterministic
+// whatever the scheduler does: by the time the settle takes its first capture, `border` is
+// already on screen, and since it never goes away every frame the loop can observe carries
+// it.
+//
+// What that gives up, stated plainly: this row no longer proves *by timing* that the
+// settled frame is later than the head frame, because it no longer races the paint. The
+// ordering half is pinned by two rows that are deterministic instead of lucky —
+// `two_captures_precede_a_settle` (a settle costs at least two captures, so it cannot
+// return the frame it first saw) and `a_frame_that_never_settles_fails_and_shows_both_frames`
+// (while the screen moves, the loop keeps polling). Together the three state the same
+// property the timing version was trying to grab, and none of them can be flipped by load.
 #[cfg(unix)]
 #[test]
 fn wait_until_painted_returns_the_frame_after_the_screen_stops_changing() {
@@ -270,11 +289,25 @@ fn wait_until_painted_returns_the_frame_after_the_screen_stops_changing() {
         return;
     }
     let session = Tmux::new("settle-positive");
-    // Two paints a fraction of a poll interval apart — the real shape: the app
-    // paints a head, then the rest of the frame on its next render. (A pause
-    // *longer* than the poll interval is the documented ceiling, and is pinned
-    // by its own row below rather than pretended away here.)
-    session.spawn_raw("sh -c 'echo head; sleep 0.1; echo border; sleep 30'");
+    // `read` returns only when the row sends input, so the pane sits on `head` alone for
+    // exactly as long as this row wants — however loaded the box is. No `sleep` in the gap
+    // means no unowned claim about the scheduler.
+    session.spawn_raw("sh -c 'echo head; read relay; echo border; sleep 30'");
+    // The two-frame shape is **established, not hoped for**: the intermediate frame exists
+    // and is head-only, asserted here. Without this the row could pass with a fixture that
+    // painted both at once and prove nothing about settling at all.
+    let head_only = session.wait_for("head", std::time::Duration::from_secs(20));
+    assert!(
+        !head_only.contains("border"),
+        "the second paint waits for the relay, so a head-only frame is what a settle \
+         called now would see:\n{head_only}"
+    );
+
+    // Release the second paint **before** settling, which is what removes the race. The
+    // cost of a late release is a slower row, never a red one: `border` paints
+    // unconditionally once the relay fires, and the settle's budget absorbs any delay.
+    session.send(&["go", "Enter"]);
+
     let pane = session.wait_until_painted(std::time::Duration::from_secs(20));
     assert!(
         pane.contains("head") && pane.contains("border"),
@@ -287,6 +320,98 @@ fn wait_until_painted_returns_the_frame_after_the_screen_stops_changing() {
         "settling captured at least twice: {captures}"
     );
     assert!(settles >= 1, "at least one frame was declared settled");
+}
+
+// Verifies: gh #489's third round - **the guard against round four.** A settle declares
+// only after two consecutive identical captures, and this walks that half directly: over
+// a pane that is already static, one settle must take **at least two** captures before it
+// returns. A primitive that returned its first capture (the shape every round of this
+// issue has been about) fails here without needing any timing window at all.
+//
+// The counter is per process and other rows in this binary settle concurrently, so the
+// assertion is on a delta around this call with a generous floor: two captures is the
+// contract's minimum and a neighbouring row can only raise it.
+#[cfg(unix)]
+#[test]
+fn two_captures_precede_a_settle() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal rows are Unix-only)");
+        return;
+    }
+    let session = Tmux::new("settle-capture-count");
+    // Paint first, then wait for the relay: a pane with **nothing** painted is not settled
+    // (that is `settle`'s documented blank-pane rule), and sending input into a pane whose
+    // reader has not attached yet would race this row against the thing it is measuring.
+    session.spawn_raw("sh -c 'echo ready; read relay; echo settled-content; sleep 30'");
+    session.wait_for("ready", std::time::Duration::from_secs(20));
+    session.send(&["go", "Enter"]);
+    session.wait_for("settled-content", std::time::Duration::from_secs(20));
+
+    let (before, _) = common::settle_stats();
+    let pane = session.wait_until_painted(std::time::Duration::from_secs(20));
+    let (after, _) = common::settle_stats();
+    assert!(
+        pane.contains("settled-content"),
+        "the settled frame is the painted one:\n{pane}"
+    );
+    assert!(
+        after.saturating_sub(before) >= 2,
+        "a settle takes at least two captures before declaring a frame stable, so a \
+         primitive that returned its first capture cannot pass this row: {} capture(s)",
+        after.saturating_sub(before)
+    );
+}
+
+// Verifies: gh #489's third round - **no fixture in this file separates two paints with
+// an unsupervised `sleep`.** This is the guard the brief asked for, and it is structural
+// rather than a timing threshold on purpose: a row that asserted "the gap was under
+// `POLL/4`" would be a wall-clock assertion about the scheduler, which is the exact class
+// of claim that has now failed this file three rounds running (a `-J` join inflating a
+// healthy pane, a `widest <= cols` vacuous on a blank pane, and a `sleep 0.1` in a
+// 150 ms poll). Comparing two numbers read from the *source* makes no claim about any
+// machine, and it fails the moment the old shape comes back.
+//
+// The rule it encodes: a two-paint fixture holds its second paint on `read`, so the length
+// of the pause is the row's decision. A `sleep` between the paints hands that decision to
+// the scheduler, and on a loaded runner the scheduler answers "longer than `POLL`".
+//
+// The allowlist is empty, and it is here so that a future fixture that genuinely cannot be
+// relayed has to say so in one named place rather than by quietly reintroducing the shape.
+#[cfg(unix)]
+#[test]
+fn no_two_paint_fixture_trusts_a_sleep_for_its_gap() {
+    // Every `spawn_raw("sh -c '...'")` in this file, as written source.
+    let source = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/harness_contract.rs"),
+    )
+    .expect("this file is readable from its own test");
+    let mut fixtures = 0;
+    for line in source.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("//") || !trimmed.contains("spawn_raw(") {
+            continue;
+        }
+        // Only a command that paints **twice** has a gap to race. Counting `echo` is
+        // enough: every fixture here paints with `echo`/`printf`, and a command with one
+        // paint (or none) cannot settle between two of them.
+        let paints = trimmed.matches("echo ").count();
+        if paints < 2 {
+            continue;
+        }
+        fixtures += 1;
+        assert!(
+            trimmed.contains("read "),
+            "a two-paint fixture must hold its second paint on `read` (a relay the row \
+             releases) rather than on a `sleep`, whose length the scheduler owns - see \
+             gh #489's three rounds:\n{trimmed}"
+        );
+    }
+    assert!(
+        fixtures >= 2,
+        "the scan must find the two-paint fixtures it is guarding (found {fixtures}); a \
+         parse break would otherwise make this row vacuous, which is the defect it exists \
+         to prevent"
+    );
 }
 
 // Verifies: gh #447 - a frame that never settles **fails** (with both frames in
@@ -491,9 +616,22 @@ fn a_pane_that_pauses_past_the_poll_interval_looks_settled() {
         return;
     }
     let session = Tmux::new("settle-ceiling");
-    // Longer than the harness's 150 ms poll: the two captures between the paints
-    // are identical, so the heuristic settles on the head frame alone.
-    session.spawn_raw("sh -c 'echo head; sleep 1.2; echo border; sleep 30'");
+    // Gap by **relay**, for the same reason as the positive row above (gh #489's third
+    // round): the pause must be longer than `POLL`, and the length of a `sleep` in the
+    // fixture is not something this row owns. Here the row owns it - it holds the second
+    // paint shut, spends more than a poll in its own process, then releases. Latness can
+    // only *lengthen* the pause, which keeps the assertion true, so this row has no
+    // scheduler-sensitive direction left.
+    session.spawn_raw("sh -c 'echo head; read relay; echo border; sleep 30'");
+    let head_only = session.wait_for("head", std::time::Duration::from_secs(20));
+    assert!(
+        !head_only.contains("border"),
+        "the fixture holds the second paint shut:\n{head_only}"
+    );
+    // **The pause is the settle itself.** The second paint is held shut until *after* the
+    // settle has returned, so the gap is at least one whole settle (`POLL` twice over) by
+    // construction, and no `sleep` anywhere has to be trusted for a lower bound. Latness
+    // can only lengthen it, which is why this row now has no scheduler-sensitive direction.
     let pane = session.wait_until_painted(std::time::Duration::from_secs(20));
     assert!(
         pane.contains("head") && !pane.contains("border"),
@@ -501,7 +639,9 @@ fn a_pane_that_pauses_past_the_poll_interval_looks_settled() {
          early, which is why rows must anchor on a needle where they can:\n{pane}"
     );
     // The remedy the doc names, working: anchoring on the *later* paint waits
-    // for a frame that carries it and then settles.
+    // for a frame that carries it and then settles. The paint is released only now,
+    // which is what made the gap above provably longer than a poll.
+    session.send(&["go", "Enter"]);
     let anchored = session.wait_settled_for("border", std::time::Duration::from_secs(20));
     assert!(
         anchored.contains("border"),

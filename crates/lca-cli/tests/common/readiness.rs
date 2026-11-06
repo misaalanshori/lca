@@ -39,7 +39,16 @@ use super::Tmux;
 /// How often a settle loop re-reads the pane. The same 150 ms as `wait_for`'s
 /// poll, so a settle costs half a second at most in the common case and the two
 /// primitives do not disagree about what "soon" means.
-const POLL: Duration = Duration::from_millis(150);
+///
+/// **Public because it is the unit a fixture's gap must be measured in** (gh #489's
+/// third round). A two-paint fixture that separates its paints with an unsupervised
+/// `sleep` is asserting that the scheduler will not stretch that sleep past this
+/// interval - which is true on an idle box and false on a loaded runner, and is exactly
+/// how `wait_until_painted_returns_the_frame_after_the_screen_stops_changing` came to
+/// fail on macOS with `sleep 0.1` against this 150 ms poll. The contract row in
+/// `harness_contract.rs` asserts the ratio, so the margin is arithmetic rather than
+/// optimism.
+pub const POLL: Duration = Duration::from_millis(150);
 
 /// Captures taken by settle loops, and how many settles ran, for the report and
 /// for a row that wants to show the primitive actually polls more than once.

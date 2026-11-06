@@ -42,6 +42,20 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **The settle contract row no longer races its own poll interval, so `main` is green again**
+  (gh #489, third round on that file). The positive `wait_until_painted` row spawned
+  `echo head; sleep 0.1; echo border` and asserted the settled frame carried both paints —
+  a claim that a forked `sleep` plus shell scheduling would not stretch past the harness's
+  150 ms `POLL`. On an idle box the gap measured 9–163 ms (four of twenty-four samples
+  within 2x of the poll, one past it); on a loaded macOS runner two consecutive captures
+  landed inside it, the loop declared the head-only frame settled, and the row failed on
+  `main`. The gap is now a **relay** — the fixture blocks on `read`, the row releases it
+  before settling — so the split is the row's decision rather than the scheduler's, and the
+  release happening first makes the outcome deterministic whatever the load. A second row
+  pins the property the timing version was reaching for without any timing window (a settle
+  costs at least two captures, so it cannot return the frame it first saw), and a structural
+  row fails the build if any two-paint fixture in that file reintroduces a `sleep`-owned gap.
+  40/40 under a 16-spinner load loop, plus 10/10 whole-file runs at load ~21.
 - **A webfetch cut short at the 1 MiB read bound now says so** (gh #351). The fetch loop
   stops reading at 1 MiB, but the only omission marker in the tool was for the *output*
   bound (50 KiB) - so a page whose first 1 MiB converted to less text than that came back
