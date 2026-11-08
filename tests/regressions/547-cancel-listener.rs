@@ -243,7 +243,7 @@ fn the_flag_runs_its_listeners_inside_cancel() {
 // sync twin, seeing an existing file, would then skip writing it. The
 // behavioural rows are in `crates/lca-core/tests/attachments.rs`
 // (`concurrent_stores_of_the_same_bytes_all_succeed_with_one_file`,
-// `a_pre_existing_identical_attachment_is_not_rewritten`,
+// `a_pre_existing_identical_attachment_is_not_replaced`,
 // `the_sync_and_async_stores_agree_on_the_same_file`); this pins that neither
 // twin can quietly lose its `AlreadyExists` arm again.
 #[test]
