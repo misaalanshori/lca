@@ -1,6 +1,9 @@
 //! Dispatch-table tests: name namespaces, reserved built-ins, and
 //! collision handling (FR-EXT-11), with both delivery modes registered
-//! through the one trait (FR-EXT-6).
+//! through the one trait (FR-EXT-6). Gh #584's late-landing rows live at the
+//! end.
+
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 
 use std::sync::Arc;
 
@@ -794,5 +797,354 @@ fn preferred_compaction_strategy_wins_and_falls_back() {
             .map(|handle| handle.name().to_string()),
         Some("first".to_string()),
         "a disabled preferred strategy falls back"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Gh #584: a handle whose specs land after registration is re-planned.
+// ---------------------------------------------------------------------------
+
+/// A handle whose tool set can change **after** registration, which is what an
+/// MCP bridge does when a server connects on a background worker (gh #418
+/// Phase E) and what every fixed handle never does.
+struct LateExt {
+    name: String,
+    /// Behind a lock so the mutation is a real post-registration change and not
+    /// a test-only shortcut: `tool_specs` reads it through the same accessor
+    /// the bridge uses.
+    tools: std::sync::Mutex<Vec<ToolSpec>>,
+    commands: std::sync::Mutex<Vec<CommandSpec>>,
+    version: std::sync::atomic::AtomicU64,
+}
+
+impl LateExt {
+    fn new(name: &str) -> Arc<LateExt> {
+        Arc::new(LateExt {
+            name: name.to_string(),
+            tools: std::sync::Mutex::new(Vec::new()),
+            commands: std::sync::Mutex::new(Vec::new()),
+            version: std::sync::atomic::AtomicU64::new(0),
+        })
+    }
+
+    /// Land a tool, the way `McpBridge::land` installs a connected row: the set
+    /// and the version move together.
+    fn land_tool(&self, tool: &str) {
+        self.tools.lock().expect("tools").push(spec_name(tool));
+        self.version
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Land a command too, so the same re-plan covers the command table.
+    fn land_command(&self, leaf: &str) {
+        self.commands.lock().expect("commands").push(CommandSpec {
+            name: leaf.to_string(),
+            hint: String::new(),
+            completion: "none".to_string(),
+            extras: Default::default(),
+        });
+        self.version
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Withdraw every tool, as `McpBridge`'s reconnect/shutdown does when the
+    /// server's row goes away.
+    fn withdraw_all(&self) {
+        self.tools.lock().expect("tools").clear();
+        self.version
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+impl ExtensionDispatch for LateExt {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn delivery(&self) -> DeliveryMode {
+        DeliveryMode::Native
+    }
+    fn worlds(&self) -> Vec<World> {
+        vec![World::Tool, World::Command]
+    }
+    fn tool_specs(&self) -> Result<Vec<ToolSpec>, DispatchError> {
+        Ok(self.tools.lock().expect("tools").clone())
+    }
+    fn specs_version(&self) -> Option<u64> {
+        Some(self.version.load(std::sync::atomic::Ordering::SeqCst))
+    }
+    fn command_specs(&self) -> Result<Vec<CommandSpec>, DispatchError> {
+        Ok(self.commands.lock().expect("commands").clone())
+    }
+    fn execute_tool<'a>(
+        &'a self,
+        _call: &'a ToolCall,
+    ) -> lca_ext_abi::DispatchFuture<'a, Result<lca_protocol::ToolResult, DispatchError>> {
+        Box::pin(std::future::ready(Err(DispatchError::MissingWorld {
+            extension: self.name.clone(),
+            world: "tool",
+        })))
+    }
+    fn invoke_command(&self, name: &str, _argument: &str) -> Result<CommandEffect, DispatchError> {
+        Ok(CommandEffect::ShowWidget(format!("{}:{name}", self.name)))
+    }
+}
+
+// Verifies: gh #584 - a tool that lands **after** registration is declared to
+// the model and resolves to its owner on the next read.
+//
+// This is both halves of the shipped defect: `declared_tool_specs()` used to
+// omit it (the model was never told the tool existed) and `tool_owner` used to
+// answer `None` (the turn answered `unknown tool`). Registration happens while
+// the set is empty, exactly as `registry::assemble` registers the bridge before
+// any server has connected.
+#[test]
+fn a_tool_that_lands_after_registration_is_declared_and_owned() {
+    let late = LateExt::new("late");
+    let mut registry = ExtensionRegistry::new();
+    registry.register(Arc::clone(&late) as Arc<dyn ExtensionDispatch>);
+    assert!(
+        registry.declared_tool_specs().is_empty(),
+        "nothing is declared before the landing"
+    );
+    assert!(
+        registry.tool_owner("landed").is_none(),
+        "and no tool has an owner yet"
+    );
+
+    late.land_tool("landed");
+
+    let declared: Vec<String> = registry
+        .declared_tool_specs()
+        .into_iter()
+        .map(|spec| spec.name)
+        .collect();
+    assert_eq!(
+        declared,
+        vec!["landed"],
+        "the landed tool is declared on the next request (gh #584)"
+    );
+    let owner = registry.tool_owner("landed").expect("the owner resolves");
+    assert_eq!(
+        owner.name(),
+        "late",
+        "and dispatch finds the handle that just landed it"
+    );
+    assert!(
+        registry.tool_schema("landed").is_some(),
+        "the schema travels with the name, so arguments still validate"
+    );
+}
+
+// Verifies: gh #584 - a command that lands after registration is invocable, and
+// the re-plan covers the command table as well as the tool table.
+//
+// Kept next to the tool row because the same planning pass installs both: a
+// re-plan that fixed tools and forgot commands would leave `/late.probe`
+// answering "no such command" with no test noticing.
+#[test]
+fn a_command_that_lands_after_registration_is_invocable() {
+    let late = LateExt::new("late");
+    let mut registry = ExtensionRegistry::new();
+    registry.register(Arc::clone(&late) as Arc<dyn ExtensionDispatch>);
+    assert!(
+        registry.command_names().is_empty(),
+        "no command is registered yet"
+    );
+
+    late.land_command("probe");
+
+    assert_eq!(
+        registry.invoke_command("late.probe", ""),
+        Some(CommandEffect::ShowWidget("late:probe".to_string())),
+        "the landed command routes to its handle's world (gh #584)"
+    );
+}
+
+// Verifies: gh #584 - no cache churn when nothing changed.
+//
+// The regression this change can introduce is a re-plan that re-sorts or
+// re-renders differently on every read: the request's stable prefix would move
+// every turn and bill the prompt cache for nothing (ADR-0017 / FR-CACHE-5). Two
+// consecutive reads of a settled registry must be byte-identical, in the same
+// order, and a version that did **not** move must not re-plan at all.
+#[test]
+fn a_settled_registry_declares_byte_identical_specs_on_every_read() {
+    let late = LateExt::new("late");
+    // A second, fixed handle ahead of it: the sorted order and the collision
+    // bookkeeping both have to survive a neighbouring re-plan.
+    let mut registry = ExtensionRegistry::new();
+    registry.register(Arc::new(FakeExt::new("fixed").with_tool("aardvark")));
+    registry.register(Arc::clone(&late) as Arc<dyn ExtensionDispatch>);
+    late.land_tool("zebra");
+
+    let first = registry.declared_tool_specs();
+    let second = registry.declared_tool_specs();
+    assert_eq!(
+        serde_json::to_string(&first).expect("serialize"),
+        serde_json::to_string(&second).expect("serialize"),
+        "two reads of a settled set are byte-identical (gh #584)"
+    );
+    assert_eq!(
+        first.iter().map(|spec| &spec.name).collect::<Vec<_>>(),
+        vec!["aardvark", "zebra"],
+        "and share the sorted order every read"
+    );
+
+    // A version that moves *without* a set change must not disturb the bytes
+    // either: the re-plan is idempotent.
+    late.land_tool("aardvark-not-quite");
+    late.withdraw_all();
+    late.land_tool("zebra");
+    let third = registry.declared_tool_specs();
+    assert_eq!(
+        serde_json::to_string(&third).expect("serialize"),
+        serde_json::to_string(&first).expect("serialize"),
+        "a re-plan that ends at the same set renders the same bytes"
+    );
+}
+
+// Verifies: gh #584 - a set that shrinks really shrinks.
+//
+// The withdrawal is what makes this possible at all: without removing the entry's
+// previous names before re-planning, a server that went away would keep being
+// declared, and a reconnect would collide with its own old names and report
+// itself as a loser.
+#[test]
+fn a_late_withdrawal_stops_the_tool_being_declared_and_owned() {
+    let late = LateExt::new("late");
+    let mut registry = ExtensionRegistry::new();
+    registry.register(Arc::clone(&late) as Arc<dyn ExtensionDispatch>);
+    late.land_tool("landed");
+    assert!(registry.tool_owner("landed").is_some());
+
+    late.withdraw_all();
+
+    assert!(
+        registry.tool_owner("landed").is_none(),
+        "a withdrawn tool has no owner, so dispatch no longer reaches it (gh #584)"
+    );
+    assert!(
+        registry
+            .declared_tool_specs()
+            .iter()
+            .all(|spec| spec.name != "landed"),
+        "and it is no longer declared"
+    );
+    assert!(
+        registry
+            .collisions()
+            .iter()
+            .all(|report| report.name != "landed"),
+        "a handle withdrawing its own name is not a collision with itself: {:?}",
+        registry.collisions()
+    );
+}
+
+// Verifies: gh #584 + FR-EXT-11 - a late name that is already owned loses to its
+// owner and reports it, exactly as a registration-time collision would.
+//
+// Both halves matter: the collision must be *reported* (a silent loss is how an
+// extension argument becomes unfalsifiable), and the name must not move (a late
+// handle that could steal a built-in or an earlier registration's name would be
+// a privilege escalation by timing).
+#[test]
+fn a_late_tool_name_that_is_already_owned_loses_and_is_reported() {
+    let late = LateExt::new("late");
+    let mut registry = ExtensionRegistry::new();
+    registry.register(Arc::new(FakeExt::new("first").with_tool("widget")));
+    registry.register(Arc::clone(&late) as Arc<dyn ExtensionDispatch>);
+
+    late.land_tool("widget");
+    late.land_tool("read");
+
+    let owner = registry.tool_owner("widget").expect("still owned");
+    assert_eq!(
+        owner.name(),
+        "first",
+        "the earlier registration keeps the name (FR-EXT-11)"
+    );
+    assert!(
+        registry.tool_owner("read").is_none(),
+        "a built-in keeps its name; a late handle cannot shadow it"
+    );
+    let reports = registry.collisions();
+    assert!(
+        reports
+            .iter()
+            .any(|report| report.name == "widget" && report.winner == "first"),
+        "the late loser is reported against the earlier owner: {reports:?}"
+    );
+    assert!(
+        reports
+            .iter()
+            .any(|report| report.name == "read" && report.winner == "built-in"),
+        "and against the built-in it tried to shadow: {reports:?}"
+    );
+}
+
+// Verifies: gh #584 - a handle that answers the trait's `None` default is never
+// re-planned, so the fixed path pays only one atomic load and no allocation.
+//
+// Measured through the handle's own counter rather than by reading the code:
+// `tool_specs()` must not be called again after registration.
+#[test]
+fn a_fixed_handle_is_never_asked_for_its_specs_again() {
+    struct Counting {
+        inner: FakeExt,
+        asked: std::sync::atomic::AtomicU64,
+    }
+    impl ExtensionDispatch for Counting {
+        fn name(&self) -> &str {
+            self.inner.name()
+        }
+        fn delivery(&self) -> DeliveryMode {
+            self.inner.delivery()
+        }
+        fn worlds(&self) -> Vec<World> {
+            self.inner.worlds()
+        }
+        fn tool_specs(&self) -> Result<Vec<ToolSpec>, DispatchError> {
+            self.asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.inner.tool_specs()
+        }
+        fn execute_tool<'a>(
+            &'a self,
+            call: &'a ToolCall,
+        ) -> lca_ext_abi::DispatchFuture<'a, Result<lca_protocol::ToolResult, DispatchError>>
+        {
+            self.inner.execute_tool(call)
+        }
+        fn command_specs(&self) -> Result<Vec<CommandSpec>, DispatchError> {
+            self.inner.command_specs()
+        }
+        fn invoke_command(
+            &self,
+            name: &str,
+            argument: &str,
+        ) -> Result<CommandEffect, DispatchError> {
+            self.inner.invoke_command(name, argument)
+        }
+    }
+    let counting = Arc::new(Counting {
+        inner: FakeExt::new("fixed").with_tool("readish"),
+        asked: std::sync::atomic::AtomicU64::new(0),
+    });
+    let mut registry = ExtensionRegistry::new();
+    registry.register(Arc::clone(&counting) as Arc<dyn ExtensionDispatch>);
+    assert_eq!(
+        counting.asked.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "registration asks once"
+    );
+    for _ in 0..5 {
+        registry.declared_tool_specs();
+        registry.tool_specs();
+        registry.tool_owner("readish");
+    }
+    assert_eq!(
+        counting.asked.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "a handle with no specs version is never re-asked (gh #584): a re-read \
+         per declaration would cost every fixed extension an allocation per turn"
     );
 }

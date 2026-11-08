@@ -6,6 +6,18 @@ Dates are UTC.
 
 ## [Unreleased]
 
+### Fixed
+- **An MCP server that connects after startup now reaches the model.** The bridge is
+  registered before any server has answered, which is what keeps cold start inside its
+  budget — and a server that landed afterwards was invisible in two places: it was never
+  declared to the model, and a call to it answered `unknown tool` while `/mcp` honestly
+  showed it connected with its tools. The registry now re-plans that handle when the
+  bridge reports its specs changed, so the next request declares the new tools and calls
+  reach their server (gh #584). A late tool cannot take a name a built-in or an earlier
+  extension already owns — that loss is reported as a collision, exactly as at startup —
+  and a settled set is never re-read, so the declared tools stay byte-identical between
+  turns and the prompt cache is untouched.
+
 ### Added
 - **An overlay can now have a width ceiling and react to the terminal it is in** (gh #373 gap
   6). Two `OverlayOptions` fields were missing. `max_width` caps a resolved width, which is

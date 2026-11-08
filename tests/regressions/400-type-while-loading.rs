@@ -237,8 +237,13 @@ fn the_launch_reads_the_registrys_collisions() {
     // the guard follows the code rather than a filename - and the call site proves
     // it is actually reached at launch, which a helper alone would not.
     let startup = read("crates/lca-cli/src/tui/startup.rs");
+    // The exact expression moved on gh #584 (the log lives behind the table lock
+    // now, so `collisions()` returns an owned `Vec` and the caller borrows it),
+    // so this pins the *property* - the header converts what the registry
+    // recorded, from the registry itself - rather than one spelling of the
+    // argument.
     assert!(
-        startup.contains("collision_summary(registry.collisions())"),
+        startup.contains("collision_summary(") && startup.contains("registry.collisions()"),
         "the header builder converts the registry's recorded collisions"
     );
     let module = read("crates/lca-cli/src/tui/mod.rs");

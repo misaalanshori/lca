@@ -249,3 +249,67 @@ fn a_disabled_entry_neither_spawns_nor_waits() {
         manager.status_text()
     );
 }
+
+// Verifies: gh #584 - the bridge's specs version moves on every change the
+// registry has to re-plan for, and does not move on a read.
+//
+// The registry re-plans a handle only when this moved, so a version that missed
+// a `land` would leave a connected server invisible to the model (the shipped
+// defect), and a version that bumped on a read would bust the prompt cache every
+// turn. Both failures are silent, which is why the signal itself is pinned here
+// rather than only through its consequence.
+#[test]
+fn the_specs_version_moves_on_a_landing_and_not_on_a_read() {
+    if !python3_available() {
+        eprintln!("skip: python3 is not installed");
+        return;
+    }
+    let dir = root("version");
+    let manager = lca_mcp::McpManager::load(
+        engine(&dir),
+        dir.join("data/mcp.json"),
+        None,
+        vec![slow_entry(1, McpExposure::Direct)],
+    );
+    let bridge = manager.bridge();
+    // The initial table is the one `registry::assemble` plans against: every row
+    // is `Connecting`, so it contributes no tools, and the version is still 0.
+    let registered = bridge.specs_version();
+    assert_eq!(
+        registered, 0,
+        "a server still connecting has not changed the table yet"
+    );
+
+    // Reads never bump: `/mcp` polls this on every tick, and a bump there would
+    // make the registry re-plan the whole handle on every paint.
+    for _ in 0..3 {
+        let _ = bridge.statuses();
+        let _ = bridge.tool_specs();
+        let _ = bridge.connecting_names();
+    }
+    assert_eq!(
+        bridge.specs_version(),
+        registered,
+        "a read is not a change (gh #584)"
+    );
+
+    let pending = manager.wait_until_settled(std::time::Duration::from_secs(30));
+    assert!(pending.is_empty(), "the server lands: {pending:?}");
+    assert!(
+        bridge.specs_version() > registered,
+        "landing a row bumped the version (gh #584): {} -> {}",
+        registered,
+        bridge.specs_version()
+    );
+
+    // A reconnect rebuilds the table twice (shutdown, then the fresh rows), so
+    // the version has to keep moving or a reconnect that drops tools would be
+    // invisible.
+    let before = bridge.specs_version();
+    manager.act("reconnect", "");
+    let after = bridge.specs_version();
+    assert!(
+        after > before,
+        "a reconnect is a change too: {before} -> {after}"
+    );
+}

@@ -564,6 +564,18 @@ While a server is still connecting, `/mcp` says `connecting` rather than guessin
 reporting "failed" for a server that simply has not answered yet would be a lie
 that costs a debugging session.
 
+**A server that lands after the first request is still declared** (gh #584). The
+bridge is registered before any connection exists, and a server may connect long
+after that — on a slow machine, or after a `/mcp` reconnect or exposure change. The
+registry keeps the tool list it planned from the bridge's own **version** and
+re-plans that handle when the version moves, so the next request declares the new
+tools and a call reaches its server. Two rules make this safe: a re-plan runs the
+same name checks registration does (a late tool never takes a built-in's name or an
+earlier extension's, and the loss is reported as a collision), and a settled set is
+never re-read, so the request's tools stay byte-identical from turn to turn and the
+prompt cache is not busted. A late **removal** — a server that goes away, a
+reconnect that drops tools, a shutdown — un-declares them the same way.
+
 ---
 
 ## Where things are

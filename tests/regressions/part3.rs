@@ -610,3 +610,13 @@ mod cancel_listener;
 // the handle is gone).
 #[path = "569-blocked-pipe-holds-no-table.rs"]
 mod blocked_pipe_holds_no_table;
+
+// Gh #584: an MCP server that connects after `registry::assemble` registered the
+// bridge never reached the model - `register` snapshotted `tool_specs()` once, so
+// a late landing was missing from `tool_schemas` (never declared) and from `tools`
+// (`unknown tool` at dispatch), while `/mcp` honestly showed it connected. The
+// bridge now carries a specs **version** (bumped by every row-set mutation), and
+// the registry re-plans a handle whose version moved, reusing the registration
+// planner so the collision and built-in-shadowing rules are identical.
+#[path = "584-late-landing-server-is-declared.rs"]
+mod late_landing_server_is_declared;

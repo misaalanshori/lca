@@ -222,3 +222,296 @@ fn deferred_mcp_tools_surface_through_tool_search() {
         "but never declared until activated"
     );
 }
+/// `mcp.json`'s word for one exposure level.
+fn exposure_word(exposure: lca_mcp::config::McpExposure) -> &'static str {
+    match exposure {
+        lca_mcp::config::McpExposure::Direct => "direct",
+        lca_mcp::config::McpExposure::Codemode => "codemode",
+        lca_mcp::config::McpExposure::Deferred => "deferred",
+        lca_mcp::config::McpExposure::Hidden => "hidden",
+    }
+}
+
+/// One entry naming the probe fixture with a handshake delay, at `exposure`
+/// (gh #584): a server that is still `Connecting` when the registry is built,
+/// which is what gh #418 Phase E made the ordinary case.
+fn probe_entry(
+    name: &str,
+    delay: u64,
+    exposure: lca_mcp::config::McpExposure,
+) -> lca_mcp::config::ServerEntry {
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../lca-mcp/fixtures/spawn-probe-mcp-server.py")
+        .to_string_lossy()
+        .replace('\\', "/");
+    let mut servers = serde_json::Map::new();
+    servers.insert(
+        name.to_string(),
+        serde_json::json!({
+            "command": "python3",
+            "args": [fixture],
+            "env": { "LCA_PROBE_DELAY": delay.to_string() },
+            "exposure": exposure_word(exposure),
+        }),
+    );
+    let text = serde_json::json!({ "mcpServers": servers }).to_string();
+    let parsed = lca_mcp::config::parse_mcp_json(&text, lca_mcp::config::ServerSource::User);
+    assert!(
+        parsed.warnings.is_empty(),
+        "no warnings: {:?}",
+        parsed.warnings
+    );
+    parsed.servers.into_iter().next().expect("one entry")
+}
+
+/// Run one dispatch future to completion (the rows below are synchronous: they
+/// are about the registry's tables, not about an async turn).
+fn run_tool(
+    future: lca_ext_abi::DispatchFuture<
+        '_,
+        Result<lca_protocol::ToolResult, lca_protocol::DispatchError>,
+    >,
+) -> lca_protocol::ToolResult {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime")
+        .block_on(future)
+        .expect("the tool answers")
+}
+
+// Verifies: gh #584 - a server that lands **after** `register` is declared to
+// the model on the next request **and** callable.
+//
+// The two halves of the shipped defect, driven through the real bridge and the
+// real registry: `declared_tool_specs()` used to omit it (the model was never
+// told the tool existed, and `pi 1.3.0` told its model on the first request),
+// and `tool_owner` used to answer `None`, so the turn answered
+// `unknown tool mcp__probe__probe` while `/mcp` said `connected (1 tools)`.
+//
+// Registration happens against a table that is still `Connecting`, exactly as
+// `registry::assemble` registers the bridge before any background worker
+// finishes - which is what gh #418 Phase E made the ordinary case.
+#[test]
+fn a_server_that_lands_after_registration_is_declared_and_callable() {
+    if !python3_available() {
+        eprintln!("skip: python3 is not installed");
+        return;
+    }
+    let root = scratch("mcp-late-land");
+    let project = root.join("project");
+    let caps = Arc::new(lca_tools::Capabilities::new(
+        "mcp",
+        lca_mcp::manifest_grants(),
+        ScopeRoots {
+            workspace: project.clone(),
+            private: root.join("private"),
+            home_config: root.join("config"),
+            temp: root.join("tmp"),
+            state_dir: root.join("data"),
+        },
+        Arc::new(Mutex::new(Allow)),
+        Arc::new(Mutex::new(
+            GrantStore::open(&root.join("grants.json")).expect("grants"),
+        )),
+        project,
+        None,
+    ));
+    let manager = lca_mcp::McpManager::load(
+        caps,
+        root.join("data/mcp.json"),
+        None,
+        vec![probe_entry(
+            "probe",
+            3,
+            lca_mcp::config::McpExposure::Direct,
+        )],
+    );
+    let mut registry = ExtensionRegistry::new();
+    registry.register(manager.bridge());
+
+    assert!(
+        registry
+            .declared_tool_specs()
+            .iter()
+            .all(|spec| spec.name != "mcp__probe__probe"),
+        "a still-connecting server contributes nothing yet"
+    );
+    assert!(
+        registry.tool_owner("mcp__probe__probe").is_none(),
+        "and it has no owner yet either"
+    );
+
+    let pending = manager.wait_until_settled(std::time::Duration::from_secs(30));
+    assert!(pending.is_empty(), "the slow server lands: {pending:?}");
+
+    let declared: Vec<String> = registry
+        .declared_tool_specs()
+        .into_iter()
+        .map(|spec| spec.name)
+        .collect();
+    assert!(
+        declared.iter().any(|name| name == "mcp__probe__probe"),
+        "the landed tool is declared on the next request (gh #584): {declared:?}"
+    );
+    let owner = registry
+        .tool_owner("mcp__probe__probe")
+        .expect("the landed tool has an owner");
+    assert_eq!(owner.name(), "mcp", "and dispatch reaches the bridge");
+    assert!(
+        registry.is_callable("mcp__probe__probe"),
+        "so the tool is callable, not just declared (gh #584)"
+    );
+    // The turn's own call path validates against the kept spec, so the schema
+    // must travel with the late name or validation would see a different spec
+    // than the declaration did.
+    assert!(
+        registry.tool_schema("mcp__probe__probe").is_some(),
+        "the schema travelled with the late name"
+    );
+}
+
+// Verifies: gh #584 - a landed server's tool really runs, through the registry's
+// dispatch, not only through the bridge directly.
+//
+// The declaration half could pass while dispatch still failed; this drives the
+// owner's `execute_tool` the way the turn does and asserts the fixture's answer.
+#[test]
+fn a_late_landed_servers_tool_runs_through_the_registry_dispatch() {
+    if !python3_available() {
+        eprintln!("skip: python3 is not installed");
+        return;
+    }
+    let root = scratch("mcp-late-call");
+    let project = root.join("project");
+    let caps = Arc::new(lca_tools::Capabilities::new(
+        "mcp",
+        lca_mcp::manifest_grants(),
+        ScopeRoots {
+            workspace: project.clone(),
+            private: root.join("private"),
+            home_config: root.join("config"),
+            temp: root.join("tmp"),
+            state_dir: root.join("data"),
+        },
+        Arc::new(Mutex::new(Allow)),
+        Arc::new(Mutex::new(
+            GrantStore::open(&root.join("grants.json")).expect("grants"),
+        )),
+        project,
+        None,
+    ));
+    let manager = lca_mcp::McpManager::load(
+        caps,
+        root.join("data/mcp.json"),
+        None,
+        vec![probe_entry(
+            "probe",
+            3,
+            lca_mcp::config::McpExposure::Direct,
+        )],
+    );
+    let mut registry = ExtensionRegistry::new();
+    registry.register(manager.bridge());
+    let pending = manager.wait_until_settled(std::time::Duration::from_secs(30));
+    assert!(pending.is_empty(), "the slow server lands: {pending:?}");
+
+    let owner = registry
+        .tool_owner("mcp__probe__probe")
+        .expect("the late tool has an owner")
+        .clone();
+    let call = lca_protocol::ToolCall {
+        call_id: "c1".to_string(),
+        name: "mcp__probe__probe".to_string(),
+        arguments: "{}".to_string(),
+        parent_call_id: None,
+    };
+    let result = run_tool(owner.execute_tool(&call));
+    assert_eq!(
+        result.status,
+        ToolResultStatus::Ok,
+        "the probe answers: {result:?}"
+    );
+    assert_eq!(
+        result.content, "pong",
+        "and its answer is the fixture's own (spawn-probe's `probe` tool)"
+    );
+}
+
+// Verifies: gh #584 (the exposure paths) - a late `hidden` server is neither
+// declared nor discoverable, and a late `codemode` one is discoverable through
+// `tool_search` without being declared.
+//
+// Both are the *same* re-plan with a different filter applied afterwards, so this
+// row is what proves the re-plan did not quietly widen the exposure model while
+// fixing the timing.
+#[test]
+fn a_late_hidden_server_stays_unreachable_and_a_late_codemode_one_is_discoverable() {
+    if !python3_available() {
+        eprintln!("skip: python3 is not installed");
+        return;
+    }
+    let root = scratch("mcp-late-exposure");
+    let project = root.join("project");
+    let caps = Arc::new(lca_tools::Capabilities::new(
+        "mcp",
+        lca_mcp::manifest_grants(),
+        ScopeRoots {
+            workspace: project.clone(),
+            private: root.join("private"),
+            home_config: root.join("config"),
+            temp: root.join("tmp"),
+            state_dir: root.join("data"),
+        },
+        Arc::new(Mutex::new(Allow)),
+        Arc::new(Mutex::new(
+            GrantStore::open(&root.join("grants.json")).expect("grants"),
+        )),
+        project,
+        None,
+    ));
+    // Two servers whose tool names collide (`mcp__probe__probe` both ways), so
+    // this row also pins that the *planning* rules - not only the exposure
+    // filter - ran again: the second loses the name and reports it.
+    let manager = lca_mcp::McpManager::load(
+        caps,
+        root.join("data/mcp.json"),
+        None,
+        vec![
+            probe_entry("probe", 1, lca_mcp::config::McpExposure::Codemode),
+            probe_entry("probehidden", 1, lca_mcp::config::McpExposure::Hidden),
+        ],
+    );
+    let mut registry = ExtensionRegistry::new();
+    registry.register(manager.bridge());
+    let pending = manager.wait_until_settled(std::time::Duration::from_secs(30));
+    assert!(pending.is_empty(), "both servers land: {pending:?}");
+
+    let declared: Vec<String> = registry
+        .declared_tool_specs()
+        .into_iter()
+        .map(|spec| spec.name)
+        .collect();
+    assert!(
+        declared.iter().all(|name| !name.contains("probe")),
+        "neither a codemode nor a hidden tool is declared: {declared:?}"
+    );
+    let discovered: Vec<String> = registry
+        .tool_search("probe")
+        .into_iter()
+        .map(|spec| spec.name)
+        .collect();
+    assert_eq!(
+        discovered,
+        vec!["mcp__probe__probe".to_string()],
+        "only the codemode tool is discoverable (gh #77); the hidden one never is"
+    );
+    assert!(
+        registry.is_callable("mcp__probe__probe"),
+        "and the codemode tool is callable once found"
+    );
+    assert!(
+        !registry.is_callable("mcp__probehidden__probe"),
+        "a hidden tool is not callable even though it is registered"
+    );
+}
