@@ -235,39 +235,52 @@ fn concurrent_stores_of_the_same_bytes_all_succeed_with_one_file() {
 
 // Verifies: gh #547 - a pre-existing file for the same hash is left alone.
 //
-// Not just "the second call succeeds": the *first* file must survive untouched,
-// so a caller cannot silently rewrite content another caller already published.
-// The content is identical by construction (same hash), so the assertion that
-// can actually fail is the inode plus the mode - an unconditional `create_new`
-// that reported the miss as success while truncating would pass a content
-// comparison.
+// Not just "the second call succeeds": the file already there must not be
+// replaced. It is created here by hand with a *looser* mode than the writer
+// would set, so a rewrite that recreated it would show up as (a) a different
+// inode and (b) a 0600 mode. Both are asserted, along with the bytes, because
+// either alone could pass by accident.
+//
+// What this does not catch, said plainly: an implementation that truncated the
+// existing file and rewrote identical bytes in place. The bytes would be right
+// and the inode unchanged, and since the content is content-addressed that
+// outcome is harmless - it is not a defect being waved through.
 #[cfg(unix)]
 #[test]
-fn a_pre_existing_identical_attachment_is_not_rewritten() {
+fn a_pre_existing_identical_attachment_is_not_replaced() {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
     let store = SessionStore::new(scratch("keep-store"));
     let project = scratch("keep-project");
     let session = store.create_session(&project, "test").expect("create");
-    let hash = lca_core::store_image_bytes(&session, PNG).expect("first store");
-    let file = session.dir().join("attachments").join(&hash);
-    let before = std::fs::metadata(&file).expect("meta");
-    assert_eq!(before.permissions().mode() & 0o777, 0o600);
-    let (ino, mtime) = (before.ino(), before.mtime_nsec());
+    let hash = lca_tools::sha256_hex(PNG);
+    let dir = session.dir().join("attachments");
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let file = dir.join(&hash);
 
-    // A month later in mtime terms: any rewrite would move both.
-    std::thread::sleep(std::time::Duration::from_millis(20));
-    let second = lca_core::store_image_bytes(&session, PNG).expect("second store");
-    assert_eq!(second, hash, "the same content, the same hash");
+    // Written by hand, not by the writer, so the mode is a signal rather than
+    // whatever the first store chose.
+    std::fs::write(&file, PNG).expect("pre-existing file");
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644))
+        .expect("loosen the mode");
+    let before = std::fs::metadata(&file).expect("meta");
+    assert_eq!(before.permissions().mode() & 0o777, 0o644, "the premise");
+
+    let stored = lca_core::store_image_bytes(&session, PNG).expect("the store succeeds");
+    assert_eq!(stored, hash, "the same content, the same hash");
+
     let after = std::fs::metadata(&file).expect("meta");
-    assert_eq!(after.ino(), ino, "the same file, not a replacement");
     assert_eq!(
-        after.mtime_nsec(),
-        mtime,
-        "untouched: an identical store does not rewrite"
+        after.ino(),
+        before.ino(),
+        "the same file, not a replacement"
     );
-    assert_eq!(after.permissions().mode() & 0o777, 0o600);
-    assert_eq!(std::fs::read(&file).expect("read"), PNG);
+    assert_eq!(
+        after.permissions().mode() & 0o777,
+        0o644,
+        "untouched: the writer did not recreate it owner-only under the caller"
+    );
+    assert_eq!(std::fs::read(&file).expect("read"), PNG, "content intact");
 }
 
 // Verifies: gh #547 - the two twins agree. The async store and the sync store
