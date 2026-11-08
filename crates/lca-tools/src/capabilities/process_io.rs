@@ -34,11 +34,11 @@
 //! While a pipe is out, a second caller asking for the same stream is **refused
 //! by name** rather than left to read someone else's half. The old code serialised
 //! them only by accident, through the very lock it should not have been holding;
-//! with the pipe out that accident is gone, so the refusal is explicit. Two readers
-//! of one pipe would each get part of the stream, which is worse than a clear
-//! "another call holds this handle's stdout" - and nothing in the tree does it
-//! (`lca-mcp` reads one pipe from one thread, and the ABI's `read-stdout` is a
-//! single import).
+//! with the pipe out that accident is gone, so the refusal is explicit - two
+//! readers of one pipe would each get part of the stream, which is worse than a
+//! clear "another call holds this handle's stdout". Nothing in the tree does it:
+//! `lca-mcp` reads one pipe from one thread, and the ABI's `read-stdout` is a
+//! single import.
 
 use super::{CapabilityError, HandleEntry, lock};
 use crate::process::TreeChild;
@@ -153,7 +153,7 @@ impl super::Capabilities {
     /// The returned pipe is the caller's for the duration of the I/O and **must**
     /// come back through [`Self::return_pipe`]. Order matters: the type check runs
     /// first, so a handle of another kind is refused without being touched, exactly
-    /// as gh #318 requires for the entry kinds that `wait`/`kill` also remove.
+    /// as gh #318 requires for the entry kinds that `wait` and `kill` also remove.
     fn take_pipe<T>(
         &self,
         handle: u32,
