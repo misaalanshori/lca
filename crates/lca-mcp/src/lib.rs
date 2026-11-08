@@ -38,6 +38,7 @@ pub mod oauth;
 pub mod remote;
 pub mod resources;
 mod stdio_tail;
+mod tool_call;
 pub mod wire;
 pub use manager::{McpManager, ModalServerDetail, ModalServerRow, ModalSnapshot, ModalToolRow};
 pub use native::{McpBridge, ServerStateKind, ServerStatus, manifest_grants};

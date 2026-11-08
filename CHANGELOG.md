@@ -42,6 +42,16 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **`/settings`, the status line and a cancel no longer freeze behind a slow MCP tool call**
+  (gh #554). Resolving an MCP tool call held the whole server table for the call's entire
+  duration — up to 60 seconds by default — so anything that reads that table waited too:
+  the `/mcp` screen, the status line, a settings change, and a reconnect (which is how a cancel
+  kills a hung server). The table is now read to look up where the call goes and released
+  before a byte is sent; what serialises an exchange is the server's own session, so two calls
+  to one server still queue (their response ids must match) while a call to another server no
+  longer waits at all. The exchange also runs on the blocking pool instead of the thread that
+  awaits it, and a retry backoff is slept in slices so `Ctrl+C` is seen immediately rather than
+  after the delay.
 - **A cancelled turn can no longer hang trying to stop a server that was waiting on its
   reader** (gh #569). Reading a child process's output held the host's handle table for the
   whole read — and a read of a silent child blocks until it writes or closes, so the table

@@ -17,10 +17,17 @@ not just that it did.
 
 A line `exit` on stdin (or `LCA_PROBE_CRASH_AFTER_INIT=1`) exits 3
 after writing to stderr, so the disconnect path can be judged too.
+
+`LCA_PROBE_CALL_DELAY` sleeps that many seconds inside `tools/call`
+before answering (gh #554): a call that is genuinely in flight, long
+enough for another thread to try the same server's table, its session,
+or a kill. The handshake is unaffected - `LCA_PROBE_DELAY` on
+`spawn-probe-mcp-server.py` is the separate knob for that.
 """
 import json
 import os
 import sys
+import time
 
 
 def send(message):
@@ -88,6 +95,15 @@ def main():
                 },
             })
         elif method == "tools/call":
+            # gh #554: the in-flight window. Parsed as float so a test can ask
+            # for a fraction of a second; a bad value is "no delay" rather than a
+            # crash, because a typo in an env block is not this fixture's story.
+            try:
+                delay = float(os.environ.get("LCA_PROBE_CALL_DELAY", "0") or 0)
+            except ValueError:
+                delay = 0.0
+            if delay > 0:
+                time.sleep(delay)
             send({
                 "jsonrpc": "2.0",
                 "id": request_id,

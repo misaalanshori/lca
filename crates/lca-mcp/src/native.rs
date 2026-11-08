@@ -1,6 +1,16 @@
 //! The in-process twin: spawns each server through the shared
 //! [`Capabilities`](lca_tools::Capabilities) engine and serves the
 //! `tool-catalog` world from the live connections.
+//!
+//! **The server table is a lookup, never a lease** (gh #554). It is taken to
+//! resolve a call and released before any I/O; the per-server session lock is
+//! what serialises one JSON-RPC exchange at a time, and it lives behind an `Arc`
+//! so a call can hold it without holding the table. A slow or hung server
+//! therefore cannot freeze `/mcp`, the status line, a settings change, or a
+//! reconnect's kill. The call itself runs on `tokio::task::spawn_blocking`
+//! (`tool_call.rs`), because the transports are synchronous by design and a
+//! turn awaits this from a Tokio worker - an embedder may run a current-thread
+//! runtime, where `block_in_place` panics.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -34,7 +44,7 @@ pub fn manifest_grants() -> lca_tools::CapabilityGrants {
 }
 
 /// [`Stdio`](crate::Stdio) over one spawned child.
-struct ChildPipe {
+pub(crate) struct ChildPipe {
     caps: Arc<lca_tools::Capabilities>,
     handle: u32,
 }
@@ -56,13 +66,16 @@ impl crate::Stdio for ChildPipe {
 
 /// One live server: a stdio child or a remote endpoint. Both serve
 /// the same spec and call shapes; only the pipe differs.
-enum LiveServer {
+pub(crate) enum LiveServer {
     Stdio {
         caps: Arc<lca_tools::Capabilities>,
         handle: u32,
         /// One JSON-RPC exchange at a time per server, which is also
-        /// what keeps response ids matched to their requests.
-        session: Mutex<crate::Session<ChildPipe>>,
+        /// what keeps response ids matched to their requests. Behind an
+        /// `Arc` so a call can hold it without holding the server table
+        /// (gh #554): the table is the only owner of the *set* of servers,
+        /// and this only moves the per-server lock out of the table's scope.
+        session: Arc<Mutex<crate::Session<ChildPipe>>>,
         specs: Vec<lca_protocol::ToolSpec>,
         /// Qualified name back to the server-side tool name.
         calls: BTreeMap<String, String>,
@@ -72,7 +85,8 @@ enum LiveServer {
         resources: bool,
     },
     Http {
-        session: Mutex<crate::remote::HttpSession>,
+        /// Same rule as the stdio session above (gh #554).
+        session: Arc<Mutex<crate::remote::HttpSession>>,
         specs: Vec<lca_protocol::ToolSpec>,
         /// Qualified name back to the server-side tool name.
         calls: BTreeMap<String, String>,
@@ -90,97 +104,33 @@ impl LiveServer {
         }
     }
 
-    fn specs(&self) -> &[lca_protocol::ToolSpec] {
+    pub(crate) fn specs(&self) -> &[lca_protocol::ToolSpec] {
         match self {
             LiveServer::Stdio { specs, .. } | LiveServer::Http { specs, .. } => specs,
         }
     }
 
-    fn calls(&self) -> &BTreeMap<String, String> {
+    pub(crate) fn calls(&self) -> &BTreeMap<String, String> {
         match self {
             LiveServer::Stdio { calls, .. } | LiveServer::Http { calls, .. } => calls,
         }
     }
 
-    fn exposure(&self) -> lca_protocol::ToolExposure {
+    pub(crate) fn exposure(&self) -> lca_protocol::ToolExposure {
         match self {
             LiveServer::Stdio { exposure, .. } | LiveServer::Http { exposure, .. } => *exposure,
         }
     }
 
-    fn offers_resources(&self) -> bool {
+    pub(crate) fn offers_resources(&self) -> bool {
         match self {
             LiveServer::Stdio { resources, .. } | LiveServer::Http { resources, .. } => *resources,
-        }
-    }
-
-    fn locked<T>(
-        &self,
-        run: impl FnOnce(&mut LockedSession<'_>) -> Result<T, String>,
-    ) -> Result<T, String> {
-        let poisoned = || "MCP session lock is poisoned".to_string();
-        match self {
-            LiveServer::Stdio { session, .. } => {
-                let guard = session.lock().map_err(|_| poisoned())?;
-                run(&mut LockedSession::Stdio(guard))
-            }
-            LiveServer::Http { session, .. } => {
-                let guard = session.lock().map_err(|_| poisoned())?;
-                run(&mut LockedSession::Http(guard))
-            }
-        }
-    }
-
-    fn resource_list(
-        &self,
-        cursor: Option<&str>,
-    ) -> Result<(Vec<crate::McpResource>, Option<String>), String> {
-        self.locked(|session| session.resource_list(cursor))
-    }
-
-    fn resource_templates(&self) -> Result<Vec<crate::McpResourceTemplate>, String> {
-        self.locked(|session| session.resource_templates())
-    }
-
-    fn resource_read(&self, uri: &str) -> Result<Vec<crate::ResourceContent>, String> {
-        self.locked(|session| session.resource_read(uri))
-    }
-}
-
-/// One locked session behind either transport.
-enum LockedSession<'a> {
-    Stdio(std::sync::MutexGuard<'a, crate::Session<ChildPipe>>),
-    Http(std::sync::MutexGuard<'a, crate::remote::HttpSession>),
-}
-
-impl LockedSession<'_> {
-    fn resource_list(
-        &mut self,
-        cursor: Option<&str>,
-    ) -> Result<(Vec<crate::McpResource>, Option<String>), String> {
-        match self {
-            LockedSession::Stdio(session) => session.resource_list(cursor),
-            LockedSession::Http(session) => session.resource_list(cursor),
-        }
-    }
-
-    fn resource_templates(&mut self) -> Result<Vec<crate::McpResourceTemplate>, String> {
-        match self {
-            LockedSession::Stdio(session) => session.resource_templates(),
-            LockedSession::Http(session) => session.resource_templates(),
-        }
-    }
-
-    fn resource_read(&mut self, uri: &str) -> Result<Vec<crate::ResourceContent>, String> {
-        match self {
-            LockedSession::Stdio(session) => session.resource_read(uri),
-            LockedSession::Http(session) => session.resource_read(uri),
         }
     }
 }
 
 /// One `list_mcp_resources` row (pi's shape, plus the server).
-fn resource_row(server: &str, resource: &crate::McpResource) -> serde_json::Value {
+pub(crate) fn resource_row(server: &str, resource: &crate::McpResource) -> serde_json::Value {
     let mut row = serde_json::json!({
         "server": server,
         "uri": resource.uri,
@@ -213,7 +163,7 @@ fn resource_row(server: &str, resource: &crate::McpResource) -> serde_json::Valu
 /// scope: one private directory per session (`<data>/tmp/<session>`, removed
 /// at exit by the session-temp guard), created with `create_new` so a
 /// planted entry is an error rather than a target, owner-only `0600`.
-fn read_result(
+pub(crate) fn read_result(
     caps: &lca_tools::Capabilities,
     call_id: &str,
     server: &str,
@@ -351,8 +301,8 @@ pub enum ServerStateKind {
 /// the manager through a channel (gh #418 Phase E); the type never leaves the
 /// crate, and [`McpBridge::statuses`] is the public view.
 pub(crate) struct ManagedServer {
-    entry: crate::config::ServerEntry,
-    live: Option<LiveServer>,
+    pub(crate) entry: crate::config::ServerEntry,
+    pub(crate) live: Option<LiveServer>,
     state: ServerStateKind,
 }
 
@@ -385,12 +335,14 @@ impl ManagedServer {
 /// keeps one handle and later turns see the new table with no
 /// re-registration.
 pub struct McpBridge {
-    servers: Mutex<Vec<ManagedServer>>,
+    /// The set of servers. A call never holds this across its I/O (gh #554):
+    /// it takes what it needs out and drops the guard.
+    pub(crate) servers: Mutex<Vec<ManagedServer>>,
     /// The bridge's own capability engine (gh #344). Binary resources are
     /// staged through its `temp` scope, so the write is scope-checked and
     /// owner-only instead of a raw write into a shared world-writable
     /// directory.
-    caps: Arc<lca_tools::Capabilities>,
+    pub(crate) caps: Arc<lca_tools::Capabilities>,
 }
 
 /// Qualify one server's listed tools and build its call routing.
@@ -441,7 +393,7 @@ fn connect_one_stdio(
         Ok(LiveServer::Stdio {
             caps: caps.clone(),
             handle,
-            session: Mutex::new(session),
+            session: Arc::new(Mutex::new(session)),
             specs,
             calls,
             exposure: entry.exposure.as_tool_exposure(),
@@ -482,7 +434,7 @@ fn connect_one_http(
     let (specs, calls) =
         qualify_listed(&entry.name, listed, entry).map_err(ServerStateKind::Failed)?;
     Ok(LiveServer::Http {
-        session: Mutex::new(session),
+        session: Arc::new(Mutex::new(session)),
         specs,
         calls,
         exposure: entry.exposure.as_tool_exposure(),
@@ -821,7 +773,7 @@ impl McpBridge {
     /// rows read these).
     /// Lock the rows for one read (poisoning recovers: a dead
     /// manager thread must not wedge the turn).
-    fn locked(&self) -> std::sync::MutexGuard<'_, Vec<ManagedServer>> {
+    pub(crate) fn locked(&self) -> std::sync::MutexGuard<'_, Vec<ManagedServer>> {
         self.servers
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -880,158 +832,6 @@ impl McpBridge {
         }
         specs.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(specs)
-    }
-
-    /// Run one resource call (the trio routes here before the server
-    /// table: the tools belong to the bridge, not to one server).
-    fn execute_resource(
-        &self,
-        call: &lca_protocol::ToolCall,
-    ) -> Result<lca_protocol::ToolResult, lca_protocol::DispatchError> {
-        let failed = |detail: String| lca_protocol::DispatchError::Failed(detail);
-        let args: serde_json::Value = serde_json::from_str(&call.arguments)
-            .map_err(|err| lca_protocol::DispatchError::Failed(format!("bad arguments: {err}")))?;
-        let text = |key: &str| {
-            args.get(key)
-                .and_then(|value| value.as_str())
-                .map(str::to_string)
-        };
-        match call.name.as_str() {
-            crate::LIST_RESOURCES_TOOL => {
-                let (server, cursor) = match (text("server"), text("cursor")) {
-                    (_, Some(cursor)) => cursor
-                        .split_once(':')
-                        .map(|(server, page)| (Some(server.to_string()), Some(page.to_string())))
-                        .ok_or_else(|| failed("bad cursor".to_string()))?,
-                    (server, None) => (server, None),
-                };
-                let mut rows = Vec::new();
-                let mut next = None;
-                let locked = self.locked();
-                let targets: Vec<(String, &LiveServer)> = match server {
-                    Some(name) => vec![
-                        Self::resource_servers(&locked)
-                            .into_iter()
-                            .find(|(server, _)| server == &name)
-                            .ok_or_else(|| failed(format!("unknown MCP server {name:?}")))?,
-                    ],
-                    None if cursor.is_some() => {
-                        return Err(failed("a cursor needs its server".to_string()));
-                    }
-                    None => Self::resource_servers(&locked),
-                };
-                for (name, live) in &targets {
-                    let (resources, cursor) = live
-                        .resource_list(cursor.as_deref())
-                        .map_err(lca_protocol::DispatchError::Failed)?;
-                    for resource in resources {
-                        rows.push(resource_row(name, &resource));
-                    }
-                    if targets.len() == 1 {
-                        next = cursor.map(|page| format!("{name}:{page}"));
-                    }
-                }
-                let mut answer = serde_json::json!({"resources": rows});
-                if let Some(cursor) = next {
-                    answer["nextCursor"] = cursor.into();
-                }
-                Ok(lca_protocol::ToolResult::ok(
-                    call.call_id.clone(),
-                    answer.to_string(),
-                ))
-            }
-            crate::LIST_TEMPLATES_TOOL => {
-                let mut rows = Vec::new();
-                let locked = self.locked();
-                let targets: Vec<(String, &LiveServer)> = match text("server") {
-                    Some(name) => vec![
-                        Self::resource_servers(&locked)
-                            .into_iter()
-                            .find(|(server, _)| server == &name)
-                            .ok_or_else(|| failed(format!("unknown MCP server {name:?}")))?,
-                    ],
-                    None => Self::resource_servers(&locked),
-                };
-                for (name, live) in &targets {
-                    let templates = live
-                        .resource_templates()
-                        .map_err(lca_protocol::DispatchError::Failed)?;
-                    for template in templates {
-                        rows.push(serde_json::json!({
-                            "server": name,
-                            "uri_template": template.uri_template,
-                            "name": template.name,
-                        }));
-                    }
-                }
-                Ok(lca_protocol::ToolResult::ok(
-                    call.call_id.clone(),
-                    serde_json::json!({"templates": rows}).to_string(),
-                ))
-            }
-            crate::READ_RESOURCE_TOOL => {
-                let (Some(server), Some(uri)) = (text("server"), text("uri")) else {
-                    return Err(failed(
-                        "read_mcp_resource needs `server` and `uri`".to_string(),
-                    ));
-                };
-                let locked = self.locked();
-                let (_, live) = Self::resource_servers(&locked)
-                    .into_iter()
-                    .find(|(name, _)| name == &server)
-                    .ok_or_else(|| failed(format!("unknown MCP server {server:?}")))?;
-                let contents = live
-                    .resource_read(&uri)
-                    .map_err(lca_protocol::DispatchError::Failed)?;
-                read_result(&self.caps, &call.call_id, &server, contents).map_err(failed)
-            }
-            _ => Err(failed(format!("unknown MCP tool {:?}", call.name))),
-        }
-    }
-
-    /// Run one call against its server. A server-side `isError`
-    /// becomes a tool error; a transport failure becomes a dispatch
-    /// failure (the host records it as an extension error).
-    pub async fn execute_tool(
-        &self,
-        call: &lca_protocol::ToolCall,
-    ) -> Result<lca_protocol::ToolResult, lca_protocol::DispatchError> {
-        if matches!(
-            call.name.as_str(),
-            crate::LIST_RESOURCES_TOOL | crate::LIST_TEMPLATES_TOOL | crate::READ_RESOURCE_TOOL
-        ) {
-            return self.execute_resource(call);
-        }
-        let servers = self.locked();
-        let server = servers
-            .iter()
-            .filter_map(|server| server.live.as_ref())
-            .find(|live| live.calls().contains_key(&call.name))
-            .ok_or_else(|| {
-                lca_protocol::DispatchError::Failed(format!("unknown MCP tool {:?}", call.name))
-            })?;
-        let name = server.calls()[&call.name].clone();
-        let arguments: serde_json::Value = serde_json::from_str(&call.arguments)
-            .map_err(|err| lca_protocol::DispatchError::Failed(format!("bad arguments: {err}")))?;
-        let poisoned =
-            || lca_protocol::DispatchError::Failed("MCP session lock is poisoned".to_string());
-        let outcome = match server {
-            LiveServer::Stdio { session, .. } => session
-                .lock()
-                .map_err(|_| poisoned())?
-                .call(&name, &arguments)
-                .map_err(lca_protocol::DispatchError::Failed)?,
-            LiveServer::Http { session, .. } => session
-                .lock()
-                .map_err(|_| poisoned())?
-                .call(&name, &arguments)
-                .map_err(lca_protocol::DispatchError::Failed)?,
-        };
-        Ok(if outcome.error {
-            lca_protocol::ToolResult::error(call.call_id.clone(), outcome.text)
-        } else {
-            lca_protocol::ToolResult::ok(call.call_id.clone(), outcome.text)
-        })
     }
 }
 

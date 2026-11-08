@@ -298,6 +298,18 @@ patterns in order:
 `enabled: false` is stronger than any exposure: the server is not connected at
 all, so nothing spawns and nothing waits.
 
+**A call never holds the server table, and never blocks the runtime** (gh #554).
+The table is read to resolve a call — which server owns the tool, and a handle to
+that server's session — and released before anything is sent. The per-server
+session is what serialises one JSON-RPC exchange at a time, so two calls to *one*
+server still queue behind each other (that is the protocol's own rule: response
+ids are matched to requests), while a call to another server does not wait at all.
+The work itself runs on the blocking pool rather than on the thread that awaits
+it, so a 60-second `tools/call` costs one blocking thread and nothing else: the
+`/mcp` screen, the status line, a settings change and a cancel all stay
+responsive. A retry backoff is slept in short slices, so a cancel is observed
+within the cancellation budget instead of after the delay.
+
 ### The prompt section
 
 Enabled servers whose exposure is not `direct` (and not `hidden`) get one line each

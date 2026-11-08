@@ -76,6 +76,32 @@ pub fn percent_encode(text: &str) -> String {
 
 /// pi's connect delays, reused between request attempts.
 const RETRY_DELAYS: [Duration; 2] = [Duration::from_millis(250), Duration::from_millis(1000)];
+/// Sleep for `delay` unless the capability engine is cancelled first (gh #554).
+///
+/// The retry policy is unchanged - same count, same delays - what changes is
+/// **when a cancel is noticed**. The precedent is `lca-tools`' OAuth wait
+/// (`net.rs`), which slices its receive the same way: a host wait must observe
+/// the cancellation flag within NFR-21's window, and one long sleep cannot.
+/// The slice is 25 ms so the observation lands far inside the 1 s second
+/// backoff and well inside NFR-29's 50 ms budget.
+fn sleep_unless_cancelled(
+    caps: &Arc<lca_tools::Capabilities>,
+    delay: Duration,
+) -> Result<(), String> {
+    const SLICE: Duration = Duration::from_millis(25);
+    let deadline = std::time::Instant::now() + delay;
+    loop {
+        if caps.is_cancelled() {
+            return Err("MCP request cancelled by the user".to_string());
+        }
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return Ok(());
+        }
+        std::thread::sleep(remaining.min(SLICE));
+    }
+}
+
 /// Attempts for one idempotent read (the first try plus pi's two retries).
 const READ_ATTEMPTS: usize = 3;
 /// An access token this close to expiry refreshes before it is sent
@@ -546,13 +572,16 @@ impl HttpSession {
             match outcome {
                 Ok(AttemptOutcome::Denied(detail)) => return Err(detail),
                 Err(_) if idempotent && attempt + 1 < attempts => {
-                    std::thread::sleep(RETRY_DELAYS[attempt]);
+                    // Gh #554: the backoff is a cancellable slice, not one
+                    // uninterruptible sleep. `Ctrl+C` used to wait out the whole
+                    // delay before the turn could stop.
+                    sleep_unless_cancelled(&self.caps, RETRY_DELAYS[attempt])?;
                     attempt += 1;
                     continue;
                 }
                 Err(transport) => return Err(transport),
                 Ok(AttemptOutcome::Retryable(_)) if idempotent && attempt + 1 < attempts => {
-                    std::thread::sleep(RETRY_DELAYS[attempt]);
+                    sleep_unless_cancelled(&self.caps, RETRY_DELAYS[attempt])?;
                     attempt += 1;
                     continue;
                 }
@@ -570,7 +599,7 @@ impl HttpSession {
                     }
                     if is_transient_status(exchange.status) {
                         if idempotent && attempt + 1 < attempts {
-                            std::thread::sleep(RETRY_DELAYS[attempt]);
+                            sleep_unless_cancelled(&self.caps, RETRY_DELAYS[attempt])?;
                             attempt += 1;
                             continue;
                         }
