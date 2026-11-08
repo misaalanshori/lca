@@ -438,28 +438,28 @@ impl<'a> Agent<'a> {
         // here too, so a handle that implements only `interrupt` cannot
         // latch the session. Idempotent beside the handles' own resets.
         self.config.extensions.reset_noted_engines();
-        // A plain thread, not a task: a synchronous WASM call blocks the
-        // runtime thread it runs on, and cancellation must still reach a
-        // spinning instance from a thread that is definitely running
-        // (FR-CONC-1). One-millisecond poll keeps NFR-29's budget.
-        let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let watcher = if handles.is_empty() {
-            None
-        } else {
-            let cancel = cancel.clone();
-            let shutdown = shutdown.clone();
-            Some(std::thread::spawn(move || {
-                while !cancel.is_cancelled() && !shutdown.load(std::sync::atomic::Ordering::SeqCst)
-                {
-                    std::thread::sleep(std::time::Duration::from_millis(1));
+        // Gh #547: one callback registered on the flag, fired by `cancel()`
+        // itself - synchronously, on the cancelling thread, before it returns.
+        //
+        // The previous shape was a dedicated OS thread per turn polling every
+        // millisecond and a `join()` inside this `async fn`. That cost a
+        // wakeup per millisecond for the whole turn, blocked a runtime thread
+        // at every turn end, and on Windows cost a full ~15.6 ms timer tick per
+        // observation because a 1 ms sleep rounds up to the system quantum -
+        // which is a real share of NFR-29's 50 ms budget.
+        //
+        // A callback rather than a task because a synchronous WASM call blocks
+        // the thread it runs on: it cannot await, and nothing it holds is
+        // reachable from the canceller. The guard is what unregisters: it
+        // lives to the end of this function, so a turn that ended normally
+        // leaves no callback behind for the next turn's cancel to trip.
+        let _interrupt_guard = (!handles.is_empty()).then(|| {
+            cancel.on_cancel(move || {
+                for handle in &handles {
+                    handle.interrupt();
                 }
-                if cancel.is_cancelled() {
-                    for handle in handles {
-                        handle.interrupt();
-                    }
-                }
-            }))
-        };
+            })
+        });
         // Gh #258: the turn's envelope (lengths, never content).
         lca_debug::core::event(
             "turn.start",
@@ -479,10 +479,6 @@ impl<'a> Agent<'a> {
                 outcome.status, outcome.stop_reason, outcome.usage.cost
             ),
         );
-        shutdown.store(true, std::sync::atomic::Ordering::SeqCst);
-        if let Some(watcher) = watcher {
-            let _ = watcher.join();
-        }
         // `attention-required`: the turn failed and the user should look. The
         // reason is the same text the interface surfaced.
         if outcome.status == TurnStatus::Error {

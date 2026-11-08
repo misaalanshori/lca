@@ -42,6 +42,26 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **Cancelling a turn reaches the running call at once, and the background wakeup loop is
+  gone** (gh #547). Every turn spawned an OS thread that slept 1 ms and polled the cancel
+  flag for the turn's whole duration — a stream lasting a minute meant 60,000 wakeups doing
+  nothing — and at turn end the async turn blocked on `join()`. On Windows the 1 ms sleep
+  rounds **up** to the ~15.6 ms system timer quantum, so a cancel could go unseen for a
+  third of the 50 ms budget the cancellation requirement allows. Cancellation is now a
+  callback registered on the flag and run by `cancel()` itself, synchronously, on the
+  cancelling thread, before it returns: no poller, no join, and the interrupt has already
+  happened on the line after the call. The registration is a guard that unregisters when
+  the turn ends, so a long session accumulates nothing, and a cancel that lands before the
+  turn registers still fires immediately instead of being lost.
+- **Staging the same image twice no longer fails one of the two callers** (gh #547). The
+  attachment store is content-addressed, so two callers writing the same file write
+  byte-identical bytes — but the synchronous writer checked `exists()` first and then
+  reported the loser's `AlreadyExists` as an error, while its async twin already ignored
+  it. Both writers now treat a create race as success and leave the winner's file alone.
+  Found on the way: the async writer reported its hash before the bytes were readable
+  (its close is scheduled on a blocking thread, and measured 45–83 of 100 stores read back
+  empty on the next line), so it now flushes first — otherwise the sync twin would see an
+  existing empty file and skip writing it.
 - **A pty's post-exit drain gives a late tail real time, so `echo pty-ok` stops vanishing**
   (gh #535). `pty_spawn_delivers_terminal_output` failed twice on macOS CI with `exit 0` and
   an empty result. That row is **not** a sampling loop — the conformance guest loops

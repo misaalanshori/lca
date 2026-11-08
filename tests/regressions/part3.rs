@@ -590,3 +590,11 @@ mod stream_chunk_boundaries;
 // drain phase whose every attempt waits, so it cannot become gh #477's spin.
 #[path = "535-pty-drain-window.rs"]
 mod pty_drain_window;
+
+// Gh #547: one OS thread per turn polled the cancel flag at 1,000 Hz and the turn
+// blocked an async runtime on `join()` at its end. Cancellation is now a callback
+// registered on the flag and fired inside `cancel()`, on the cancelling thread -
+// and the sync attachment writer stops reporting a create race as a failure (plus
+// the async twin's hash is no longer reported before its bytes are readable).
+#[path = "547-cancel-listener.rs"]
+mod cancel_listener;

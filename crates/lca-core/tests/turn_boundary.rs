@@ -2,6 +2,10 @@
 //! implements only `interrupt` cannot leave the session pre-cancelled.
 //! The host clears every noted engine at the boundary, so the next
 //! turn runs clean.
+//!
+//! Gh #547's row lives here too, because it needs the same double: an
+//! interrupt-only native is exactly the handle whose `interrupt` must run at
+//! the instant of the cancel rather than on a later poll tick.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 use std::path::PathBuf;
@@ -14,8 +18,9 @@ use lca_ext_abi::{DeliveryMode, DispatchFuture, ExtensionDispatch, World};
 use lca_permissions::{Decision, GrantStore, PermissionPrompt, ProposalDiff, ScopeRoots};
 use lca_protocol::{
     CommandEffect, CommandSpec, CompletionRequest, DispatchError, EventSink, HookAction,
-    PostToolObservation, StreamEvent, ToolCall, ToolResult, ToolSpec, Usage,
+    PostToolObservation, StopReason, StreamEvent, ToolCall, ToolResult, ToolSpec, Usage,
 };
+use lca_testkit::{FakeProvider, fake_usage};
 
 fn scratch(name: &str) -> PathBuf {
     let dir = lca_testkit::scratch_path(name);
@@ -38,6 +43,25 @@ impl PermissionPrompt for Allow {
 #[derive(Default)]
 struct CollectingSink {
     events: Vec<TurnEvent>,
+}
+
+/// A sink that also flags the first text delta: the row below needs to know the
+/// turn is genuinely *in* its stream before it cancels, because the cancellation
+/// resets the extensions' engines at the turn boundary (gh #97's guard) and a
+/// cancel that lands before that reset is deliberately erased.
+struct StartedSink {
+    inner: CollectingSink,
+    started: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl TurnSink for StartedSink {
+    fn on_event(&mut self, event: TurnEvent) {
+        if matches!(event, TurnEvent::TextDelta(_)) {
+            self.started
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        self.inner.on_event(event);
+    }
 }
 
 impl TurnSink for CollectingSink {
@@ -235,4 +259,226 @@ async fn an_interrupt_only_extension_cannot_latch_cancellation() {
     .await
     .expect("the next turn returns");
     assert_eq!(second.status, TurnStatus::Ok, "the next turn runs clean");
+}
+
+// Verifies: gh #547 - the turn's cancel reaches the extension *synchronously*:
+// by the time `cancel()` returns, `interrupt()` has already run.
+//
+// The previous shape was a dedicated OS thread polling `is_cancelled()` every
+// millisecond and calling `interrupt()` on one of its ticks, so the interrupt
+// landed *after* `cancel()` returned - by up to a millisecond on Unix and up to
+// a ~15.6 ms Windows timer quantum. The assertion is a coincidence, not a
+// duration: the canceller reads the engine's flag on the line after
+// `cancel()` and the flag must already be set. A poller cannot satisfy it on
+// any platform, and no wall-clock threshold is involved.
+#[tokio::test]
+async fn a_cancel_interrupts_the_extension_before_cancel_returns() {
+    let root = scratch("cancel-sync");
+    let project = root.join("project");
+    let cap = Arc::new(lca_tools::Capabilities::new(
+        "interrupt-only",
+        lca_tools::CapabilityGrants::default(),
+        ScopeRoots {
+            workspace: project.clone(),
+            private: root.join("private"),
+            home_config: root.join("config"),
+            temp: root.join("tmp"),
+            state_dir: root.join("data"),
+        },
+        Arc::new(Mutex::new(Allow)),
+        Arc::new(Mutex::new(
+            GrantStore::open(&root.join("grants.json")).expect("store"),
+        )),
+        project.clone(),
+        None,
+    ));
+    let double: Arc<InterruptOnly> = Arc::new(InterruptOnly { cap: cap.clone() });
+    let mut registry = ExtensionRegistry::new();
+    registry.register(Arc::clone(&double) as Arc<dyn ExtensionDispatch>);
+    registry.note_engine("interrupt-only", &cap);
+
+    let store = lca_session::SessionStore::new(root.join("data"));
+    let session = store.create_session(&project, "test").expect("session");
+    let grants = Arc::new(Mutex::new(
+        GrantStore::open(&root.join("grants.json")).expect("grants"),
+    ));
+    let mut tools = lca_tools::ToolExecutor::new(
+        Arc::new(lca_tools::NativeOps::default()),
+        project.clone(),
+        project.clone(),
+        65536,
+        Some(std::time::Duration::from_secs(30)),
+    );
+    let config = AgentConfig {
+        provider: "fake".to_string(),
+        model: "faux-1".to_string(),
+        retry_base_delay: std::time::Duration::ZERO,
+        extensions: Arc::new(registry),
+        ..AgentConfig::default()
+    };
+    // A mid-stream pause: the cancel has to land *while* the turn is running,
+    // which is the case the watcher existed for.
+    let provider = FakeProvider::builder()
+        .turn(|t| {
+            t.text("starting")
+                .pause(400)
+                .text("done")
+                .usage(fake_usage(10, 5, 0, 0))
+        })
+        .build();
+
+    let cancel = lca_tools::CancelFlag::new();
+    let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let interrupted_by_cancel_return = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let canceller = {
+        let flag = cancel.clone();
+        let cap = cap.clone();
+        let observed = interrupted_by_cancel_return.clone();
+        let started = started.clone();
+        std::thread::spawn(move || {
+            // Wait for the turn's first delta, not for a duration: the boundary
+            // reset clears any earlier interrupt by design, so the cancel has to
+            // land after the turn is running for this row to mean anything. The
+            // bound is a hang guard only.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while !started.load(std::sync::atomic::Ordering::SeqCst) {
+                if std::time::Instant::now() >= deadline {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            flag.cancel();
+            // The line immediately after `cancel()`: this is the whole row.
+            observed.store(cap.is_cancelled(), std::sync::atomic::Ordering::SeqCst);
+        })
+    };
+    let mut sink = StartedSink {
+        inner: CollectingSink::default(),
+        started: started.clone(),
+    };
+    let mut prompt = Allow;
+    let mut agent = Agent::new(
+        &store,
+        &session,
+        &provider,
+        &mut tools,
+        grants,
+        &mut prompt,
+        None,
+        config,
+    );
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        agent.run_turn("spin", &mut sink, &cancel),
+    )
+    .await
+    .expect("the turn returns");
+    canceller.join().expect("canceller");
+
+    assert!(
+        interrupted_by_cancel_return.load(std::sync::atomic::Ordering::SeqCst),
+        "`interrupt()` had already run when `cancel()` returned (gh #547); \
+         a 1 ms poll thread could only reach it on a later tick"
+    );
+    assert_eq!(
+        outcome.stop_reason,
+        StopReason::Cancelled,
+        "and the turn still reports the cancellation"
+    );
+}
+
+// Verifies: gh #547 - a turn that ended normally left nothing registered.
+//
+// The guard is turn-scoped: after `run_turn` returns, cancelling the same flag
+// (twice, since several paths may) must not interrupt an extension whose turn
+// is already over. With the old watcher this was true by accident - the thread
+// had been joined - so this pins the property the callback shape has to keep
+// now that the registration outlives the thread that used to carry it.
+#[tokio::test]
+async fn a_cancel_after_a_finished_turn_does_not_reach_the_extension() {
+    let root = scratch("cancel-after");
+    let project = root.join("project");
+    let cap = Arc::new(lca_tools::Capabilities::new(
+        "interrupt-only",
+        lca_tools::CapabilityGrants::default(),
+        ScopeRoots {
+            workspace: project.clone(),
+            private: root.join("private"),
+            home_config: root.join("config"),
+            temp: root.join("tmp"),
+            state_dir: root.join("data"),
+        },
+        Arc::new(Mutex::new(Allow)),
+        Arc::new(Mutex::new(
+            GrantStore::open(&root.join("grants.json")).expect("store"),
+        )),
+        project.clone(),
+        None,
+    ));
+    let double: Arc<InterruptOnly> = Arc::new(InterruptOnly { cap: cap.clone() });
+    let mut registry = ExtensionRegistry::new();
+    registry.register(Arc::clone(&double) as Arc<dyn ExtensionDispatch>);
+    registry.note_engine("interrupt-only", &cap);
+
+    let store = lca_session::SessionStore::new(root.join("data"));
+    let session = store.create_session(&project, "test").expect("session");
+    let grants = Arc::new(Mutex::new(
+        GrantStore::open(&root.join("grants.json")).expect("grants"),
+    ));
+    let mut tools = lca_tools::ToolExecutor::new(
+        Arc::new(lca_tools::NativeOps::default()),
+        project.clone(),
+        project.clone(),
+        65536,
+        Some(std::time::Duration::from_secs(30)),
+    );
+    let config = AgentConfig {
+        provider: "fake".to_string(),
+        model: "faux-1".to_string(),
+        retry_base_delay: std::time::Duration::ZERO,
+        extensions: Arc::new(registry),
+        ..AgentConfig::default()
+    };
+    let provider = FakeProvider::builder()
+        .turn(|t| t.text("clean").usage(fake_usage(10, 5, 0, 0)))
+        .build();
+
+    let cancel = lca_tools::CancelFlag::new();
+    let mut sink = CollectingSink::default();
+    let mut prompt = Allow;
+    let mut agent = Agent::new(
+        &store,
+        &session,
+        &provider,
+        &mut tools,
+        grants,
+        &mut prompt,
+        None,
+        config,
+    );
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        agent.run_turn("hello", &mut sink, &cancel),
+    )
+    .await
+    .expect("the turn returns");
+    assert_eq!(outcome.status, TurnStatus::Ok, "the turn ran clean");
+    assert!(
+        !cap.is_cancelled(),
+        "an uncancelled turn never interrupted anything"
+    );
+
+    // Now cancel the turn's own flag, twice: the guard dropped with the turn,
+    // so nothing of that turn is still listening.
+    cancel.cancel();
+    cancel.cancel();
+    assert!(
+        !cap.is_cancelled(),
+        "a finished turn's registration is gone (gh #547); the cancel \
+         reached no extension of that turn"
+    );
+    assert!(
+        cancel.is_cancelled(),
+        "the flag itself still records the cancel, so anything polling it sees it"
+    );
 }

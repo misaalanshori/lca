@@ -5,6 +5,11 @@
 //! access to the workspace (ADR-0013's build-time backend category). The
 //! permission layer still sees every shell command and every write outside
 //! the workspace through [`ToolExecutor::required_permission`] (FR-TOOL-3).
+//!
+//! Cancellation ([`CancelFlag`]) lives alongside the tools it cancels: its
+//! [`CancelFlag::on_cancel`] registry lets a synchronous caller - a blocked WASM
+//! call that cannot await - be interrupted on the cancelling thread itself, at
+//! the instant of the cancel (gh #547).
 
 #![deny(unsafe_code)]
 
@@ -26,7 +31,7 @@ mod specs;
 pub mod truncate;
 
 pub use bridge::{BridgeError, bridge_stream};
-pub use cancel::CancelFlag;
+pub use cancel::{CancelFlag, CancelListener};
 pub use capabilities::CompletionBackend;
 pub use capabilities::SharedBackend;
 /// The inbound HTTP listener (gh #363, ADR-0049): the host owns the socket,

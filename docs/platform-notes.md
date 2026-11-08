@@ -128,6 +128,23 @@ The loopback OAuth listener works the same as on POSIX platforms; Windows has no
 
 Two performance numbers do not meet their requirements on Windows, and the measurements are recorded here rather than hidden in a relaxed assertion on the other platforms. NFR-4 bounds instantiation of a precompiled extension at20 ms; the Windows CI measurements are a44.7 ms median on the first recorded run and a101.4 ms median after warmups, the spread itself pointing at endpoint scanning of freshly-created executable pages rather than at instantiation work. The test therefore asserts20 ms on Linux and macOS, where both pass continuously, and150 ms on Windows, with these measurements as its justification. NFR-29's cancellation bound of50 ms does hold on Windows now that the test's clock starts on a genuinely running call rather than during instantiation (the host's in-flight counter exists for exactly that), and it is allowed three fresh-engine attempts because the first observation on a loaded runner lands at56-60 ms when the spinning thread is unrunnable at the moment the epoch moves. On macOS it does not hold on hosted runners: three consecutive readings of74-84 ms, after earlier ones of56-60, the shape of a machine timesharing a compute loop on a sixty-to-eighty millisecond quantum - so the macOS bound in the test is120 ms against those recordings, and the requirement's50 stands unchanged on Linux and Windows. None of these relaxations leak into any other platform.
 
+*Update (2026-11-07, gh #547):* one contributor to that 56-60 ms variance is gone, and
+the history above is left as written. The turn used to spawn an OS thread that slept
+1 ms and polled the cancel flag, then called `interrupt()` on its own tick - so the
+observation waited for a poll period, and on Windows `sleep(1ms)` rounds **up** to the
+~15.6 ms system timer quantum, i.e. a third of the 50 ms budget was spent before
+Wasmtime saw the epoch move. Cancellation is now a callback registered on the
+`CancelFlag` and invoked **inside `cancel()`, synchronously, on the cancelling
+thread, before it returns** (`crates/lca-tools/src/cancel.rs`): 0 us, no poller, and
+nothing left for the timer to quantise. The per-turn 1,000 Hz wakeup stream and the
+`join()` that blocked an async runtime thread at every turn end are both gone; the
+turn holds one RAII guard, which unregisters on drop so a hundred-turn session
+accumulates nothing. The recorded thresholds above are unchanged - they were
+measurements, and the point of this note is that they now measure less. Two honest
+limits of the callback rule: a panic in a listener is caught so the remaining
+listeners still run, which cannot act in this workspace's `panic = "abort"` release
+profile, and the panic hook still prints before the catch fires.
+
 ## The installers: per-platform behavior
 
 `install.sh` and `install.ps1` (repository root; `docs/installation.md`) have three platform-specific behaviors worth knowing before editing either.
