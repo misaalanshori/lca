@@ -145,6 +145,18 @@ limits of the callback rule: a panic in a listener is caught so the remaining
 listeners still run, which cannot act in this workspace's `panic = "abort"` release
 profile, and the panic hook still prints before the catch fires.
 
+What that is worth in the product, measured through a real tmux pane on this box
+(headless cannot see a wakeup, so the pane is the only honest instrument): a turn
+streaming deltas, counted by the process's own voluntary context switches over an
+eight-second window. The 1 ms poller cost **4,579-6,525 switches on one thread**
+across three runs; the callback costs **159-161**, and the extra thread the poller
+needed is gone (`threads=8` while a turn runs, `9` before; zero at rest once the
+turn ends). The remaining ~160 are the mock provider's half-second ticks and the
+renderer's own waits, not cancellation. Escape-to-`cancelled` on the pane measures
+159-205 ms over eight trials, against a 12-79 ms floor for a keystroke reaching the
+screen through the same capture loop - so the observable latency is the harness's
+sampling and repaint, not the cancel, and it is not comparable across machines.
+
 ## The installers: per-platform behavior
 
 `install.sh` and `install.ps1` (repository root; `docs/installation.md`) have three platform-specific behaviors worth knowing before editing either.
