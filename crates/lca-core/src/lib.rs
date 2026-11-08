@@ -370,9 +370,11 @@ impl<'a> Agent<'a> {
 
     /// Run one turn to completion (or cancellation, or error).
     ///
-    /// While it runs, a watcher watches the cancellation flag and, when it
-    /// fires, bumps every WASM extension's epoch so a spinning call traps
-    /// at its next yield (FR-CONC-1, ADR-0014) regardless of fuel.
+    /// While it runs, [`CancelFlag::on_cancel`] holds a callback that fires the
+    /// instant the flag is cancelled - on the cancelling thread, inside
+    /// `cancel()` - and bumps every WASM extension's epoch so a spinning call
+    /// traps at its next yield (FR-CONC-1, ADR-0014) regardless of fuel. There
+    /// is no poller between the two (gh #547).
     pub async fn run_turn(
         &mut self,
         input: &str,

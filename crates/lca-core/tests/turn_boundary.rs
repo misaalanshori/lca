@@ -236,8 +236,9 @@ async fn an_interrupt_only_extension_cannot_latch_cancellation() {
         config,
     );
 
-    // Turn one: pre-cancelled, so the watcher's `interrupt` fires and
-    // latches the engine before any work runs.
+    // Turn one: pre-cancelled. The registration fires immediately (gh #547),
+    // which latches the engine before any work runs - the premise this row
+    // needs, and the reason the already-cancelled case has to work.
     let cancelled = lca_tools::CancelFlag::new();
     cancelled.cancel();
     let mut sink = CollectingSink::default();
@@ -317,7 +318,7 @@ async fn a_cancel_interrupts_the_extension_before_cancel_returns() {
         ..AgentConfig::default()
     };
     // A mid-stream pause: the cancel has to land *while* the turn is running,
-    // which is the case the watcher existed for.
+    // which is the case a poller would have needed to exist for.
     let provider = FakeProvider::builder()
         .turn(|t| {
             t.text("starting")
@@ -391,9 +392,9 @@ async fn a_cancel_interrupts_the_extension_before_cancel_returns() {
 //
 // The guard is turn-scoped: after `run_turn` returns, cancelling the same flag
 // (twice, since several paths may) must not interrupt an extension whose turn
-// is already over. With the old watcher this was true by accident - the thread
-// had been joined - so this pins the property the callback shape has to keep
-// now that the registration outlives the thread that used to carry it.
+// is already over. The old watcher got this for free - it had been joined by
+// then - and the callback shape gets it from the guard's `Drop`, so the row
+// pins a property the new mechanism has to keep rather than inherit.
 #[tokio::test]
 async fn a_cancel_after_a_finished_turn_does_not_reach_the_extension() {
     let root = scratch("cancel-after");
