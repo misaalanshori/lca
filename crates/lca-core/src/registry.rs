@@ -13,6 +13,11 @@ use lca_protocol::{
     ToolAnnotations, ToolCall, ToolExposure, ToolSpec,
 };
 
+/// The name tables plus the planning rules (gh #584), split for the file
+/// ceiling. One `Table`, one set of rules, shared by registration and re-plan.
+mod plan;
+use plan::Route;
+
 /// A namespace and the tools grouped under it (gh #77's grouping:
 /// related tools list under one heading with the description).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,19 +61,6 @@ pub enum IdentityCommand {
     Usage,
 }
 
-/// Where a full command name leads: the extension's `command` world, or
-/// one of its `provider`-world identity exports (FR-PROV-10).
-enum Route {
-    World { entry: usize, leaf: String },
-    Identity { entry: usize, op: IdentityCommand },
-}
-
-/// Pending route before the entry index is known (see `register`).
-enum PendingRoute {
-    World(String),
-    Identity(IdentityCommand),
-}
-
 /// A reported name collision (FR-EXT-11).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CollisionReport {
@@ -110,8 +102,6 @@ pub struct ExtensionRegistry {
     /// turn installs it around the run and clears it after; the
     /// `tools` import serves through it from blocking threads.
     nested: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedSender<lca_ext_abi::NestedCall>>>,
-    /// Bare tool name -> entry index.
-    tools: HashMap<String, usize>,
     /// Native capability engines the host resets at the turn boundary
     /// (gh #97): extension name -> weak engine handle. Noting an engine
     /// is registration bookkeeping — the host created the engine and
@@ -119,22 +109,21 @@ pub struct ExtensionRegistry {
     /// burden, which is what makes an interrupt-only native safe. Weak
     /// so a rebuilt registry never keeps a dead engine alive.
     engines: std::sync::Mutex<HashMap<String, std::sync::Weak<lca_tools::Capabilities>>>,
-    /// The kept spec per registered tool name, so arguments can be validated
-    /// against the schema the model saw before `execute` runs.
-    pub(crate) tool_schemas: HashMap<String, ToolSpec>,
-    /// Full command name (`ext.command`, a claimed built-in leaf, or an
-    /// auto-namespaced identity export) -> where it leads.
-    commands: HashMap<String, Route>,
-    collisions: Vec<CollisionReport>,
+    /// The name tables (gh #584): tools, kept specs, commands, and the
+    /// collision log. One lock, because a re-plan must install a whole
+    /// handle's names as one snapshot - a reader must never see half of
+    /// one handle's set.
+    pub(crate) table: std::sync::Mutex<plan::Table>,
 }
 
 impl std::fmt::Debug for ExtensionRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let table = self.lock_table();
         f.debug_struct("ExtensionRegistry")
             .field("entries", &self.entries.len())
-            .field("tools", &self.tools.keys().collect::<Vec<_>>())
-            .field("commands", &self.commands.keys().collect::<Vec<_>>())
-            .field("collisions", &self.collisions)
+            .field("tools", &table.tools.keys().collect::<Vec<_>>())
+            .field("commands", &table.commands.keys().collect::<Vec<_>>())
+            .field("collisions", &table.collisions)
             .field("engines", &crate::lock(&self.engines).len())
             .finish()
     }
@@ -159,12 +148,15 @@ impl ExtensionRegistry {
     pub fn register(&mut self, handle: Arc<dyn ExtensionDispatch>) {
         let name = handle.name().to_string();
         if self.entries.iter().any(|entry| entry.handle.name() == name) {
-            self.collisions.push(CollisionReport {
-                extension: name.clone(),
-                name,
-                kind: "extension",
-                winner: "earlier registration".to_string(),
-            });
+            self.table
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .insert_collision(CollisionReport {
+                    extension: name.clone(),
+                    name,
+                    kind: "extension",
+                    winner: "earlier registration".to_string(),
+                });
             self.entries.push(Registered {
                 handle,
                 enabled: std::sync::atomic::AtomicBool::new(false),
@@ -172,28 +164,37 @@ impl ExtensionRegistry {
             return;
         }
 
+        let worlds = handle.worlds();
         let native_claim = handle.delivery() == DeliveryMode::Native;
         let slots = handle.builtin_command_slots();
-        let pending_commands = self.plan_commands(&name, handle.as_ref(), native_claim, &slots);
-        let pending_tools = self.plan_tools(&name, handle.as_ref());
-
+        // Gh #584: the fetch is the handle's own work (a WASM handle runs one
+        // blocking component call, and a guest may call back into the host from
+        // inside it), so it happens with no lock held; the install is a pure
+        // function of what came back and the table as it stands.
+        let fetched = plan::fetch(handle.as_ref(), &worlds);
         let entry_index = self.entries.len();
-        for spec in pending_tools {
-            self.tools.insert(spec.name.clone(), entry_index);
-            self.tool_schemas.insert(spec.name.clone(), spec);
-        }
-        for (full, pending) in pending_commands {
-            let route = match pending {
-                PendingRoute::World(leaf) => Route::World {
-                    entry: entry_index,
-                    leaf,
-                },
-                PendingRoute::Identity(op) => Route::Identity {
-                    entry: entry_index,
-                    op,
-                },
-            };
-            self.commands.insert(full, route);
+        let planned = {
+            let table = self
+                .table
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            plan::plan(
+                &table,
+                &self.entries,
+                &name,
+                &worlds,
+                native_claim,
+                &slots,
+                fetched,
+            )
+        };
+        {
+            let mut table = self
+                .table
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            table.insert_collisions(planned.reports.clone());
+            table.install(entry_index, planned);
         }
         self.entries.push(Registered {
             handle,
@@ -201,147 +202,78 @@ impl ExtensionRegistry {
         });
     }
 
-    /// Plan one handle's command routes: reserved built-in slots, the
-    /// provider identity trio, and collisions (ADR-0019, FR-PROV-10).
-    fn plan_commands(
-        &mut self,
-        name: &str,
-        handle: &dyn ExtensionDispatch,
-        native_claim: bool,
-        slots: &[String],
-    ) -> Vec<(String, PendingRoute)> {
-        let mut pending: Vec<(String, PendingRoute)> = Vec::new();
-        if handle.worlds().contains(&World::Command) {
-            match handle.command_specs() {
-                Ok(specs) => {
-                    for spec in specs {
-                        // Only a native first-party handle may claim a
-                        // reserved built-in slot, and only for one of the
-                        // documented built-in names (ADR-0019); everything
-                        // else namespaces as `<extension>.<command>`
-                        // (ADR-0012's mechanism), so a third-party
-                        // command can never shadow a built-in.
-                        let claims_builtin = native_claim
-                            && slots.contains(&spec.name)
-                            && BUILTIN_COMMANDS.contains(&spec.name.as_str());
-                        let full = if claims_builtin {
-                            spec.name.clone()
-                        } else {
-                            format!("{name}.{}", spec.name)
-                        };
-                        let winner = self
-                            .commands
-                            .get(&full)
-                            .map(|route| self.route_name(route).to_string());
-                        match winner {
-                            Some(winner) => self.collisions.push(CollisionReport {
-                                extension: name.to_string(),
-                                name: full,
-                                kind: "command",
-                                winner,
-                            }),
-                            None => pending.push((full, PendingRoute::World(spec.name))),
-                        }
-                    }
-                }
-                Err(err) => {
-                    // A handle that cannot enumerate its commands keeps its
-                    // other worlds; report through the collision log.
-                    self.collisions.push(CollisionReport {
-                        extension: name.to_string(),
-                        name: "(command world)".to_string(),
-                        kind: "command",
-                        winner: format!("unavailable: {err}"),
-                    });
-                }
+    /// Re-plan every handle whose **specs version moved** (gh #584).
+    ///
+    /// This is what closes the landing gap: an MCP server that connects after
+    /// `assemble` registered the bridge bumps its version on `land`, and the
+    /// next declaration re-reads that handle's live specs, so the model is
+    /// told about the tool and `tool_owner` can find it.
+    ///
+    /// The cost when nothing changed is one atomic load per handle: a handle
+    /// answering the trait's `None` default (every WASM guest, every in-tree
+    /// extension) is never re-planned, and a settled MCP bridge is compared
+    /// against the version it was last planned from. So two consecutive reads
+    /// of a settled registry return byte-identical vectors - a re-read that
+    /// reordered or re-rendered anything would bust the prompt cache every
+    /// turn, which is the regression this shape exists to avoid.
+    ///
+    /// Failures are reported, never fatal: a handle that cannot answer keeps
+    /// the names it has (the re-plan's `(tool world)` collision says so).
+    pub(crate) fn refresh(&self) {
+        let names: Vec<String> = self
+            .entries
+            .iter()
+            .map(|entry| entry.handle.name().to_string())
+            .collect();
+        for (index, entry) in self.entries.iter().enumerate() {
+            let Some(version) = entry.handle.specs_version() else {
+                continue;
+            };
+            // The watermark is checked, and the swap performed, under **one**
+            // table lock (gh #584): `withdraw` then `install` in two scopes would
+            // let a concurrent reader see the entry's names missing between them,
+            // i.e. a tool that exists flickering out of the declaration. The
+            // fetch happens before this, so no foreign call runs under the lock.
+            let table = self.lock_table();
+            if table.planned.get(index).copied() == Some(version) {
+                continue;
             }
-        }
-
-        if handle.worlds().contains(&World::Provider) {
-            // FR-PROV-10 / ADR-0012: the host namespaces the three
-            // identity exports itself, so two providers that both export
-            // `usage` can never collide.
-            for (leaf, op) in [
-                ("login", IdentityCommand::Login),
-                ("logout", IdentityCommand::Logout),
-                ("usage", IdentityCommand::Usage),
-            ] {
-                let full = format!("{name}.{leaf}");
-                let winner = self
-                    .commands
-                    .get(&full)
-                    .map(|route| self.route_name(route).to_string());
-                match winner {
-                    Some(winner) => self.collisions.push(CollisionReport {
-                        extension: name.to_string(),
-                        name: full,
-                        kind: "command",
-                        winner,
-                    }),
-                    None => pending.push((full, PendingRoute::Identity(op))),
-                }
+            drop(table);
+            let worlds = entry.handle.worlds();
+            let native_claim = entry.handle.delivery() == DeliveryMode::Native;
+            let slots = entry.handle.builtin_command_slots();
+            let fetched = plan::fetch(entry.handle.as_ref(), &worlds);
+            let mut table = self.lock_table();
+            // Re-check: another reader may have re-planned this entry while the
+            // handle was being asked. Both plans are the same, but skipping the
+            // second one keeps this from doing the work twice.
+            if table.planned.get(index).copied() == Some(version) {
+                continue;
             }
+            table.withdraw(index);
+            let planned = plan::plan(
+                &table,
+                &self.entries,
+                &names[index],
+                &worlds,
+                native_claim,
+                &slots,
+                fetched,
+            );
+            table.insert_collisions(planned.reports.clone());
+            table.install(index, planned);
+            // Written with the install, so a reader either sees the new names
+            // and the new version, or neither.
+            table.note_planned(index, version);
         }
-        pending
     }
 
-    /// Plan one handle's tool specs, refusing built-in shadowing and
-    /// earlier-registered names. Handles merge their own worlds inside
-    /// `tool_specs` (a suite guest serves every tool through its
-    /// catalog, gh #77); the registry resolves names, not worlds.
-    fn plan_tools(&mut self, name: &str, handle: &dyn ExtensionDispatch) -> Vec<ToolSpec> {
-        let mut pending: Vec<ToolSpec> = Vec::new();
-        if handle.worlds().contains(&World::Tool) || handle.worlds().contains(&World::ToolCatalog) {
-            match handle.tool_specs() {
-                Ok(specs) => {
-                    for spec in specs {
-                        // `tool_search` is served by the turn itself (gh
-                        // #77's discovery): no extension may claim it.
-                        let winner = if BUILTIN_TOOLS.contains(&spec.name.as_str())
-                            || BUILTIN_TOOL_ALIASES.contains(&spec.name.as_str())
-                            || spec.name == TOOL_SEARCH_NAME
-                        {
-                            Some("built-in".to_string())
-                        } else {
-                            self.tools
-                                .get(&spec.name)
-                                .map(|index| self.entry_name(*index).to_string())
-                        };
-                        match winner {
-                            Some(winner) => self.collisions.push(CollisionReport {
-                                extension: name.to_string(),
-                                name: spec.name,
-                                kind: "tool",
-                                winner,
-                            }),
-                            // #78: single-tool guests declare hints
-                            // through extras; normalize on the way in so
-                            // every consumer below sees one shape.
-                            None => pending.push(spec.with_annotations_from_extras()),
-                        }
-                    }
-                }
-                Err(err) => {
-                    self.collisions.push(CollisionReport {
-                        extension: name.to_string(),
-                        name: "(tool world)".to_string(),
-                        kind: "tool",
-                        winner: format!("unavailable: {err}"),
-                    });
-                }
-            }
-        }
-        pending
-    }
-
-    fn entry_name(&self, index: usize) -> &str {
-        self.entries[index].handle.name()
-    }
-
-    fn route_name(&self, route: &Route) -> &str {
-        match route {
-            Route::World { entry, .. } | Route::Identity { entry, .. } => self.entry_name(*entry),
-        }
+    /// The table lock (poisoning recovers: a dead manager thread must not
+    /// wedge a turn).
+    pub(crate) fn lock_table(&self) -> std::sync::MutexGuard<'_, plan::Table> {
+        self.table
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
     }
 
     /// Every enabled provider extension's name, in registration order
@@ -528,9 +460,13 @@ impl ExtensionRegistry {
             .collect()
     }
 
-    /// Every collision reported during registration (FR-EXT-11's report).
-    pub fn collisions(&self) -> &[CollisionReport] {
-        &self.collisions
+    /// Every collision reported during registration or a later re-plan
+    /// (FR-EXT-11's report).
+    ///
+    /// Owned rather than borrowed (gh #584): the log lives behind the table lock
+    /// now, and a `&[..]` cannot outlive its guard. One `&` at the one caller.
+    pub fn collisions(&self) -> Vec<CollisionReport> {
+        self.lock_table().collisions.clone()
     }
 
     /// Enabled handles in registration order.
@@ -550,16 +486,32 @@ impl ExtensionRegistry {
     }
 
     /// The extension that registered a bare tool name, if any.
+    ///
+    /// Re-plans first (gh #584), so a bridged tool whose server landed after
+    /// registration resolves here - which is the half of the defect that
+    /// answered `unknown tool`.
     pub fn tool_owner(&self, tool: &str) -> Option<&Arc<dyn ExtensionDispatch>> {
-        self.tools
-            .get(tool)
-            .map(|index| &self.entries[*index].handle)
+        self.refresh();
+        let table = self.lock_table();
+        let index = *table.tools.get(tool)?;
+        // Borrowed out of the guard deliberately: the handle outlives the table,
+        // and the entry index it names is the same one `refresh` just wrote.
+        drop(table);
+        self.entries.get(index).map(|entry| &entry.handle)
+    }
+
+    /// Whether a tool name is registered right now (gh #584's active set reads
+    /// this instead of the table). Re-plans first, like every spec reader.
+    pub(crate) fn has_tool(&self, name: &str) -> bool {
+        self.refresh();
+        self.lock_table().tool_schemas.contains_key(name)
     }
 
     /// The schema of a registered tool, for validating its arguments before
     /// dispatch (extension authoring guide: the host validates, then calls).
-    pub fn tool_schema(&self, name: &str) -> Option<&ToolSpec> {
-        self.tool_schemas.get(name)
+    pub fn tool_schema(&self, name: &str) -> Option<ToolSpec> {
+        self.refresh();
+        self.lock_table().tool_schemas.get(name).cloned()
     }
 
     /// The annotations a registered tool declares (#78): structural
@@ -567,7 +519,9 @@ impl ExtensionRegistry {
     /// `None`. The permission prompt may show them; nothing decides
     /// on them.
     pub fn tool_annotations(&self, name: &str) -> Option<ToolAnnotations> {
-        self.tool_schemas
+        self.refresh();
+        self.lock_table()
+            .tool_schemas
             .get(name)
             .and_then(|spec| spec.annotations.clone())
     }
@@ -576,21 +530,29 @@ impl ExtensionRegistry {
     /// callable set): direct tools while active, codemode and deferred
     /// tools whenever registered; model-only and hidden tools never.
     pub fn is_callable(&self, name: &str) -> bool {
-        let enabled = self
-            .tools
-            .get(name)
-            .map(|index| {
-                self.entries[*index]
-                    .enabled
-                    .load(std::sync::atomic::Ordering::SeqCst)
-            })
-            .unwrap_or(false);
+        self.refresh();
+        let enabled = {
+            let table = self.lock_table();
+            table
+                .tools
+                .get(name)
+                .map(|index| {
+                    self.entries[*index]
+                        .enabled
+                        .load(std::sync::atomic::Ordering::SeqCst)
+                })
+                .unwrap_or(false)
+        };
         if !enabled {
             return false;
         }
-        match self.tool_schemas.get(name) {
-            Some(spec) => match spec.exposure {
-                ToolExposure::Direct => self.is_active(name, spec.exposure),
+        let exposure = {
+            let table = self.lock_table();
+            table.tool_schemas.get(name).map(|spec| spec.exposure)
+        };
+        match exposure {
+            Some(exposure) => match exposure {
+                ToolExposure::Direct => self.is_active(name, exposure),
                 ToolExposure::Codemode | ToolExposure::Deferred => true,
                 ToolExposure::ModelOnly | ToolExposure::Hidden => false,
             },
@@ -601,11 +563,19 @@ impl ExtensionRegistry {
     /// The callable tools for orchestrators (the `tools` import's
     /// `list-tools`, gh #77): name plus description, sorted.
     pub fn callable_names(&self) -> Vec<(String, String)> {
-        let mut names: Vec<(String, String)> = self
+        self.refresh();
+        // The names are collected under the lock and the predicate is asked
+        // afterwards: `is_callable` takes the same lock, and `std::sync::Mutex`
+        // is not re-entrant (gh #584).
+        let specs: Vec<(String, String)> = self
+            .lock_table()
             .tool_schemas
-            .iter()
+            .values()
+            .map(|spec| (spec.name.clone(), spec.description.clone()))
+            .collect();
+        let mut names: Vec<(String, String)> = specs
+            .into_iter()
             .filter(|(name, _)| self.is_callable(name))
-            .map(|(_, spec)| (spec.name.clone(), spec.description.clone()))
             .collect();
         names.sort();
         names
@@ -699,11 +669,14 @@ impl ExtensionRegistry {
     /// name: a provider's prompt cache and the request-assembly snapshot key
     /// on stable bytes, and the registry's maps are unordered.
     pub fn tool_specs(&self) -> Vec<ToolSpec> {
-        let mut specs: Vec<ToolSpec> = self
+        self.refresh();
+        let table = self.lock_table();
+        let mut specs: Vec<ToolSpec> = table
             .tool_schemas
             .iter()
             .filter(|(name, _)| {
-                self.tools
+                table
+                    .tools
                     .get(*name)
                     .map(|index| {
                         self.entries[*index]
@@ -721,7 +694,8 @@ impl ExtensionRegistry {
     /// Full command names without the leading slash (the input editor
     /// adds it).
     pub fn command_names(&self) -> Vec<String> {
-        let mut names: Vec<String> = self.commands.keys().cloned().collect();
+        self.refresh();
+        let mut names: Vec<String> = self.lock_table().commands.keys().cloned().collect();
         names.sort();
         names
     }
@@ -730,12 +704,12 @@ impl ExtensionRegistry {
     /// claimed built-in slot, or it is an auto-namespaced identity
     /// export, FR-PROV-10).
     pub fn invoke_command(&self, full: &str, argument: &str) -> Option<CommandEffect> {
-        let route = self.commands.get(full)?;
-        let (entry, handle) = match route {
-            Route::World { entry, .. } | Route::Identity { entry, .. } => {
-                (*entry, &self.entries[*entry].handle)
-            }
-        };
+        // Re-plans first (gh #584): a command a late-landing handle declares
+        // becomes invocable too, and a withdrawn one stops being.
+        self.refresh();
+        let route = self.lock_table().commands.get(full).cloned()?;
+        let entry = route.entry();
+        let handle = self.entries.get(entry)?.handle.clone();
         if !self.entries[entry]
             .enabled
             .load(std::sync::atomic::Ordering::SeqCst)
@@ -743,8 +717,8 @@ impl ExtensionRegistry {
             return None;
         }
         match route {
-            Route::World { leaf, .. } => handle.invoke_command(leaf, argument).ok(),
-            Route::Identity { op, .. } => Some(self.identity_effect(handle, *op)),
+            Route::World { leaf, .. } => handle.invoke_command(&leaf, argument).ok(),
+            Route::Identity { op, .. } => Some(self.identity_effect(&handle, op)),
         }
     }
 

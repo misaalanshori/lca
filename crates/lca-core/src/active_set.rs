@@ -56,7 +56,7 @@ impl ExtensionRegistry {
         let mut applied = Vec::new();
         let mut ignored = Vec::new();
         for name in names {
-            if self.tool_schemas.contains_key(name) {
+            if self.has_tool(name) {
                 applied.push(name.clone());
             } else {
                 ignored.push(name.clone());
@@ -75,11 +75,20 @@ impl ExtensionRegistry {
 
     /// The active tool names, sorted (gh #77's `getActiveTools`).
     pub fn active_tools(&self) -> Vec<String> {
-        let mut names: Vec<String> = self
+        self.refresh();
+        // Collect under the table lock, then ask the active-set question after
+        // it drops: `is_active` takes the `active` lock, and holding both in
+        // this order is the inversion gh #584 removed from `note_discovered`.
+        let specs: Vec<(String, ToolExposure)> = self
+            .lock_table()
             .tool_schemas
             .iter()
-            .filter(|(name, spec)| self.is_active(name, spec.exposure))
-            .map(|(name, _)| name.clone())
+            .map(|(name, spec)| (name.clone(), spec.exposure))
+            .collect();
+        let mut names: Vec<String> = specs
+            .into_iter()
+            .filter(|(name, exposure)| self.is_active(name, *exposure))
+            .map(|(name, _)| name)
             .collect();
         names.sort();
         names
@@ -155,13 +164,18 @@ impl ExtensionRegistry {
     /// added, so the turn's per-request check records the change.
     /// Returns the newly added names, sorted.
     pub fn note_discovered(&self, names: &[String]) -> Vec<String> {
+        // Gh #584: the registered-name question is asked **before** the active
+        // lock, because reading the table takes the table lock and every other
+        // path here nests that way round (`table` then `active`, never the
+        // reverse). Asking it inside this guard would be a lock inversion.
+        let registered: Vec<&String> = names.iter().filter(|name| self.has_tool(name)).collect();
         let mut active = self
             .active
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         let mut added = Vec::new();
-        for name in names {
-            if self.tool_schemas.contains_key(name) && active.discovered.insert(name.clone()) {
+        for name in registered {
+            if active.discovered.insert(name.clone()) {
                 added.push(name.clone());
             }
         }

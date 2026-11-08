@@ -338,6 +338,12 @@ pub struct McpBridge {
     /// The set of servers. A call never holds this across its I/O (gh #554):
     /// it takes what it needs out and drops the guard.
     pub(crate) servers: Mutex<Vec<ManagedServer>>,
+    /// How many times the **row set has changed** (gh #584): bumped by every
+    /// mutation, read by the registry to decide whether the specs it holds are
+    /// still the bridge's. A version, not a count of tools - two servers
+    /// swapping tool names keeps a count identical, and that is exactly a
+    /// change `ExtensionRegistry` has to re-plan for.
+    servers_version: std::sync::atomic::AtomicU64,
     /// The bridge's own capability engine (gh #344). Binary resources are
     /// staged through its `temp` scope, so the write is scope-checked and
     /// owner-only instead of a raw write into a shared world-writable
@@ -504,6 +510,7 @@ impl McpBridge {
         }
         McpBridge {
             servers: Mutex::new(servers),
+            servers_version: std::sync::atomic::AtomicU64::new(0),
             caps,
         }
     }
@@ -620,6 +627,7 @@ impl McpBridge {
         }
         McpBridge {
             servers: Mutex::new(servers),
+            servers_version: std::sync::atomic::AtomicU64::new(0),
             caps,
         }
     }
@@ -630,7 +638,9 @@ impl McpBridge {
     /// worker ran; a row for a server that is no longer configured (or that
     /// has since been reconnected) is dropped instead of resurrected.
     pub(crate) fn land(&self, row: ManagedServer) -> bool {
-        let mut servers = self.locked();
+        // Gh #584: a row landing adds (or frees) the tools this bridge
+        // declares, so the registry has to see a new version.
+        let mut servers = self.locked_mut();
         let Some(slot) = servers.iter_mut().find(|server| {
             server.entry.name == row.entry.name
                 && matches!(server.state, ServerStateKind::Connecting)
@@ -675,10 +685,7 @@ impl McpBridge {
         caps: Arc<lca_tools::Capabilities>,
         entries: Vec<crate::config::ServerEntry>,
     ) {
-        let mut servers = self
-            .servers
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut servers = self.locked_mut();
         for server in servers.iter_mut() {
             server.shutdown();
         }
@@ -693,10 +700,7 @@ impl McpBridge {
         entries: Vec<crate::config::ServerEntry>,
         done: std::sync::mpsc::Sender<ManagedServer>,
     ) {
-        let mut servers = self
-            .servers
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut servers = self.locked_mut();
         for server in servers.iter_mut() {
             server.shutdown();
         }
@@ -705,10 +709,7 @@ impl McpBridge {
         drop(servers);
         let fresh = McpBridge::spawn_connections(caps, entries, done);
         let mut fresh_servers = fresh.take_servers();
-        let mut servers = self
-            .servers
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut servers = self.locked_mut();
         for server in servers.iter_mut() {
             server.shutdown();
         }
@@ -718,11 +719,9 @@ impl McpBridge {
 
     /// Take the rows out (rebuild plumbing only).
     fn take_servers(self) -> Vec<ManagedServer> {
-        self.servers
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .drain(..)
-            .collect()
+        // Bumped like every other change: the rows are leaving this bridge, and
+        // a caller that kept the handle has to re-plan against an empty set.
+        self.locked_mut().drain(..).collect()
     }
 
     /// Spawn every server (each spawn asks the permission layer),
@@ -769,14 +768,33 @@ impl McpBridge {
         Ok(bridge)
     }
 
-    /// One state row per managed entry, in entry order (the `/mcp`
-    /// rows read these).
-    /// Lock the rows for one read (poisoning recovers: a dead
-    /// manager thread must not wedge the turn).
+    /// Lock the rows for one **read** (poisoning recovers: a dead manager
+    /// thread must not wedge the turn). A read never bumps the version, so
+    /// `/mcp`'s polling does not make the registry re-plan.
     pub(crate) fn locked(&self) -> std::sync::MutexGuard<'_, Vec<ManagedServer>> {
         self.servers
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Lock the rows to **change** them (gh #584), bumping the specs version
+    /// first. One helper rather than a bump at each site: a missed *read* is
+    /// harmless, a missed *write* is the whole signal. Every mutation of the
+    /// row set goes through here - `land`, `rebuild`, `rebuild_connecting`,
+    /// `take_servers`, `Drop` - and the sites are countable
+    /// (`grep -n "locked_mut()"`).
+    pub(crate) fn locked_mut(&self) -> std::sync::MutexGuard<'_, Vec<ManagedServer>> {
+        self.servers_version
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.locked()
+    }
+
+    /// The version the specs the registry holds were built from (gh #584): `0`
+    /// before any change, `1` after the first. `ExtensionRegistry` re-plans a
+    /// handle only when this moves.
+    pub fn specs_version(&self) -> u64 {
+        self.servers_version
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// One state row per managed entry, in entry order (the `/mcp`
@@ -840,12 +858,10 @@ impl Drop for McpBridge {
     /// closes stdin, then SIGTERM, then SIGKILL; the host's
     /// `process_kill` owns that sequence).
     fn drop(&mut self) {
-        for server in self
-            .servers
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .iter_mut()
-        {
+        // Gh #584: the teardown empties the tool set, so it takes the mutating
+        // lock too (a registry that outlives the bridge re-plans to nothing).
+        let mut servers = self.locked_mut();
+        for server in servers.iter_mut() {
             server.shutdown();
         }
     }
@@ -866,6 +882,13 @@ impl lca_ext_abi::ExtensionDispatch for McpBridge {
 
     fn tool_specs(&self) -> Result<Vec<lca_protocol::ToolSpec>, lca_protocol::DispatchError> {
         McpBridge::tool_specs(self)
+    }
+
+    /// Gh #584: servers land after registration, so the registry re-plans this
+    /// handle whenever the row set changed. Every other handle answers the
+    /// trait's `None` default.
+    fn specs_version(&self) -> Option<u64> {
+        Some(McpBridge::specs_version(self))
     }
 
     fn execute_tool<'a>(

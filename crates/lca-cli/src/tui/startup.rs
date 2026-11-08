@@ -271,7 +271,7 @@ pub fn launch_header(
     config: &lca_config::Config,
     tmux_doctor: &tmux_doctor::Cell,
 ) -> (Vec<String>, Vec<String>) {
-    let collisions = collision_summary(registry.collisions());
+    let collisions = collision_summary(&registry.collisions());
     let context = crate::prompt::context_sources(data, cwd, trusted, flags.no_context_files);
     let extension_count = registry.registered_names().len();
     let skill_count = lca_tools::skills::collect(&crate::skills_roots(cwd, flags)).len();

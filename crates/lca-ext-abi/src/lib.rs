@@ -244,9 +244,34 @@ pub mod dispatch {
         /// Worlds this handle implements.
         fn worlds(&self) -> Vec<World>;
 
-        /// Tool specs (`tool` world). Registration-time only: a WASM
-        /// handle runs one blocking component call and joins it.
+        /// Tool specs (`tool` world). Read at registration and again whenever
+        /// this handle's [`specs_version`](ExtensionDispatch::specs_version)
+        /// moves (gh #584). A WASM handle runs one blocking component call and
+        /// joins it.
         fn tool_specs(&self) -> Result<Vec<ToolSpec>, DispatchError>;
+
+        /// A version that moves whenever this handle's **tool specs may have
+        /// changed**, or `None` for "my specs never change" (gh #584).
+        ///
+        /// `None` is the default on purpose: it keeps every handle whose specs
+        /// are fixed at registration - every WASM guest, every in-tree
+        /// extension - on the path they already had, with no re-plan and no
+        /// allocation. Only a handle that discovers tools *after* registration
+        /// (the MCP bridge, whose servers land on background workers and whose
+        /// rows change on every `/mcp` edit, reconnect and shutdown) answers
+        /// `Some`.
+        ///
+        /// It is a **version**, never an identity: the registry re-plans only
+        /// when the value differs from the one it planned from last, so a
+        /// handle that bumps on every call would bust the prompt cache every
+        /// turn. Bump it on change, not on read.
+        ///
+        /// Host-side only. This is not a `wit/` export: it is the host asking
+        /// its own handles a question, so a guest neither sees it nor is
+        /// required to answer it.
+        fn specs_version(&self) -> Option<u64> {
+            None
+        }
 
         /// Run one tool call (`tool` world).
         fn execute_tool<'a>(
