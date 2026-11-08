@@ -474,10 +474,16 @@ fn a_cancel_during_a_retry_backoff_is_observed_promptly() {
     let _ = caller.join();
     assert!(failed, "a cancelled retry reports failure, not an answer");
     let observed = cancelled_at.elapsed();
+    // 100 ms, not 300: the slice is 25 ms, so the honest figure is a few
+    // milliseconds plus scheduling (measured 9-13 ms here) - and 300 ms did not
+    // bite, because the *first* backoff is only 250 ms, so an uninterruptible
+    // sleep that began before the cancel still finished inside 300 ms of it
+    // (measured 163 ms). A bound at 300 ms was a guard that could pass on the
+    // defect it exists for; 100 ms fails it (verified by mutation, both ways).
     assert!(
-        observed < Duration::from_millis(300),
+        observed < Duration::from_millis(100),
         "the cancel was observed {observed:?} after it was set; an \
-         uninterruptible retry sleep would make the whole delay elapse first \
+         uninterruptible retry sleep would make the delay elapse first \
          (the call took {elapsed:?})"
     );
     eprintln!(
