@@ -205,10 +205,16 @@ fn the_module_documents_the_rule_and_why_it_exists() {
 #[test]
 fn the_neighbouring_guards_still_state_their_contracts() {
     let tail = read("tests/regressions/459-stderr-tail-never-blocks.rs");
+    // Two asserts rather than one `&& ... || ...`: that spelling passed even when
+    // the first needle was missing, which is a guard that cannot fail (found by
+    // reading it back, not by running it).
     assert!(
-        tail.contains("pub fn process_read_stderr(") && tail.contains("read_up_to\n")
-            || tail.contains("read_up_to"),
+        tail.contains("pub fn process_read_stderr("),
         "459 still slices the ABI's blocking stderr reader"
+    );
+    assert!(
+        tail.contains("read_up_to"),
+        "and still requires that reader to be the blocking one"
     );
     assert!(
         tail.contains("read_buffered"),
