@@ -598,3 +598,15 @@ mod pty_drain_window;
 // the async twin's hash is no longer reported before its bytes are readable).
 #[path = "547-cancel-listener.rs"]
 mod cancel_listener;
+
+// Gh #569: `process_read_stdout`, `process_read_stderr`,
+// `process_read_stderr_buffered` and `process_write_stdin` held the shared handle
+// table across a **blocking** pipe operation. Reading a silent child's stdout
+// held that table for the child's whole lifetime, and `process_kill` - what
+// cancellation, a timeout and `mcp`'s `Drop` all call - needs the same table. A
+// reader waiting for output, a killer waiting for the lock, a child waiting for
+// stdin: `process_kill` had not returned after three seconds. The stream is now
+// taken out of the table, used with no lock held, and put back (or left absent if
+// the handle is gone).
+#[path = "569-blocked-pipe-holds-no-table.rs"]
+mod blocked_pipe_holds_no_table;

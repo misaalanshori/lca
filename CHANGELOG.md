@@ -42,6 +42,17 @@ Dates are UTC.
   not before this change.
 
 ### Fixed
+- **A cancelled turn can no longer hang trying to stop a server that was waiting on its
+  reader** (gh #569). Reading a child process's output held the host's handle table for the
+  whole read — and a read of a silent child blocks until it writes or closes, so the table
+  stayed held for that child's entire lifetime. Stopping a server needs that same table, and
+  stopping a server is exactly what cancellation, a timeout, and closing an MCP connection
+  do: the reader waited for output, the stop waited for the table, and the child waited for
+  its stdin. Measured through the shape itself, the stop had not returned after three
+  seconds. The pipe is now taken out of the table, used with nothing held, and put back
+  afterwards (or left out, if the handle was already stopped — nothing resurrects a pipe
+  into a handle nobody owns). Writing to a child that was not reading its stdin had the
+  same shape and the same fix.
 - **Cancelling a turn reaches the running call at once, and the background wakeup loop is
   gone** (gh #547). Every turn spawned an OS thread that slept 1 ms and polled the cancel
   flag for the turn's whole duration — a stream lasting a minute meant 60,000 wakeups doing
