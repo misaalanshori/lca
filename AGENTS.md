@@ -131,6 +131,12 @@ references), then pi's source.
   lock around the executor (gh #563). And a per-turn flag is re-armed **after** the
   gate is held, never before - an early re-arm lets a queued caller steal the running
   turn's flag, which is exactly the defect that row exists for.
+- **When an `impl` block approaches gate 11's ceiling, extract a sibling file
+  rather than growing the module** (gh #574): an inherent `impl` may be
+  partitioned across files, so a move changes which file defines a method and
+  never the path a caller names it by. Keep one `impl` per new file, prefer
+  fields over new getters, and re-export anything that was `pub` before -
+  a split that forces a `pub(crate)` widening picked the wrong seam.
 - Settings: `Flag > Env (LCA_*) > ProjectFile (.lca/config.toml) >
   UserFile (~/.lca/config.toml) > Default`; `/settings` shows the
   winning source per key.
