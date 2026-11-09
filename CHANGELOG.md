@@ -12,7 +12,7 @@ Dates are UTC.
   entry and hard-coded `false` on both arms — so every server was reported as offering
   nothing, in the text output and in `--json` alike, while `pi` printed
   `offers resources` for the same server. The flag now comes from the handshake (the
-  capability that makes the `list_mcp_resources` trio available), so a connected
+  `capabilities.resources` a server advertises at `initialize`), so a connected
   resource-bearing server says so and a tools-only server does not. A server that never
   connected reports `false`, which means "never asked", not "said no" (gh #585).
 - **A resize during an `$EDITOR` handoff (or an interactive `!`, or a suspend) now reaches
