@@ -67,19 +67,22 @@ mod follow_up_mode_and_async_teardown;
 #[path = "381-chip-is-one-unit.rs"]
 mod chip_is_one_unit;
 
-/// Every implementation file an `lca-ui` module is spread across, as
+/// Every implementation file a module is spread across, as
 /// `(path, source)` pairs in declaration order.
 ///
-/// Gh #574 split the near-ceiling files along their own seams, so a structural
-/// guard that reads one **filename** stops seeing the code it guards as soon as
-/// that code moves - and if it greps for one line, it may pass *vacuously*
-/// instead of failing. Guards therefore read the *module*: this walks the
-/// module file's own `mod` declarations (skipping `#[cfg(test)]` ones) and
-/// reads each child it finds, recursively, honouring `#[path = "…"]`.
+/// Gh #574 split `lca-ui`'s near-ceiling files along their own seams, and gh #543
+/// does the same for `lca-cli`; a structural guard that reads one **filename**
+/// stops seeing the code it guards as soon as that code moves - and if it greps
+/// for one line, it may pass *vacuously* instead of failing. Guards therefore
+/// read the *module*: this walks the module file's own `mod` declarations
+/// (skipping `#[cfg(test)]` ones) and reads each child it finds, recursively,
+/// honouring `#[path = "…"]`. Generic over crate on purpose - the walk is
+/// ordinary `mod` syntax, so `crates/lca-cli/src/tui/mod.rs` serves as well as
+/// `crates/lca-ui/src/chat.rs`.
 ///
 /// The pairs carry their path so a failure message can still name the file the
 /// offending line is in.
-pub fn ui_module_sources(module_rel: &str) -> Vec<(String, String)> {
+pub fn module_sources(module_rel: &str) -> Vec<(String, String)> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut out = Vec::new();
     collect_sources(root, module_rel, &mut out);
@@ -88,10 +91,10 @@ pub fn ui_module_sources(module_rel: &str) -> Vec<(String, String)> {
 }
 
 /// The concatenated source of a module's implementation files (see
-/// [`ui_module_sources`]). Use this when a guard greps for one line and the
+/// [`module_sources`]). Use this when a guard greps for one line and the
 /// line's file is an implementation detail the ceiling split may change.
-pub fn ui_module_text(module_rel: &str) -> String {
-    ui_module_sources(module_rel)
+pub fn module_text(module_rel: &str) -> String {
+    module_sources(module_rel)
         .into_iter()
         .map(|(_, text)| text)
         .collect::<Vec<_>>()
@@ -101,10 +104,12 @@ pub fn ui_module_text(module_rel: &str) -> String {
 /// The concatenation of several roots, for a guard whose partition the module
 /// walk cannot know: `chat_keys.rs`'s picker arms moved to a sibling declared
 /// from the crate root, not from `chat_keys.rs`, so no single root reaches both.
-pub fn ui_text_of(roots: &[&str]) -> String {
+/// The same applies to `lca-cli` files that have no submodules but gain one
+/// (`ext.rs` becomes `ext/mod.rs` with `install`/`manage` beside it).
+pub fn text_of(roots: &[&str]) -> String {
     roots
         .iter()
-        .map(|root| ui_module_text(root))
+        .map(|root| module_text(root))
         .collect::<Vec<_>>()
         .join("\n")
 }

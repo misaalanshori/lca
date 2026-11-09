@@ -285,7 +285,7 @@ fn the_collision_rows_sit_outside_the_quiet_layers() {
 #[test]
 fn the_header_expands_on_the_existing_key() {
     // Gh #574: the expand arm is in `chat/chat_input.rs` now.
-    let chat = crate::ui_module_text("crates/lca-ui/src/chat.rs");
+    let chat = crate::module_text("crates/lca-ui/src/chat.rs");
     let arm = chat
         .split("if self.keybindings.matches(data, \"app.tools.expand\")")
         .nth(1)

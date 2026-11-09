@@ -178,7 +178,7 @@ fn both_paths_go_through_the_shared_recogniser() {
 fn the_reply_path_consults_the_query_lifecycle() {
     // Gh #574: the two colour entry points moved to `chat/chat_theme_keys.rs`,
     // so the row reads the module rather than one file of the partition.
-    let chat = crate::ui_module_text("crates/lca-ui/src/chat.rs");
+    let chat = crate::module_text("crates/lca-ui/src/chat.rs");
 
     assert!(
         chat.contains("theme_query"),

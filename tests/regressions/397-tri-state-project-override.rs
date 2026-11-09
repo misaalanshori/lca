@@ -162,7 +162,7 @@ fn the_row_names_the_state_and_the_hint_names_the_key() {
         overlays.contains("tab project"),
         "the hint names `tab` as the project-override key"
     );
-    let keys = crate::ui_text_of(&[
+    let keys = crate::text_of(&[
         "crates/lca-ui/src/chat_keys.rs",
         "crates/lca-ui/src/chat_modal_keys.rs",
     ]);
@@ -279,7 +279,7 @@ fn the_wizard_commits_through_the_shared_setting_seam() {
             "the picker module never touches the file itself (`{forbidden}`)"
         );
     }
-    let keys = crate::ui_text_of(&[
+    let keys = crate::text_of(&[
         "crates/lca-ui/src/chat_keys.rs",
         "crates/lca-ui/src/chat_modal_keys.rs",
     ]);
@@ -297,7 +297,7 @@ fn the_wizard_commits_through_the_shared_setting_seam() {
 // row that cancels would pass even if a *third* arm also wrote.
 #[test]
 fn the_escape_arm_cancels_instead_of_committing() {
-    let keys = crate::ui_text_of(&[
+    let keys = crate::text_of(&[
         "crates/lca-ui/src/chat_keys.rs",
         "crates/lca-ui/src/chat_modal_keys.rs",
     ]);

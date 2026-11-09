@@ -167,13 +167,14 @@ fn the_crate_root_still_names_the_moved_prompts() {
 // Six guards started failing when `impl Chat` and the replay path moved: they
 // keyed on one **filename**, which a split legitimately divides, and grepping a
 // file that no longer holds the arm passes *vacuously* rather than failing. They
-// now read the module (`crate::ui_module_sources`). This row pins that the walk
+// now read the module (`crate::module_sources`, generically named since gh #543
+// gave it a second crate to serve). This row pins that the walk
 // has the property the guards need - it follows `mod` declarations, including
 // `#[path]` ones and a `name.rs` file's sibling `name/` directory - so a future
 // split cannot quietly empty a guard's input.
 #[test]
 fn the_module_walk_reaches_every_ceiling_split_sibling() {
-    let chat = crate::ui_module_sources("crates/lca-ui/src/chat.rs");
+    let chat = crate::module_sources("crates/lca-ui/src/chat.rs");
     let paths: Vec<&str> = chat.iter().map(|(path, _)| path.as_str()).collect();
     for expected in [
         "crates/lca-ui/src/chat/chat_input.rs",
@@ -186,7 +187,7 @@ fn the_module_walk_reaches_every_ceiling_split_sibling() {
              otherwise stops seeing the code a split moved there. Found: {paths:?}"
         );
     }
-    let transcript = crate::ui_module_sources("crates/lca-ui/src/transcript/mod.rs");
+    let transcript = crate::module_sources("crates/lca-ui/src/transcript/mod.rs");
     let paths: Vec<&str> = transcript.iter().map(|(path, _)| path.as_str()).collect();
     assert!(
         paths.contains(&"crates/lca-ui/src/transcript/replay_records.rs"),

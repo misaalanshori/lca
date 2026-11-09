@@ -636,7 +636,7 @@ fn space_and_enter_share_one_activate_helper() {
     // Gh #574: the picker arms moved to `chat_modal_keys.rs`, declared from the
     // crate root rather than from `chat_keys.rs`, so both roots are read - the
     // guard is about whichever file holds the arms today.
-    let source = crate::ui_text_of(&[
+    let source = crate::text_of(&[
         "crates/lca-ui/src/chat_keys.rs",
         "crates/lca-ui/src/chat_modal_keys.rs",
     ]);
@@ -680,7 +680,7 @@ fn space_and_enter_share_one_activate_helper() {
 // that the guard is the predicate and not a literal.
 #[test]
 fn the_space_arm_is_guarded_by_the_predicate_not_a_literal() {
-    let source = crate::ui_text_of(&[
+    let source = crate::text_of(&[
         "crates/lca-ui/src/chat_keys.rs",
         "crates/lca-ui/src/chat_modal_keys.rs",
     ]);

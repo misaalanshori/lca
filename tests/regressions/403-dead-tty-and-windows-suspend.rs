@@ -220,7 +220,7 @@ fn the_suspend_key_is_in_the_registry() {
     assert!(source.contains("def!(&[\"ctrl+z\"]"), "with pi's key");
     // Gh #574: the suspend arm lives in `chat/chat_input.rs` now (the input
     // ladder), so the row reads the module.
-    let handler = crate::ui_module_text("crates/lca-ui/src/chat.rs");
+    let handler = crate::module_text("crates/lca-ui/src/chat.rs");
     assert!(
         handler.contains("self.keybindings.matches(data, \"app.suspend\")"),
         "and the handler asks the registry rather than comparing bytes"
