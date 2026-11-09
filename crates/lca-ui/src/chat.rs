@@ -11,12 +11,11 @@
 
 use std::sync::Arc;
 
-use lca_protocol::{Record, TurnEvent, Usage};
+use lca_protocol::{Record, Usage};
 use lca_tui::engine::keybindings::KeybindingsManager;
-use lca_tui::engine::keys;
-use lca_tui::widgets::editor::{Editor, EditorEvent};
+use lca_tui::widgets::editor::Editor;
 
-use crate::chat_commands::{is_turn_boundary_command, provider_for};
+use crate::chat_commands::provider_for;
 use crate::chat_pickers::{
     GrantPicker, ModelPicker, ShellRun, ThemePicker, ThinkingPicker, TreePicker, TrustPicker,
 };
@@ -24,12 +23,20 @@ use crate::chat_pickers::{
 use crate::footer::Footer;
 
 use crate::separator::Separator;
-use crate::state::{Action, TurnStatusLine, UiOptions, UiState};
+use crate::state::{TurnStatusLine, UiOptions, UiState};
 // The tests reach `LoginNext` through this module's former import.
 #[cfg(test)]
 use crate::state::LoginNext;
+// Gh #574: the tests reach `TurnEvent` and `Action` through this module's
+// former imports, exactly as they reach `LoginNext` above. The library imports
+// moved with the code that used them; the test glob (`super::*`) needs them
+// here, and a test-side re-export is not a public-surface widening.
+#[cfg(test)]
+use crate::state::Action;
 use crate::theme::Theme;
 use crate::transcript::Transcript;
+#[cfg(test)]
+use lca_protocol::TurnEvent;
 
 /// One queued message (steering, ADR-0038). Carried by `Chat`; the agent
 /// semantics live in `lca-core`. A queued *command* (a slash command
@@ -569,110 +576,6 @@ impl Chat {
         }
     }
 
-    /// Start a turn's usage view (gh #327): called at the turn boundary so
-    /// a later turn's stream never inherits a previous one's numbers.
-    pub fn begin_turn_usage(&mut self) {
-        self.turn_usage = Usage::default();
-    }
-
-    /// Note one *tool step's* complete usage report inside a turn (gh
-    /// #327): distinct calls sum, which is what core's per-turn
-    /// `accumulate_usage` does, so the live turn view matches the total
-    /// `reap` later folds.
-    ///
-    /// This is deliberately distinct from [`Usage::absorb`], which the
-    /// stream handler uses: an `absorb` is a *refinement* within one call
-    /// (gh #276 — a later non-zero value wins), while a step is a new call
-    /// whose numbers add. Conflating them would either double-count a
-    /// refinement or lose a step's spend.
-    pub fn note_turn_step(&mut self, usage: &Usage) {
-        self.turn_usage.input = self.turn_usage.input.saturating_add(usage.input);
-        self.turn_usage.output = self.turn_usage.output.saturating_add(usage.output);
-        self.turn_usage.cache_read = self.turn_usage.cache_read.saturating_add(usage.cache_read);
-        self.turn_usage.cache_write = self
-            .turn_usage
-            .cache_write
-            .saturating_add(usage.cache_write);
-        self.turn_usage.cache_write_1h = self
-            .turn_usage
-            .cache_write_1h
-            .saturating_add(usage.cache_write_1h);
-        self.turn_usage.cost += usage.cost;
-    }
-
-    /// Fold one completed turn's total into the session totals (gh #327).
-    ///
-    /// This is the ONE implementation of "turn total into session total":
-    /// `TurnState::reap` calls it with core's authoritative
-    /// [`lca_protocol::TurnOutcome::usage`], and the record-replay path
-    /// calls it per historical record. Both add exactly once, so the
-    /// footer, `/session` and `/usage` report the true sum.
-    pub fn fold_turn_usage(&mut self, usage: &Usage) {
-        self.usage.input = self.usage.input.saturating_add(usage.input);
-        self.usage.output = self.usage.output.saturating_add(usage.output);
-        self.usage.cache_read = self.usage.cache_read.saturating_add(usage.cache_read);
-        self.usage.cache_write = self.usage.cache_write.saturating_add(usage.cache_write);
-        self.usage.cache_write_1h = self
-            .usage
-            .cache_write_1h
-            .saturating_add(usage.cache_write_1h);
-        self.usage.cost += usage.cost;
-        for (key, value) in &usage.extras {
-            self.usage.extras.insert(key.clone(), value.clone());
-        }
-    }
-
-    /// Consume a turn event into the transcript and the counters.
-    ///
-    /// Gh #462: the event belongs to a *tab*, not to the interface. When the
-    /// reader has switched away from the tab that owns the running turn, the
-    /// event is applied to that tab's own state (`with_tab_state`) - so the
-    /// stream keeps landing where it started, and the visible tab stays
-    /// untouched. On the owning tab this is a plain call with no swap.
-    pub fn on_turn_event(&mut self, event: TurnEvent) {
-        let ends_turn = matches!(event, TurnEvent::TurnEnded { .. });
-        let owner = self.turn_tab.unwrap_or(self.active_tab);
-        // The tab flags are interface-wide facts about a tab, so they are set
-        // outside the swap (they live on the tab itself, not on `Chat`).
-        if ends_turn && let Some(tab) = self.tabs.get_mut(owner) {
-            tab.running = false;
-            // Unread only when the settle happened off-screen: a turn the
-            // reader is watching needs no reminder.
-            tab.unread = owner != self.active_tab;
-        }
-        self.with_tab_state(owner, |chat| chat.apply_turn_event(event, owner));
-    }
-
-    /// Mark a turn as started, with the queue it drains at each boundary.
-    pub fn begin_turn(&mut self, steer: lca_protocol::SteerQueue) {
-        self.turn_running = true;
-        // Gh #462: the turn belongs to the tab that submitted it, for the rest
-        // of its life. This single line is what every later event is routed
-        // by, and what `Ctrl+C` consults.
-        self.turn_tab = Some(self.active_tab);
-        if let Some(tab) = self.tabs.get_mut(self.active_tab) {
-            tab.running = true;
-            tab.unread = false;
-        }
-        self.separator.working();
-        self.current_steer = Some(steer);
-        self.turn_status = Some(TurnStatusLine {
-            text: "running...".into(),
-        });
-        self.transcript.begin_assistant();
-    }
-
-    /// Take the submitted prompt the loop should run, if any.
-    pub fn take_submitted(&mut self) -> Option<String> {
-        self.submitted.take()
-    }
-
-    /// Take the queue marker the submitted prompt was handed in, after
-    /// [`Self::take_submitted`] (ADR-0038's record marker).
-    pub(crate) fn take_submitted_queue(&mut self) -> Option<lca_protocol::SubmitMode> {
-        self.submitted_queue.take()
-    }
-
     /// The current model label, resolved from the shared cell.
     pub fn model_label(&self) -> String {
         self.world
@@ -742,139 +645,6 @@ impl Chat {
         separator || loading || ticking || branch || self.expire_toasts()
     }
 
-    /// Handle one keypress: the modal first, then the pickers, the
-    /// bindings, and the editor.
-    pub fn handle_key(&mut self, data: &str) -> Action {
-        // Gh #210: any key dismisses a showing tooltip with zero
-        // latency (and rearms the hover clock).
-        self.dismiss_tooltip();
-        if let Some(action) = self.handle_modal_key(data) {
-            return action;
-        }
-
-        let key = keys::parse_key(data);
-
-        // gh #30: a running turn's Ctrl+C reaches the agent even while a
-        // picker owns the keyboard - the owner's own words in the row
-        // that guards this ("not even ctrl-c is able to close it"). The
-        // modal dispatch above keeps its own keys: this is pickers only.
-        //
-        // Gh #462: only a turn the reader can see is cancellable here. A
-        // background tab's turn is not - silently killing work nobody is
-        // looking at is how a `cargo test` gets thrown away. Switch to that
-        // tab and cancel there.
-        if self.cancellable_turn_visible() && self.keybindings.matches(data, "app.clear") {
-            return Action::CancelTurn;
-        }
-
-        if let Some(action) = self.handle_picker_key(data, key.as_deref()) {
-            return action;
-        }
-
-        // Escape cancels a running `!`/`!!` command (R4), after the pickers
-        // (a picker's Escape closes it instead).
-        if key.as_deref() == Some("escape")
-            && let Some(shell) = self.shell.as_ref()
-        {
-            (shell.cancel)();
-            self.say(format!("cancelling `{}`", shell.command));
-            return Action::Continue;
-        }
-
-        // The transcript search owns the keyboard while open (FR-UI-12) - and **only
-        // while it is the layer on top** (gh #373 gap 5). It used to take every key
-        // whenever a query was set, so a search running under a raised modal swallowed
-        // the modal's keys... except that the modal is dispatched earlier, so the real
-        // defect was the reverse: `render` decided padding from a predicate set while
-        // an overlay drew over the readout. Asking the stack makes "the search has the
-        // keyboard" and "the search is visible" the same fact.
-        if self.top_layer() == Some(crate::layer_stack::Layer::Search) {
-            return self.handle_search_key(data, key.as_deref());
-        }
-        if self.keybindings.matches(data, "app.tools.expand") {
-            // Gh #400 gap 2: the same key expands the startup header. One key for
-            // "show me the detail" - the header is the detail a reader reaches for
-            // before any card exists, and the brief is explicit that it must not
-            // get a second binding.
-            //
-            // Both toggles run: a session with tool cards *and* a header should
-            // expand both on one press, which is what a single "expand" key means.
-            let header = self.transcript.toggle_startup_resources();
-            self.transcript.toggle_tools_expanded();
-            let _ = header;
-            return Action::Continue;
-        }
-        if self.keybindings.matches(data, "app.thinking.toggle") {
-            self.transcript.toggle_thinking_expanded();
-            return Action::Continue;
-        }
-        // gh #209: session tabs - new, close (empty composer only,
-        // so Ctrl+W keeps deleting words with text), cycle, and
-        // Alt+digit direct jumps. Pickers own the keyboard while open
-        // (above), the editor owns the rest below.
-        if self.handle_tab_key(data, key.as_deref()) {
-            return Action::Continue;
-        }
-        if self.keybindings.matches(data, "app.search") {
-            self.search = Some(String::new());
-            self.search_matches.clear();
-            self.search_index = 0;
-            // The readout renders from state in the dock (gh #239).
-            return Action::Continue;
-        }
-        // gh #8 (EFG-003): pi's model cycle - Ctrl+P forward, Ctrl+Shift+P
-        // (Alt+P where a terminal drops the shift) backward. The host does
-        // the switch, so a cycle lands everywhere a `/model` pick does.
-        if self.keybindings.matches(data, "app.model.cycleForward")
-            || self.keybindings.matches(data, "app.model.cycleBackward")
-        {
-            let forward = self.keybindings.matches(data, "app.model.cycleForward");
-            self.say(crate::state::sanitize_block(
-                &match &self.world.options.hooks.cycle_model {
-                    Some(cycle) => cycle(forward),
-                    None => "model cycling is not available in this host".to_string(),
-                },
-            ));
-            return Action::Continue;
-        }
-        // Ctrl+X Ctrl+E opens the external editor (FR-UI-15).
-        if self.pending_ctrl_x {
-            self.pending_ctrl_x = false;
-            if key.as_deref() == Some("ctrl+e") {
-                return Action::ExternalEditor;
-            }
-        }
-        if self.keybindings.matches(data, "app.editor.external") {
-            self.pending_ctrl_x = true;
-            return Action::Continue;
-        }
-
-        // Gh #401 item 3: with a queue waiting, the dequeue key takes the
-        // queue back into the editor before anything else claims it -
-        // above the *editor*, because `Alt+Up` is also a cursor move there
-        // and the editor would swallow it. With no queue the key falls
-        // through to its other meanings (jump between prompts). The same
-        // restore path as the abort rescue and the dock's hint.
-        if (!self.pending.is_empty() || !self.compaction_queued.is_empty())
-            && self.keybindings.matches(data, "app.message.dequeue")
-        {
-            self.restore_pending();
-            return Action::Continue;
-        }
-
-        // The extension panel toggle is a host binding, not an extension's.
-        if self.keybindings.matches(data, "app.panel.toggle") {
-            self.world.panel_open = !self.world.panel_open;
-            return Action::Continue;
-        }
-
-        match self.editor.handle_key(data) {
-            EditorEvent::Submitted(text) => self.on_submit(text),
-            EditorEvent::Exit => Action::Exit,
-            EditorEvent::Changed | EditorEvent::None => self.global_key(data),
-        }
-    }
-
     /// Revoke one grant (S8): the store's own write path for an ad hoc
     /// grant, or the manual path the install-consent group names.
     pub(super) fn revoke_grant(&mut self, entry: &crate::state::GrantEntry) -> String {
@@ -893,276 +663,20 @@ impl Chat {
             None => "revoking grants is not available in this host".to_string(),
         }
     }
-
-    /// The `ui.theme` setting in force, for `/reload` (gh #387 gap 5): it must
-    /// re-apply what is active, not the picker default.
-    pub(crate) fn theme_setting(&self) -> &str {
-        &self.theme_setting
-    }
-
-    /// Whether the theme follows terminal detection: a `system` theme is rebuilt
-    /// from the OSC 11 answer, so re-applying it by name on reload would drop a
-    /// background the terminal already reported.
-    pub(crate) fn theme_follows_detection(&self) -> bool {
-        self.theme_auto
-    }
-
-    /// Install a new keybinding manager and keep every hint in step (gh #410).
-    ///
-    /// Assigning `self.keybindings` alone rebinds what the interface *accepts*
-    /// while leaving the labels on the manager they were rendered with, which is
-    /// the same lie in the opposite direction. The transcript is told too, and it
-    /// drops its cached frames because a hint's text is part of one.
-    pub fn set_keybindings(&mut self, keybindings: Arc<KeybindingsManager>) {
-        self.transcript.set_keybindings(keybindings.clone());
-        self.editor.set_keybindings(keybindings.clone());
-        self.keybindings = keybindings;
-    }
-
-    /// The key map the interface is accepting keys with.
-    ///
-    /// The reader half of [`Self::set_keybindings`]: what `/hotkeys` prints and what
-    /// the editor does both come from this one object, which is the promise gh #332
-    /// broke when the field was public and could be replaced alone.
-    pub fn keybindings_manager(&self) -> &Arc<KeybindingsManager> {
-        &self.keybindings
-    }
-
-    /// Apply a theme by name and remember it (S5: built-in or custom file).
-    /// Picking `system` re-arms detection-following (gh #10); any other
-    /// explicit pick clears it.
-    pub(super) fn set_theme(&mut self, name: &str) {
-        let (theme, notice) =
-            crate::theme::load_all(name, crate::theme::detect_scheme(), &self.theme_extra_dirs);
-        self.theme = theme;
-        // The transcript caches styled lines per entry: a new palette
-        // invalidates every one of them, or the bands keep the old colors.
-        self.transcript.invalidate();
-        self.theme_name = name.to_string();
-        // gh #10: a `system` pick follows detection from here on, so a
-        // later OSC 11 / DSR answer rebuilds it; the setting travels
-        // with the name for the same reason.
-        self.theme_setting = name.to_string();
-        self.theme_auto = name == "system";
-        if let Some(notice) = notice {
-            self.say(notice);
-        }
-    }
-
-    /// Apply a terminal color-scheme detection (R10): only while the theme
-    /// still follows detection, so an explicit pick wins. A `system`
-    /// theme rebuilds from the last reported background (gh #10), so a
-    /// scheme-only answer never drops a known background.
-    pub fn apply_detected_scheme(&mut self, scheme: lca_tui::engine::colors::ColorScheme) {
-        if !self.theme_auto || !self.theme_query.accepts_reply() {
-            return;
-        }
-        let (theme, _) = if self.theme_setting == "system" {
-            (
-                crate::theme::Theme::system_theme(self.terminal_bg, Some(scheme)),
-                None,
-            )
-        } else {
-            crate::theme::load_all(&self.theme_setting, Some(scheme), &self.theme_extra_dirs)
-        };
-        self.theme_name = theme.name.clone();
-        self.theme = theme;
-        self.transcript.invalidate();
-    }
-
-    /// Whether the startup colour query is still accepting replies (gh #379 gap 1).
-    pub fn theme_query_open(&self) -> bool {
-        self.theme_query.is_open()
-    }
-
-    /// Close the startup colour query on the `DA1` sentinel (gh #379 gap 1).
-    pub fn close_theme_query(&mut self) {
-        self.theme_query.close();
-    }
-
-    /// Apply a terminal background answer (gh #10): the OSC 11 reply's
-    /// own color. A `system` theme rebuilds from it and repaints;
-    /// anything else takes the reply's scheme through the existing
-    /// detection path.
-    pub fn apply_terminal_background(&mut self, background: lca_tui::engine::colors::RgbColor) {
-        if !self.theme_query.accepts_reply() {
-            return;
-        }
-        self.terminal_bg = Some(background);
-        // Gh #387: `theme_auto` covers `""`/`auto`/`system`; testing the literal
-        // `"system"` meant the default theme never rebuilt from a probed background.
-        if self.theme_auto {
-            self.theme = crate::theme::Theme::system_theme(Some(background), None);
-            self.theme_name = self.theme.name.clone();
-            self.transcript.invalidate();
-        } else {
-            self.apply_detected_scheme(background.scheme());
-        }
-    }
-
-    /// Preview a theme without committing it (FR-UI-17).
-    pub(super) fn preview_theme(&mut self, index: usize) {
-        if let Some(name) = self.theme_names.get(index).cloned() {
-            let (theme, _) = crate::theme::load_all(
-                &name,
-                crate::theme::detect_scheme(),
-                &self.theme_extra_dirs,
-            );
-            self.theme = theme;
-            self.transcript.invalidate();
-        }
-    }
-
-    /// Keys the editor does not claim (the escape ladder, cancel, exit).
-    fn global_key(&mut self, data: &str) -> Action {
-        // Prompt jump (FR-UI-11): the authoritative matcher, since the
-        // arrow-modifier dialects are not all round-tripped by `parse_key`.
-        if self.keybindings.matches(data, "app.prompt.previous") {
-            self.jump_prompt(-1);
-            return Action::Continue;
-        }
-        if self.keybindings.matches(data, "app.prompt.next") {
-            self.jump_prompt(1);
-            return Action::Continue;
-        }
-        if self.keybindings.matches(data, "app.clear") {
-            return if self.cancellable_turn_visible() {
-                Action::CancelTurn
-            } else if !self.editor.text().is_empty() {
-                // gh #225: the hint promises `clear/exit` - text
-                // present clears (and stands down an armed exit).
-                self.editor.set_text("");
-                self.world.ctrl_c_armed = false;
-                Action::Continue
-            } else if self.world.ctrl_c_armed {
-                self.world.ctrl_c_armed = false;
-                Action::Exit
-            } else {
-                self.world.ctrl_c_armed = true;
-                Action::Continue
-            };
-        }
-        // Gh #132: pi's double-escape sits ahead of the interrupt arm:
-        // a lone Escape with an empty editor re-arms the 500 ms window
-        // (the editor consumed its own Escapes on the way here: popup,
-        // search, non-empty buffer). A running turn keeps its cancel
-        // semantics, and a non-empty editor keeps the disarm below, so
-        // this never fires mid-turn or off a clearing key.
-        if !self.turn_running
-            && keys::parse_key(data).as_deref() == Some("escape")
-            && self.editor.text().trim().is_empty()
-        {
-            // The interrupt arm's disarm rides along: every Escape
-            // still stands down an armed Ctrl+C.
-            self.world.ctrl_c_armed = false;
-            return self.double_escape();
-        }
-        // Gh #403 gap 4: a suspend is about the process, not the prompt.
-        if self.keybindings.matches(data, "app.suspend") {
-            return Action::Suspend;
-        }
-        if self.keybindings.matches(data, "app.interrupt") {
-            return if self.cancellable_turn_visible() {
-                Action::CancelTurn
-            } else {
-                self.world.ctrl_c_armed = false;
-                Action::Continue
-            };
-        }
-        if self.keybindings.matches(data, "app.message.followUp")
-            && (self.turn_running || self.compacting)
-        {
-            // Queue a follow-up for turn end (ADR-0038) - unless it is a
-            // slash command, which dispatches as a command, never as
-            // model text (composer-polish fold-in). Gh #401: the same key
-            // works during a compaction, where the message parks in the
-            // compaction queue with its follow-up mode intact.
-            let text = self.editor.submit();
-            if text.trim().is_empty() {
-                return Action::Continue;
-            }
-            if text.trim().starts_with('/') {
-                if is_turn_boundary_command(text.trim()) {
-                    self.queue_command(text, lca_protocol::SubmitMode::FollowUp);
-                    return Action::Continue;
-                }
-                return self.dispatch_command(text.trim());
-            }
-            if self.compacting && !self.turn_running {
-                self.queue_for_compaction(text, lca_protocol::SubmitMode::FollowUp);
-                return Action::Continue;
-            }
-            self.queue_submit(text, lca_protocol::SubmitMode::FollowUp);
-            return Action::Continue;
-        }
-        Action::Continue
-    }
-
-    /// Handle a submitted editor buffer.
-    fn on_submit(&mut self, text: String) -> Action {
-        self.submit_text(text, lca_protocol::SubmitMode::Steer)
-    }
-
-    /// Submit a buffer in one mode (gh #401). `Enter` submits as a steer,
-    /// `Alt+Enter` as a follow-up; the mode only matters when the submit
-    /// cannot start a turn, where it decides how the queue drains.
-    fn submit_text(&mut self, text: String, mode: lca_protocol::SubmitMode) -> Action {
-        let trimmed = text.trim();
-        if trimmed.is_empty() {
-            return Action::Continue;
-        }
-        // `!cmd` / `!!cmd` shell mode (FR-UI-14).
-        if trimmed.starts_with('!') {
-            return self.run_shell_mode(trimmed);
-        }
-        if trimmed.starts_with('/') {
-            // A slash command typed mid-turn never reaches the model as
-            // text: turn-boundary commands queue as commands for turn
-            // end, the rest dispatch at once (composer-polish fold-in).
-            if self.turn_running && is_turn_boundary_command(trimmed) {
-                self.queue_command(trimmed.to_string(), lca_protocol::SubmitMode::Steer);
-                return Action::Continue;
-            }
-            return self.dispatch_command(trimmed);
-        }
-        // Gh #401 (pi's `queueCompactionMessage`): a compaction owns the
-        // session, so a submit during it parks in the compaction queue
-        // and flushes when it ends. Extension commands above still run
-        // immediately, which is pi's rule and keeps `/...` responsive.
-        if self.compacting && !self.turn_running {
-            self.queue_for_compaction(text, mode);
-            return Action::Continue;
-        }
-        // A turn needs a model; say so rather than failing deep in the
-        // provider with a transport error.
-        if self.model_label().trim().is_empty() {
-            self.say(
-                "No model is active. Use /login to sign in, or /model to choose one.".to_string(),
-            );
-            return Action::Continue;
-        }
-        // ADR-0038: while a turn runs, a submitted message queues rather
-        // than starting a second turn. Enter steers (injected at the next
-        // boundary); Alt+Enter queues a follow-up for turn end.
-        if self.turn_running {
-            self.queue_submit(text, mode);
-            return Action::Continue;
-        }
-        self.transcript.push_user(text.clone());
-        self.submitted_queue = None;
-        self.submitted = Some(text);
-        Action::Submit
-    }
-    /// Put the separator into a compaction with a reason (gh #388 gap 2
-    /// tests). The live path calls the same setter from `poll_compact`.
-    #[cfg(test)]
-    pub(crate) fn mark_compacting_for_test(&mut self, reason: crate::CompactionReason) {
-        self.separator.compacting(reason);
-    }
 }
 
 mod chat_highlight;
 pub(crate) use chat_highlight::{highlight_matches, strip_ansi};
+
+// The turn lifecycle and the theme/keybinding group live in sibling files
+// (gh #574): an inherent `impl Chat` may be partitioned this way, so the
+// struct keeps its one definition and every method keeps its path.
+mod chat_input;
+mod chat_theme_keys;
+mod chat_turn_state;
+// Gh #388 gap 2's test seam, beside the lifecycle it fakes (gh #574).
+#[cfg(test)]
+mod chat_turn_test_seams;
 
 #[cfg(test)]
 #[path = "chat_offset_tests.rs"]

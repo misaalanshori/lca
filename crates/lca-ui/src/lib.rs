@@ -5,6 +5,14 @@
 //! `lca-session`, `lca-protocol`, and `lca-tui`; `lca-tui` may not depend
 //! on any of them. The theme, transcript, footer, chat composition, and the
 //! interactive loop live here.
+//!
+//! `Chat`'s inherent `impl` is partitioned across sibling files under
+//! `src/chat/` - the turn lifecycle (`chat_turn_state.rs`), the input ladder
+//! (`chat_input.rs`), the theme and keybinding group (`chat_theme_keys.rs`) -
+//! because gate 11 caps a file at 1,200 lines and `chat.rs` had reached it.
+//! Rust lets an inherent impl live in any module of the same crate, so the
+//! struct keeps one definition and every method keeps the path a caller
+//! already used; what a split may move is code, never ownership (gh #574).
 
 pub mod autocomplete_issues;
 pub mod autocomplete_provider;
