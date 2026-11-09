@@ -139,7 +139,12 @@ references), then pi's source.
   a split that forces a `pub(crate)` widening picked the wrong seam.
   The same applies to a **module**: `src/ext.rs` becomes `src/ext/mod.rs` plus
   siblings with no change to `crate::ext::<name>`, because a `x.rs` and an
-  `x/mod.rs` *are* the same module (gh #543). Two traps that shape carries:
+  `x/mod.rs` *are* the same module (gh #543). In `tests/` the shape costs one
+  thing: an integration-test root is a crate root, so its siblings need `#[path]`
+  and they gain a module segment in the reported test path (`provider::parity::<row>`).
+  Prefer that to `include!`, which would keep the names but hide the rows from
+  `crate::module_sources`; state the normalised comparison in the commit (gh #552).
+  Two traps that shape carries:
   `pub(super)` in `tui/mod.rs` means `pub(crate)` (it is the crate root's
   child), so a `pub(super)` written in `tui/cells.rs` *narrows* a surface and
   must be `pub(crate)`; and a `mod tests` block left in the barrel keeps every
