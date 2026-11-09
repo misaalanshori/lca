@@ -104,7 +104,9 @@ fn exactly_one_function_decides_the_cause() {
         "crates/lca-cli/src/tui/display.rs",
         "crates/lca-cli/src/tui/hooks.rs",
     ] {
-        let text = code_only(&read(other));
+        // Gh #543: an *absence* check over a module that may be partitioned -
+        // read the module, or "the file does not contain it" reads like health.
+        let text = code_only(&crate::module_text(other));
         assert!(
             !text.contains("[skill instructions]") && !text.contains("[instructions changed]"),
             "{other} must not re-read the markers"

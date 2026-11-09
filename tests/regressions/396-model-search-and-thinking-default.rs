@@ -109,7 +109,8 @@ fn the_unfiltered_order_is_current_then_default_then_alphabetical() {
 // the same `persist_setting` call on the same config file.
 #[test]
 fn the_thinking_default_uses_the_same_persist_path_as_the_model_default() {
-    let hooks = code_only(&read("crates/lca-cli/src/tui/hooks.rs"));
+    // Gh #543: read the module, not one file of a possible partition.
+    let hooks = code_only(&crate::module_text("crates/lca-cli/src/tui/hooks.rs"));
     let model = hooks
         .find("save_default_model: Some")
         .expect("the model save exists");

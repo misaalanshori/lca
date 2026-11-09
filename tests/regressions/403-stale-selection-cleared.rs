@@ -252,11 +252,27 @@ fn the_hint_is_printed_after_the_session_is_closed() {
         "the hint follows the save: a session that failed to write must not be advertised"
     );
     // And nothing else prints it, so the seam cannot be bypassed by a call site.
-    let mod_rs = read("crates/lca-cli/src/tui/mod.rs");
-    assert!(
-        !mod_rs.contains("println!(\"{hint}\")"),
-        "the print lives in close(), not at the exit call sites"
-    );
+    //
+    // Gh #543: the row now reads the whole `tui` module, because a partition
+    // (`cells.rs`, `open.rs`) is a call site too and a check against one
+    // *filename* would read as health while a print sat next door. The file that
+    // legitimately owns the print is `close.rs`, so it is the one file excluded -
+    // the property is exactly "every other file in the entry path is silent",
+    // which is what the original single-file check meant with one file in the
+    // module. (`close.rs` is asserted to hold it, positively, just above: the
+    // hint is built and printed through `exit_resume_hint`.)
+    let others: Vec<String> = crate::module_sources("crates/lca-cli/src/tui/mod.rs")
+        .into_iter()
+        .filter(|(path, _)| !path.ends_with("/close.rs"))
+        .map(|(_, text)| text)
+        .collect();
+    assert!(!others.is_empty(), "the walk found the entry path's files");
+    for text in &others {
+        assert!(
+            !text.contains("println!(\"{hint}\")"),
+            "the print lives in close(), not at the exit call sites"
+        );
+    }
 }
 
 // Verifies: gh #403 gap 2 - **the id comes from the save, not the launcher.** The

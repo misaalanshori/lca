@@ -387,7 +387,9 @@ fn every_frame_carries_exactly_one_marker_by_construction() {
 #[test]
 fn the_hardware_cursor_key_reaches_the_caret_form() {
     // 1. The value crosses from config into the tunable.
-    let hooks = read("crates/lca-cli/src/tui/hooks.rs");
+    // Gh #543: `tui/hooks.rs` may be partitioned by the ceiling split, so the
+    // row reads the module - a fill in a sibling is the same fill.
+    let hooks = crate::module_text("crates/lca-cli/src/tui/hooks.rs");
     let fill = hooks
         .find("show_hardware_cursor: config.ui_show_hardware_cursor()")
         .expect(

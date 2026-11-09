@@ -224,7 +224,10 @@ fn the_reasoning_type_gates_the_artefact_renderer() {
 // arm here would silently label a reasoning run as an answer.
 #[test]
 fn the_extension_adapter_forwards_the_reasoning_type() {
-    let adapter = read("crates/lca-cli/src/tui/mod.rs");
+    // Gh #543: read the module - `chat/`-style partitions of `tui/mod.rs` now
+    // exist (`cells.rs`, `open.rs`), and a row that reads one filename stops
+    // seeing the code a split moves there.
+    let adapter = crate::module_text("crates/lca-cli/src/tui/mod.rs");
     assert!(
         adapter.contains("lca_ui::MarkdownMessageType::AssistantThinking"),
         "the adapter maps the reasoning type explicitly"

@@ -118,7 +118,8 @@ fn the_genuine_warning_is_still_emitted() {
 // prompt appeared, and disappeared once the check was added.
 #[test]
 fn the_trust_prompt_uses_the_same_check() {
-    let hooks = read("crates/lca-cli/src/tui/hooks.rs");
+    // Gh #543: read the module (see `crates::module_text`).
+    let hooks = crate::module_text("crates/lca-cli/src/tui/hooks.rs");
     assert!(
         hooks.contains(
             "fn project_extensions_wait(cwd: &std::path::Path, data_dir: &std::path::Path)"

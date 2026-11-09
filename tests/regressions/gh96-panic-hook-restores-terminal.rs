@@ -56,8 +56,12 @@ fn gh96_hook_installation_covers_every_entry_path() {
             include_str!("../../crates/lca-cli/src/main.rs"),
         ),
         (
+            // Gh #543: the TUI entry is a module now (`cells.rs`, `open.rs`
+            // beside `mod.rs`), so the row reads the module through the same
+            // walk every other structural guard uses - an `include_str!` of one
+            // filename is the vacuous shape this cycle removed.
             "crates/lca-cli/src/tui/mod.rs",
-            include_str!("../../crates/lca-cli/src/tui/mod.rs"),
+            &crate::module_text("crates/lca-cli/src/tui/mod.rs"),
         ),
         (
             "crates/lca-cli/src/headless.rs",

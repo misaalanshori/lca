@@ -57,7 +57,7 @@ fn read(rel: &str) -> String {
 // reopens and nothing else in this feature matters.
 #[test]
 fn the_terminal_is_claimed_before_the_load() {
-    let module = read("crates/lca-cli/src/tui/mod.rs");
+    let module = crate::module_text("crates/lca-cli/src/tui/mod.rs");
     // The claim itself lives in `startup::claim_terminal` (moved there when
     // `mod.rs` crossed the 1,200-line ceiling); the ordering is what matters,
     // so the guard follows the call, not the definition.
@@ -246,7 +246,7 @@ fn the_launch_reads_the_registrys_collisions() {
         startup.contains("collision_summary(") && startup.contains("registry.collisions()"),
         "the header builder converts the registry's recorded collisions"
     );
-    let module = read("crates/lca-cli/src/tui/mod.rs");
+    let module = crate::module_text("crates/lca-cli/src/tui/mod.rs");
     assert!(
         module.contains("startup::launch_header("),
         "and the launch calls it"
@@ -356,7 +356,7 @@ fn the_tmux_probe_starts_before_the_load_that_hides_it() {
         "the probe is spawned while the terminal is claimed, before the load:\n{claim}"
     );
     // And the launch actually uses the pair, rather than dropping the cell.
-    let module = read("crates/lca-cli/src/tui/mod.rs");
+    let module = crate::module_text("crates/lca-cli/src/tui/mod.rs");
     assert!(
         module.contains("let (early_input, tmux_doctor) = startup::claim_terminal();"),
         "the launch keeps the cell"
@@ -403,7 +403,7 @@ fn the_doctor_reports_into_the_expanded_header_only() {
     );
 
     // And the transcript is not a route: nothing in the launch path pushes it.
-    let module = read("crates/lca-cli/src/tui/mod.rs");
+    let module = crate::module_text("crates/lca-cli/src/tui/mod.rs");
     assert!(
         !module.contains("push_notice(tmux_doctor") && !module.contains("note_tmux"),
         "no transcript path carries it"

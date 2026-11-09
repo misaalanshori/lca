@@ -41,6 +41,28 @@ fn production_source(rel: &str) -> String {
     }
 }
 
+/// The production source of a **module** a ceiling split may have partitioned
+/// (gh #543), as `(real path, text)` pairs so a row can name the file a hit is
+/// in and de-duplicate one file reached by two roots.
+///
+/// `crate::module_sources` walks the module's own `mod` declarations, so
+/// `tui/mod.rs` is read together with every sibling it declares; `#[cfg(test)]`
+/// children are skipped by the walk, and each file's own trailing test module is
+/// cut here - the same property [`production_source`] gives a single file.
+fn production_module(rel: &str) -> Vec<(String, String)> {
+    crate::module_sources(rel)
+        .into_iter()
+        .filter(|(path, _)| !path.contains("_tests.rs"))
+        .map(|(path, text)| {
+            let text = match text.find("\n#[cfg(test)]") {
+                Some(at) => text[..at].to_string(),
+                None => text,
+            };
+            (path, text)
+        })
+        .collect()
+}
+
 /// The body of one function, from its signature to the next line that closes it
 /// at the same indent.
 fn function_body<'a>(source: &'a str, signature: &str) -> &'a str {
@@ -71,7 +93,12 @@ fn the_cli_fills_the_tunable_from_the_configured_value() {
 // second construction site is how the same class of gap comes back.
 #[test]
 fn one_production_tuning_and_no_second_fill() {
-    let mut sites = Vec::new();
+    // Gh #543: `tui/mod.rs` now declares `cells.rs` and `open.rs`, so each root
+    // is read as a **module** - a second fill in a sibling would be exactly the
+    // drift this row exists to catch. Files are keyed by their real path, so
+    // `mod.rs` re-reading `hooks.rs` counts once, not twice.
+    let mut seen: Vec<String> = Vec::new();
+    let mut sites: Vec<(String, usize)> = Vec::new();
     for rel in [
         "crates/lca-cli/src/tui/hooks.rs",
         "crates/lca-cli/src/tui/mod.rs",
@@ -79,18 +106,23 @@ fn one_production_tuning_and_no_second_fill() {
         "crates/lca-cli/src/tui/runner.rs",
         "crates/lca-cli/src/tui/startup.rs",
     ] {
-        let source = production_source(rel);
-        for (index, _) in source.match_indices("DisplayTuning {") {
-            // A *construction* is what this row counts, so a return type in a
-            // signature (`-> lca_ui::state::DisplayTuning {`) is not one: the
-            // brace there opens the function body.
-            let line_before = source[..index]
-                .rsplit_once('\n')
-                .map_or(&source[..index], |(_, tail)| tail);
-            if line_before.contains("->") {
+        for (path, source) in production_module(rel) {
+            if seen.contains(&path) {
                 continue;
             }
-            sites.push(format!("{rel}@{index}"));
+            seen.push(path.clone());
+            for (index, _) in source.match_indices("DisplayTuning {") {
+                // A *construction* is what this row counts, so a return type in a
+                // signature (`-> lca_ui::state::DisplayTuning {`) is not one: the
+                // brace there opens the function body.
+                let line_before = source[..index]
+                    .rsplit_once('\n')
+                    .map_or(&source[..index], |(_, tail)| tail);
+                if line_before.contains("->") {
+                    continue;
+                }
+                sites.push((path.clone(), index));
+            }
         }
     }
     assert_eq!(
@@ -100,7 +132,7 @@ fn one_production_tuning_and_no_second_fill() {
          drift: {sites:?}"
     );
     assert!(
-        sites[0].starts_with("crates/lca-cli/src/tui/hooks.rs"),
+        sites[0].0.starts_with("crates/lca-cli/src/tui/hooks.rs"),
         "and it is the one the interface's hook calls: {sites:?}"
     );
 }

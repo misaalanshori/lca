@@ -22,10 +22,13 @@ mod hooks;
 mod hooks_mcp;
 mod hub;
 pub(crate) use hub::OFFICIAL_CATALOG_URL;
+mod cells;
 mod label_hooks;
 pub mod login;
 mod model_rows;
 mod model_select;
+// Gh #543: the pre-interface half of the composition root.
+mod open;
 mod pending_step;
 mod persona;
 mod runner;
@@ -47,6 +50,18 @@ use lca_tools::ToolExecutor;
 use lca_ui::{RegionInteractor, RegionRenderer};
 
 use crate::lock;
+
+// Gh #543: the pre-interface helpers moved to `cells.rs`/`open.rs`; re-exported
+// here because sibling modules and one test read `super::<name>`, exactly as
+// they did when the definitions lived at the bottom of this file.
+// `pub(in crate::tui)`: the same reach a private item at this file used to have
+// for its descendants, so nothing is widened by the move.
+pub(in crate::tui) use cells::{
+    adopt_login_identity, agent_config_for, live_cells, model_context_window,
+};
+// Was `pub(super)` in this file, which is `pub(crate)`; see `cells.rs`.
+pub(crate) use cells::apply_models_scope;
+pub(in crate::tui) use open::{region_interactor, region_renderer, resolve_model_id};
 
 /// Collect pre-parse markdown transforms from extension handles (gh
 /// #12): each native handle's optional Rust-side transform becomes one
@@ -480,124 +495,6 @@ impl lca_permissions::DialogPrompt for SessionDialogs {
 /// typed field values, replayed to re-run discovery after the grant (#4).
 type LoginAnswer = (String, String, std::collections::BTreeMap<String, String>);
 
-/// The live cells the footer and `/model`/`/thinking` share.
-struct Cells {
-    model: Arc<Mutex<ModelChoice>>,
-    label: Arc<Mutex<String>>,
-    context_window: Arc<Mutex<u64>>,
-    thinking: Arc<Mutex<Option<String>>>,
-    identity: Arc<Mutex<String>>,
-}
-
-/// Build the live cells from the resolved model (FR-UI-20, R1). `identity`
-/// is the preset id when the login stored one, else the extension name (E5).
-fn live_cells(
-    identity: &str,
-    model_id: &str,
-    context_window: u32,
-    thinking: Option<String>,
-) -> Cells {
-    Cells {
-        model: Arc::new(Mutex::new(ModelChoice {
-            id: model_id.to_string(),
-            window: context_window,
-        })),
-        label: Arc::new(Mutex::new(if model_id.is_empty() {
-            String::new()
-        } else {
-            format!("{identity}/{model_id}")
-        })),
-        context_window: Arc::new(Mutex::new(u64::from(context_window))),
-        thinking: Arc::new(Mutex::new(thinking)),
-        identity: Arc::new(Mutex::new(identity.to_string())),
-    }
-}
-
-/// Adopt a finished login's identity into the live cell (E5, the cycle-6
-/// drive's regression). The login updated only the label, so a later
-/// `/model` switch read the stale startup identity and the footer reverted
-/// from the login preset to the extension name. Named so the
-/// mid-session-login regression is testable without a live provider.
-fn adopt_login_identity(identity_cell: &Arc<Mutex<String>>, identity: &str) {
-    *identity_cell
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = identity.to_string();
-}
-
-/// The active model's context window, or 0 when the provider does not
-/// publish one (the threshold check then skips, FR-SESS-4).
-fn model_context_window(provider: &dyn Provider, model_id: &str) -> u32 {
-    provider
-        .list_models()
-        .iter()
-        .find(|model| model.id == model_id)
-        .map(|model| model.context_window)
-        .unwrap_or(0)
-}
-
-/// Swap the live configuration scope (gh #204): the `/scoped-models`
-/// checklist writes through this cell, so the model cycle reads the
-/// live scope without a restart. `/reload` swaps the whole cell.
-pub(super) fn apply_models_scope(config: &Mutex<Config>, ids: Vec<String>) {
-    crate::lock(config).set_models_enabled(ids);
-}
-
-/// The agent config for the resolved model and registry.
-#[allow(clippy::too_many_arguments)]
-fn agent_config_for(
-    config: &Config,
-    provider_name: &str,
-    model_id: &str,
-    context_window: u32,
-    image_policy: lca_tools::ImagePolicy,
-    registry: &Arc<ExtensionRegistry>,
-    completion_backend: Option<Arc<dyn lca_tools::CompletionBackend>>,
-    cwd: &Path,
-    flags: &crate::CliFlags,
-    trusted: bool,
-) -> Result<AgentConfig, String> {
-    // gh #271: advertise what the run offers, from the same resolution the
-    // request's declaration uses (never a second filter).
-    let effective = crate::prompt::effective_tools(registry);
-    let names: Vec<&str> = effective.iter().map(String::as_str).collect();
-    let system_prompt =
-        crate::prompt::agent_system_prompt_for(cwd, model_id, flags, trusted, &names)?;
-    Ok(AgentConfig {
-        provider: provider_name.to_string(),
-        model: model_id.to_string(),
-        image_policy,
-        retry_limit: config.provider_retry_limit() as u32,
-        retry_base_delay: std::time::Duration::from_millis(config.provider_retry_base_delay_ms()),
-        retry_max_delay: std::time::Duration::from_millis(config.provider_retry_max_delay_ms()),
-        max_iterations: config.tool_max_iterations() as u32,
-        extensions: registry.clone(),
-        steering_mode: lca_protocol::QueueMode::parse(config.queue_steering_mode())
-            .unwrap_or_default(),
-        compaction_threshold: config.compaction_threshold(),
-        compaction_enabled: config.compaction_enabled(),
-        compaction_reserve_tokens: config.compaction_reserve_tokens(),
-        compaction_keep_recent_tokens: config.compaction_keep_recent_tokens(),
-        model_context_window: context_window,
-        completion_backend,
-        system_prompt,
-        skills_roots: crate::skills_roots(cwd, flags),
-        // Gh #217: the startup prompt sources, re-scanned every turn
-        // for unified-diff updates (empty with `-nc`; the trust rule
-        // matches the prompt build above).
-        instruction_sources: crate::prompt::context_sources(
-            &crate::data_dir(),
-            cwd,
-            trusted,
-            flags.no_context_files,
-        ),
-        instruction_baseline: Default::default(),
-        skills_inject_matched: config.skills_inject_matched(),
-        edit_requires_read: config.tool_edit_requires_read(),
-        auto_resize_images: config.images_auto_resize(),
-        ..AgentConfig::default()
-    })
-}
-
 /// One provider generation a session runs on (gh #177).
 struct LiveTarget {
     /// The active provider extension name.
@@ -656,7 +553,7 @@ impl Ui {
         flags: &crate::CliFlags,
         (early_input, tmux_doctor): (lca_ui::run_early_input::EarlyInput, tmux_doctor::Cell),
     ) -> anyhow::Result<Ui> {
-        let Opened {
+        let open::Opened {
             _volatile: volatile,
             data,
             store,
@@ -670,7 +567,7 @@ impl Ui {
             initial_records,
             mut initial_tail,
             update_notice,
-        } = open(cwd, resume, fork, session_id, yolo, allow_host, flags)?;
+        } = open::open(cwd, resume, fork, session_id, yolo, allow_host, flags)?;
         // gh #69: the session temp follows the store root (volatile runs
         // keep everything under their temp dir).
         let session_data_root = volatile
@@ -1000,201 +897,4 @@ impl Ui {
             mcp_warnings: Arc::new(mcp_warnings),
         })
     }
-}
-/// The session-and-store setup, before the extension registry exists.
-struct Opened {
-    data: PathBuf,
-    /// Held for a volatile run: dropping it removes the temp store.
-    _volatile: Option<crate::invoke::VolatileStore>,
-    store: Arc<SessionStore>,
-    config: Config,
-    grants: Arc<Mutex<GrantStore>>,
-    trusted: bool,
-    current_session: Arc<Mutex<Session>>,
-    session_id: String,
-    provider_name: String,
-    initial_head: Vec<String>,
-    initial_records: Vec<lca_protocol::Record>,
-    initial_tail: Vec<String>,
-    update_notice: Arc<std::sync::OnceLock<String>>,
-}
-
-/// Open the store, the grant store, the merged configuration, and the
-/// session to show (resumed or fresh).
-fn open(
-    cwd: &Path,
-    resume: Option<&str>,
-    fork: Option<&str>,
-    session_id: Option<&str>,
-    yolo: bool,
-    allow_host: &[String],
-    flags: &crate::CliFlags,
-) -> anyhow::Result<Opened> {
-    let data = crate::data_dir();
-    // gh #69: a volatile run stores sessions in a temp dir dropped with
-    // the interface; grants stay on the real store (trust is not
-    // session state).
-    let volatile = flags
-        .no_session
-        .then(crate::invoke::VolatileStore::create)
-        .transpose()
-        .map_err(|err| anyhow::anyhow!("cannot create a volatile session store: {err}"))?;
-    let session_root = volatile
-        .as_ref()
-        .map(|volatile| volatile.root().to_path_buf())
-        .unwrap_or_else(|| data.clone());
-    let store = Arc::new(SessionStore::new(session_root.clone()));
-    let grants = Arc::new(Mutex::new(
-        GrantStore::open(&data.join("grants.json"))
-            .map_err(|err| anyhow::anyhow!("cannot open the grant store: {err}"))?,
-    ));
-    // gh #80: CLI trust overrides land before the config merge, so the
-    // project-file gate sees them.
-    let trust_default = crate::trust_default_fallback();
-    crate::apply_startup_trust(&mut lock(&grants), cwd, flags, &trust_default);
-    let trusted = lock(&grants).is_trusted(cwd);
-    let config = crate::load_config_flags(cwd, &lock(&grants), false, yolo, flags)?;
-    // Today's update check, if enabled and due: stamped, then spawned - the
-    // startup path never waits on it (FR-CFG-6), and the status line picks
-    // the finding up from the shared cell once it lands.
-    let update_notice = Arc::new(std::sync::OnceLock::new());
-    // gh #71: `--offline` silences automatic network activity; the
-    // model request itself still goes out (that is the run).
-    if !flags.offline {
-        crate::update::spawn(config.update_check(false), Some(update_notice.clone()));
-    }
-    let session =
-        crate::resolve_session(&store, cwd, resume, fork, session_id, flags.name.as_deref())
-            .map_err(|err| anyhow::anyhow!("{err}"))?;
-    let current_session = Arc::new(Mutex::new(session.clone()));
-    let provider_name = config.provider().to_string();
-    let (mut initial_head, initial_records) = initial_view(&store, &session);
-    // gh #122: a fresh session replays no session-start (nothing
-    // written yet), but the orientation header still shows - from
-    // the working directory, not the log.
-    if initial_records.is_empty() {
-        initial_head.push(format!(
-            "[session in {}]",
-            lca_ui::display_path(&cwd.display().to_string())
-        ));
-    }
-    // ADR-0042: the mode applies to the shared grant store, so the model's
-    // tool calls and an extension's `process` calls answer alike. The banner
-    // leads the transcript: hands-free must never mean invisible.
-    if let Some(banner) = crate::apply_permission_mode(&config, &mut lock(&grants)) {
-        initial_head.insert(0, banner.to_string());
-    }
-    // `--allow-host`: a one-run grant, attached to the session set before
-    // any turn runs and recorded once (gh #29, QA-004).
-    crate::net_consent::attach_allow_hosts(&grants, cwd, allow_host, &store, &session)
-        .map_err(|err| anyhow::anyhow!("{err}"))?;
-    Ok(Opened {
-        _volatile: volatile,
-        data,
-        store,
-        config,
-        grants,
-        trusted,
-        current_session,
-        session_id: session.id().to_string(),
-        provider_name,
-        initial_head,
-        initial_records,
-        initial_tail: Vec::new(),
-        update_notice,
-    })
-}
-
-/// The initial transcript lines: the records, the truncation/skip
-/// warnings, and the ungranted-endpoint note (FR-PERM-16).
-/// The resumed transcript's framing: head warnings (top of screen) and the
-/// session's records, which the interface replays with the live rendering
-/// (FR-UI-7) instead of the flattened lines this used to return.
-fn initial_view(
-    store: &SessionStore,
-    session: &Session,
-) -> (Vec<String>, Vec<lca_protocol::Record>) {
-    let read = match store.read_with(session, lca_session::ViewMode::Display) {
-        Ok(read) => read,
-        Err(err) => {
-            return (
-                vec![format!("error: cannot read the session: {err}")],
-                Vec::new(),
-            );
-        }
-    };
-    let mut head: Vec<String> = Vec::new();
-    // A session that loaded with a truncation or a skipped line must say so:
-    // a short or empty transcript with no explanation reads as data loss.
-    if read.truncated {
-        head.push(
-            "warning: the session log was truncated; only the records that loaded are shown"
-                .to_string(),
-        );
-    } else if read.skipped_unknown > 0 {
-        head.push(format!(
-            "warning: {} record(s) were skipped (unknown type or version)",
-            read.skipped_unknown
-        ));
-    }
-    (head, read.records)
-}
-
-/// The configured model, or the first model *in the enabled scope* when the
-/// provider is ready and the configuration names none: a narrower scope must not
-/// start the session on a model its own cycle cannot reach (gh #8).
-fn resolve_model_id(config: &Config, provider_is_ready: bool, provider: &dyn Provider) -> String {
-    let configured = config.model().unwrap_or_default();
-    if !configured.is_empty() {
-        configured.to_string()
-    } else if provider_is_ready {
-        // An empty id counts as no model: a provider that answered a model
-        // probe with something unparseable must not leave the session with
-        // a blank model label and a `complete` call the extension refuses.
-        crate::models::filter_enabled(provider.list_models(), config.models_enabled())
-            .into_iter()
-            .map(|model| model.id)
-            .find(|id| !id.is_empty())
-            .unwrap_or_default()
-    } else {
-        String::new()
-    }
-}
-
-/// The extension render-region view (FR-UI-1's pull table).
-fn region_renderer(registry: Arc<ExtensionRegistry>) -> Option<RegionRenderer> {
-    Some(std::sync::Arc::new(
-        move |region: &str| -> Vec<(String, lca_protocol::WidgetTree)> {
-            registry
-                .enabled()
-                .filter(|handle| handle.ui_regions().iter().any(|r| r == region))
-                .filter_map(|handle| {
-                    handle
-                        .render(region)
-                        .ok()
-                        .flatten()
-                        .map(|tree| (handle.name().to_string(), tree))
-                })
-                .collect()
-        },
-    ) as RegionRenderer)
-}
-
-/// The extension ui-event router (FR-UI-6's only source).
-fn region_interactor(registry: Arc<ExtensionRegistry>) -> Option<RegionInteractor> {
-    Some(std::sync::Arc::new(
-        move |region: &str,
-              input: &lca_protocol::UiInput|
-              -> Option<(String, lca_protocol::UiEffect)> {
-            registry
-                .enabled()
-                .filter(|handle| handle.ui_regions().iter().any(|r| r == region))
-                .find_map(|handle| {
-                    handle
-                        .on_ui_event(region, input)
-                        .ok()
-                        .map(|effect| (handle.name().to_string(), effect))
-                })
-        },
-    ) as RegionInteractor)
 }

@@ -185,7 +185,8 @@ fn a_quiet_startup_still_shows_no_logo() {
         "the hidden rung draws no rows at all"
     );
     // And the host maps all three spellings, so none of them can fall through.
-    let hooks = read("crates/lca-cli/src/tui/hooks.rs");
+    // Gh #543: read the module, not one file of a possible partition.
+    let hooks = crate::module_text("crates/lca-cli/src/tui/hooks.rs");
     for rung in ["Hidden", "VersionOnly", "Full"] {
         assert!(
             hooks.contains(rung),

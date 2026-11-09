@@ -48,7 +48,10 @@ fn no_front_end_passes_a_hardcoded_list() {
         "crates/lca-cli/src/headless.rs",
         "crates/lca-cli/src/tui/mod.rs",
     ] {
-        let src = source(file);
+        // Gh #543: `agent_config_for` - the only thing in `tui/mod.rs` that
+        // resolves the effective set - moved to `tui/cells.rs`. The row reads
+        // the module, so it follows the code instead of the filename.
+        let src = crate::text_of(&[file]);
         assert!(
             src.contains("effective_tools("),
             "{file} resolves the effective set (gh #271)"
