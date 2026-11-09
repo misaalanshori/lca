@@ -21,12 +21,17 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use super::program_status::{
-    PROGRAM_STATUS_QUERY, ProgramState, ProgramStatusMode, format_program_status,
-    is_program_status_reply, is_program_status_traffic, multiplexer_strips_osc,
+    PROGRAM_STATUS_QUERY, ProgramState, format_program_status, multiplexer_strips_osc,
     program_status_mode,
 };
-use super::stdin_buffer::{StdinBuffer, StdinEvent};
 use super::sys;
+
+/// Gh #522's reader-thread half, split for the line ceiling.
+#[path = "reader_loop.rs"]
+mod reader_loop;
+#[cfg(test)]
+pub(crate) use reader_loop::{apply_negotiation, dispatch};
+pub(crate) use reader_loop::{program_status_active, reader_loop};
 
 const KITTY_QUERY: &str = "\x1b[>7u\x1b[?u\x1b[c";
 const PROGRESS_ACTIVE: &str = "\x1b]9;4;3\x07";
@@ -284,7 +289,7 @@ fn parse_negotiation(seq: &str) -> Option<Negotiation> {
 }
 
 /// Shared state the reader thread touches.
-struct Shared {
+pub(crate) struct Shared {
     input: Mutex<InputHandler>,
     resize: Mutex<ResizeHandler>,
     /// This terminal's Kitty keyboard protocol state (gh #323 defect 2).
@@ -401,6 +406,40 @@ impl ProcessTerminal {
         }
     }
 
+    /// Adopt the size the tty has **now**, and fire the resize handler if it moved
+    /// (gh #522).
+    ///
+    /// A `stop`/`start` handoff (the external editor, an interactive `!` command, a
+    /// suspend) gives the tty to a child and takes it back later. A resize that lands
+    /// in that window is seen by nobody: the reader thread does not exist, and on
+    /// restart it re-seeds its own `last_size` from the size it finds - so the new
+    /// size is never *different* from anything, no resize fires, and the next frame
+    /// is composed at the width the interface recorded **before** the handoff. Measured
+    /// in a real pane: 140-column caps painted into a 60-column terminal, three trials
+    /// of three.
+    ///
+    /// So the restart is where the frame's geometry is re-derived. The size is one fact
+    /// with one owner (`shared.cols`/`rows`); the reader only mirrors it, which is what
+    /// makes re-seeding it here correct rather than a second source.
+    fn adopt_current_size(&self) {
+        if let Ok(size) = sys::terminal_size() {
+            self.adopt_size(size);
+        }
+    }
+
+    /// [`Self::adopt_current_size`] with the size supplied, so the rule is assertable
+    /// without a tty (the same shape `format_key_text_for` takes its `macos` flag).
+    pub(crate) fn adopt_size(&self, size: (u16, u16)) {
+        let moved = size.0 != self.shared.cols.load(Ordering::SeqCst)
+            || size.1 != self.shared.rows.load(Ordering::SeqCst);
+        if !moved {
+            return;
+        }
+        self.shared.cols.store(size.0, Ordering::SeqCst);
+        self.shared.rows.store(size.1, Ordering::SeqCst);
+        self.shared.fire_resize();
+    }
+
     /// Create a terminal bound to the process stdin/stdout.
     pub fn new() -> Self {
         let (cols, rows) = sys::terminal_size().unwrap_or((80, 24));
@@ -501,6 +540,11 @@ impl Terminal for ProcessTerminal {
                 }
             }
         }
+        // Gh #522: the tty may have changed size while a child owned it, and the
+        // reader about to start seeds its own baseline from the size it finds - so
+        // without this the change is invisible to everyone. Done after the handlers
+        // above are installed, so the notification actually reaches the loop.
+        self.adopt_current_size();
         // A previous `stop` set the shutdown flag; clear it so a restart
         // (the external editor) gets a live reader thread.
         self.shared.shutdown.store(false, Ordering::SeqCst);
@@ -845,162 +889,6 @@ fn resolve_write_log() -> Option<PathBuf> {
 fn cancel_blocking_read(handle: &std::thread::JoinHandle<()>) {
     use std::os::windows::io::AsRawHandle;
     sys::cancel_blocking_read(handle.as_raw_handle());
-}
-
-fn reader_loop(shared: Arc<Shared>, escape_timeout_ms: u64) {
-    let mut buffer = StdinBuffer::with_timeouts(DEFAULT_SEQUENCE_TIMEOUT_MS, escape_timeout_ms);
-    let mut last_data = Instant::now();
-    let mut last_size = sys::terminal_size().unwrap_or((80, 24));
-    let mut buf = [0u8; 4096];
-
-    while !shared.shutdown.load(Ordering::SeqCst) {
-        // Gh #403 gap 4: a terminal already known to be gone is not waited on.
-        // The loop's own copy is the one to check: the process-wide flag may be
-        // set by a *different* terminal's hangup (a test owning two).
-        if shared.hangup.load(Ordering::SeqCst) {
-            break;
-        }
-        // Gh #323 defect 4: a resize record wakes this loop **and is acted on
-        // now**, rather than being swallowed and noticed on the next tick. The
-        // size check below runs on every arm, so the only difference is latency -
-        // but latency is the whole defect: a dropped record means the app paints
-        // at the old width until something else happens to wake it (#522's class).
-        match sys::wait_stdin(50) {
-            // Gh #403 gap 4: the terminal left. `poll` says so directly
-            // (`POLLHUP`/`POLLERR`/`POLLNVAL`), which is the classification that
-            // keeps this loop from reading "no bytes" as "nothing yet" - the shape
-            // that spun at ~92% of a core forever on a closed pty.
-            Ok(outcome) if outcome.is_hangup() => {
-                shared.hangup.store(true, Ordering::SeqCst);
-                break;
-            }
-            Ok(outcome) if outcome.is_key() => match sys::read_stdin(&mut buf) {
-                // End-of-file on a terminal means the same thing one layer down:
-                // the pty is closed. A terminal that reports `POLLIN` and then
-                // returns 0 would otherwise be a permanent "key" and spin.
-                Ok(0) => {
-                    shared.hangup.store(true, Ordering::SeqCst);
-                    break;
-                }
-                Ok(n) => {
-                    last_data = Instant::now();
-                    for event in buffer.process_bytes(&buf[..n]) {
-                        let _ = dispatch(&shared, event, &mut |seq| write_stdout(seq));
-                    }
-                }
-                Err(_) => break,
-            },
-            // The console told us the buffer changed size (gh #323 defect 4). It
-            // is not a key, so nothing is read; falling straight through to the
-            // size check below is the whole fix. No second code path, because the
-            // check already runs on every arm - what was broken was *when* the
-            // loop got there: a dropped record meant the next iteration blocked in
-            // `wait_stdin` for another full timeout first.
-            Ok(_) => {}
-            Err(_) => break,
-        }
-
-        if let Some(timeout) = buffer.pending_timeout_ms()
-            && last_data.elapsed().as_millis() as u64 >= timeout
-        {
-            for event in buffer.flush() {
-                let _ = dispatch(&shared, event, &mut |seq| write_stdout(seq));
-            }
-        }
-
-        if let Ok(size) = sys::terminal_size()
-            && size != last_size
-        {
-            last_size = size;
-            shared.cols.store(size.0, Ordering::SeqCst);
-            shared.rows.store(size.1, Ordering::SeqCst);
-            shared.fire_resize();
-        }
-    }
-    shared.reader_done.store(true, Ordering::SeqCst);
-}
-
-fn dispatch(shared: &Shared, event: StdinEvent, out: &mut dyn FnMut(&str)) -> bool {
-    match event {
-        StdinEvent::Data(seq) => {
-            // Gh #213: OSC 7501 traffic is negotiation, never input -
-            // the support reply arms auto-mode reporting, and unknown
-            // future revisions are swallowed, not typed.
-            if is_program_status_traffic(&seq) {
-                if is_program_status_reply(&seq) {
-                    shared.program_status.store(true, Ordering::SeqCst);
-                }
-                return true;
-            }
-            if apply_negotiation(shared, &seq, out) {
-                return true;
-            }
-            shared.forward_input(seq);
-            false
-        }
-        StdinEvent::Paste(content) => {
-            shared.forward_input(format!("\x1b[200~{content}\x1b[201~"));
-            false
-        }
-    }
-}
-
-/// Apply a negotiation reply, writing the fallback enable sequence when the
-/// terminal is not Kitty-capable. Returns whether the sequence was consumed.
-///
-/// The invariant (io-reliability.md §4, R8(c)): **exactly one key
-/// disambiguation layer is ever active** — a Kitty answer retires
-/// `modifyOtherKeys`, and `modifyOtherKeys` is only enabled while Kitty
-/// has not answered. `out` is the write sink so the transitions are
-/// assertable in a test instead of only observable on a live terminal.
-fn apply_negotiation(shared: &Shared, seq: &str, out: &mut dyn FnMut(&str)) -> bool {
-    match parse_negotiation(seq) {
-        Some(Negotiation::KittyFlags(flags)) => {
-            if flags != 0 {
-                if shared.modify_other_keys.swap(false, Ordering::SeqCst) {
-                    out("\x1b[>4;0m");
-                }
-                // Gh #323 defect 2: the local cell is what the matcher reads, so
-                // negotiation only has to reach it. No process-global write.
-                shared.kitty.store(true, Ordering::SeqCst);
-            } else if !shared.modify_other_keys.load(Ordering::SeqCst) {
-                out("\x1b[>4;2m");
-                shared.modify_other_keys.store(true, Ordering::SeqCst);
-            }
-            true
-        }
-        Some(Negotiation::DeviceAttributes) => {
-            if !shared.kitty.load(Ordering::SeqCst)
-                && !shared.modify_other_keys.load(Ordering::SeqCst)
-            {
-                out("\x1b[>4;2m");
-                shared.modify_other_keys.store(true, Ordering::SeqCst);
-            }
-            // Gh #379 gap 1: the DA1 answer is **also** the sentinel that closes
-            // the startup colour query, so it must reach the interface as well as
-            // being consumed here. Swallowing it entirely meant the theme's query
-            // window never closed: `close_theme_query` was unreachable on a real
-            // terminal, which left every stray OSC 11 applying forever. Forwarded
-            // as input *after* the negotiation work, so a consumer that ignores it
-            // sees no behaviour change.
-            shared.forward_input(seq.to_string());
-            true
-        }
-        None => false,
-    }
-}
-
-/// Whether an OSC 7501 report may flow (gh #213): forced off never,
-/// forced on always, auto only after the support reply and never
-/// under a stripping multiplexer.
-fn program_status_active(shared: &Shared) -> bool {
-    match program_status_mode(env_var) {
-        ProgramStatusMode::ForcedOff => false,
-        ProgramStatusMode::ForcedOn => true,
-        ProgramStatusMode::Auto => {
-            !multiplexer_strips_osc(env_var) && shared.program_status.load(Ordering::SeqCst)
-        }
-    }
 }
 
 fn write_stdout(data: &str) {

@@ -2,6 +2,7 @@
 //! workspace's 1,200-line ceiling (gate 11). Behaviour unchanged.
 
 use super::*;
+use crate::engine::stdin_buffer::StdinEvent;
 
 #[test]
 fn restart_clears_the_shutdown_flag() {
@@ -600,4 +601,78 @@ fn a_device_attributes_answer_reaches_the_interface_too() {
         out.push(s.to_string())
     }));
     assert_eq!(rx.try_recv().ok().as_deref(), Some("a"));
+}
+
+// ---- gh #522: a handoff resume adopts the size the tty has now ----
+
+/// A resize that lands while a child owns the tty (the `$EDITOR` handoff, an
+/// interactive `!`, a suspend) is seen by nobody: the reader thread does not exist
+/// while `stop`ped, and the restart seeds its baseline from the size it finds. So
+/// `start` must re-derive the frame's size itself, or the next frame is composed at
+/// the width recorded before the handoff.
+///
+/// Measured in a real pane before the fix: 140-column caps painted into a 60-column
+/// terminal, 3 trials of 3. This row pins the rule without a tty, through the same
+/// `adopt_size` the product calls.
+#[test]
+fn a_resumed_terminal_adopts_the_size_the_tty_has_now() {
+    let term = ProcessTerminal::new();
+    let shared = &term.shared;
+    // What the interface recorded before the handoff, and what the tty says after.
+    shared.cols.store(140, Ordering::SeqCst);
+    shared.rows.store(30, Ordering::SeqCst);
+
+    let fired = Arc::new(AtomicBool::new(false));
+    let signal = Arc::clone(&fired);
+    *shared.resize.lock().unwrap_or_else(|p| p.into_inner()) =
+        Box::new(move || signal.store(true, Ordering::SeqCst));
+
+    term.adopt_size((60, 28));
+    assert_eq!(
+        (
+            shared.cols.load(Ordering::SeqCst),
+            shared.rows.load(Ordering::SeqCst)
+        ),
+        (60, 28),
+        "the size is re-derived from the tty, not remembered"
+    );
+    assert!(
+        fired.load(Ordering::SeqCst),
+        "and the loop is told, so the next frame is tier 2 rather than a tick later"
+    );
+
+    // A resume that finds the same size must stay quiet: a spurious notification
+    // would make every `$EDITOR` exit repaint the whole frame for nothing.
+    fired.store(false, Ordering::SeqCst);
+    term.adopt_size((60, 28));
+    assert!(!fired.load(Ordering::SeqCst), "no change, no notification");
+}
+
+/// The reader's own baseline must not swallow the change `start` just adopted.
+///
+/// `reader_loop` seeds `last_size` from `sys::terminal_size()` and only fires when
+/// that *differs* later. `adopt_size` has already stored the new size, so the reader
+/// agrees with it from its first iteration and cannot fire a second, redundant
+/// notification - the frame is repainted once, by the loop's resize arm.
+#[test]
+fn adopting_the_size_before_the_reader_starts_does_not_double_notify() {
+    let term = ProcessTerminal::new();
+    let shared = &term.shared;
+    shared.cols.store(140, Ordering::SeqCst);
+    shared.rows.store(30, Ordering::SeqCst);
+    let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let hits = Arc::clone(&count);
+    *shared.resize.lock().unwrap_or_else(|p| p.into_inner()) = Box::new(move || {
+        hits.fetch_add(1, Ordering::SeqCst);
+    });
+
+    term.adopt_size((60, 28));
+    assert_eq!(count.load(Ordering::SeqCst), 1, "exactly one notification");
+    // A second call with the same size is the reader's own steady state.
+    term.adopt_size((60, 28));
+    assert_eq!(
+        count.load(Ordering::SeqCst),
+        1,
+        "a reader that finds the size it already has reports nothing"
+    );
 }

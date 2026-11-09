@@ -90,6 +90,13 @@ pub(super) fn strip(lines: &[String]) -> Vec<String> {
     lines.iter().map(|l| strip_terminal_sequences(l)).collect()
 }
 
+/// Gh #522: the frame is composed at the width its caller passes, not at a
+/// remembered size. Declared here (a test module may own its own test modules)
+/// because `chat.rs` sits exactly at gate 11's ceiling.
+#[cfg(test)]
+#[path = "chat_resize_tests.rs"]
+mod resize;
+
 #[test]
 fn typing_edits_and_enter_submits() {
     let mut chat = chat();
