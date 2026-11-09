@@ -172,8 +172,12 @@ fn collect_sources(root: &std::path::Path, rel: &str, out: &mut Vec<(String, Str
             continue;
         }
         let child = match attribute {
-            // `#[path]` resolves against the declaring file's own directory.
-            Some(path) => format!("{child_dir}/{path}"),
+            // `#[path]` is relative to the directory the declaring file *is in*
+            // (`std::path::Path::parent`), not to the module's own subdirectory.
+            // For a `mod.rs` the two coincide; for a plain `name.rs` they do not,
+            // which gh #552 found when `tests/provider.rs` grew `#[path]`
+            // siblings in `tests/provider/`.
+            Some(path) => format!("{parent}/{path}"),
             None => {
                 let candidates = [
                     format!("{child_dir}/{name}.rs"),

@@ -199,4 +199,26 @@ fn the_module_walk_reaches_every_ceiling_split_sibling() {
         !paths.iter().any(|path| path.contains("_tests.rs")),
         "the walk skips `#[cfg(test)]` modules. Found: {paths:?}"
     );
+
+    // Gh #552: and the walk works from an integration-test **binary root**, where
+    // `#[path]` means something different than it does in `src/`. In a source
+    // module `#[path]` resolves against the module's own subdirectory; in a
+    // `tests/provider.rs` it resolves against `tests/` - the directory the file
+    // itself is in. The walk got that wrong until gh #552 split the provider
+    // suite, and it failed **visibly** (`…/tests/provider/provider/parity.rs`
+    // does not exist) rather than vacuously, which is why the fix is safe.
+    let provider = crate::module_sources("crates/lca-ext-host/tests/provider.rs");
+    let paths: Vec<&str> = provider.iter().map(|(path, _)| path.as_str()).collect();
+    for expected in [
+        "crates/lca-ext-host/tests/provider/parity.rs",
+        "crates/lca-ext-host/tests/provider/identity.rs",
+        "crates/lca-ext-host/tests/provider/shipped.rs",
+        "crates/lca-ext-host/tests/provider/support.rs",
+    ] {
+        assert!(
+            paths.contains(&expected),
+            "the walk must resolve a test root's `#[path]` against the file's own \
+             directory, so it reaches {expected}. Found: {paths:?}"
+        );
+    }
 }
