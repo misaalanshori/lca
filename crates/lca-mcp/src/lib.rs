@@ -25,13 +25,19 @@
 //! Layout: this module is the protocol core and the domain types; `config` is
 //! the `mcp.json` shape plus its file loading and persistence; `manager` is the
 //! session lifecycle, grant assembly, `/mcp` action dispatch, and the
-//! system-prompt section; `native` is the `ExtensionDispatch` implementation the
+//! system-prompt section; `manager_modal` is the `/mcp` modal's row projection;
+//! `native` is the `ExtensionDispatch` implementation the
 //! host drives; `remote` is the streamable-HTTP and OAuth path; `wire` is the
 //! pure wire-protocol kit (SSE envelope, JSON-RPC selector, base64).
 
 pub mod cli;
 pub mod config;
 pub mod manager;
+/// The `/mcp` modal's write-model (gh #555: split from `manager` for the line
+/// ceiling). Re-exported at the crate root like the manager's own types, because
+/// that is the surface the host already consumes.
+#[path = "manager_modal.rs"]
+mod manager_modal;
 mod manager_signin;
 pub mod native;
 pub mod oauth;
@@ -40,7 +46,8 @@ pub mod resources;
 mod stdio_tail;
 mod tool_call;
 pub mod wire;
-pub use manager::{McpManager, ModalServerDetail, ModalServerRow, ModalSnapshot, ModalToolRow};
+pub use manager::McpManager;
+pub use manager_modal::{ModalServerDetail, ModalServerRow, ModalSnapshot, ModalToolRow};
 pub use native::{McpBridge, ServerStateKind, ServerStatus, manifest_grants};
 pub use oauth::{refresh, sign_in, via_copy};
 pub use remote::TokenStore;

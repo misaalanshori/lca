@@ -106,11 +106,13 @@ fn the_documented_transient_status_set_is_the_one_the_code_uses() {
 /// for another reason, which is worth reading anyway.
 #[test]
 fn the_modal_data_types_describe_data_not_display() {
+    // Gh #555 split the modal's write-model into `manager_modal.rs` for the line
+    // ceiling; this follows the code rather than the filename.
     let source = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/crates/lca-mcp/src/manager.rs"
+        "/crates/lca-mcp/src/manager_modal.rs"
     ))
-    .expect("the manager is in the tree");
+    .expect("the modal projection is in the tree");
 
     // The section this row guards: the modal's three type definitions.
     for type_name in [
@@ -198,11 +200,13 @@ fn the_scriptable_mcp_verbs_do_not_open_the_modal() {
 /// `stderr:` marker, is a row that will wrap.
 #[test]
 fn a_list_row_carries_a_short_state_not_the_failure_text() {
+    // Gh #555: the row projection (and the helpers it uses) moved to
+    // `manager_modal.rs`; the assertion is unchanged.
     let source = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/crates/lca-mcp/src/manager.rs"
+        "/crates/lca-mcp/src/manager_modal.rs"
     ))
-    .expect("the manager is in the tree");
+    .expect("the modal projection is in the tree");
 
     // The summary function exists and is what a row uses.
     assert!(
