@@ -6,8 +6,22 @@
 //! interface exactly three things: its options, its hooks, and its turn
 //! runner. The closures are methods on `Ui` (`commands`, `hooks`, `login`),
 //! so `run` is orchestration and its helpers stay under the line budget.
+//!
+//! **This module is a partition, not a single file** (gh #543). Gate 11 caps a
+//! file at 1,200 lines and this one reached it, so the parts that answer a
+//! question *before* the interface exists moved beside it: `cells.rs` (the live
+//! cells and the model/agent-config resolution), `open.rs` (`open`, the initial
+//! view, the registry adapters), `prompt_dialogs.rs` (the CLI's own permission
+//! and dialog senders), `reload.rs` (`/reload` and the `ui.json` flag), and
+//! `tui/hooks.rs` keeps the `UiHooks` literal and the shell/grants seams. Rust
+//! lets an inherent `impl` live in any module of the crate, and a `tui/mod.rs`
+//! is the same module as a `tui.rs` would be — so the split moves code and never
+//! the path a caller names: every name here was reachable at `tui::<name>`
+//! before and still is, proven by a compile probe rather than by inspection.
 
 mod attach;
+// Gh #543: the live cells and the model/agent-config resolution.
+mod cells;
 mod clipboard;
 mod close;
 mod commands;
@@ -22,20 +36,20 @@ mod hooks;
 mod hooks_mcp;
 mod hub;
 pub(crate) use hub::OFFICIAL_CATALOG_URL;
-mod cells;
 mod label_hooks;
 pub mod login;
 mod model_rows;
 mod model_select;
-// Gh #543: the pre-interface half of the composition root.
+// Gh #543: the pre-interface half of the composition root (`open`, the initial
+// view, the registry adapters).
 mod open;
 mod pending_step;
+mod persona;
 // Gh #543: the CLI's own prompt surfaces (`SessionPrompt`, `SessionDialogs`).
 mod prompt_dialogs;
 // `pub(in crate::tui)`, matching the items' own reach: a re-export may not
 // widen what it re-exports, and `pub(super)` here would mean the crate root.
 pub(in crate::tui) use prompt_dialogs::{SessionDialogs, SessionPrompt};
-mod persona;
 // Gh #543: `/reload` and the `ui.json` flag it re-reads.
 mod reload;
 mod runner;
