@@ -43,12 +43,13 @@ const ROWS: [(&str, usize); 2] = [
     ("the_dialog_verdict_agrees_across_modes", 1),
 ];
 
+/// The **module**, not one filename: gh #552 split `conformance_diff.rs` at its
+/// world groups, and the two rows this file names moved into
+/// `conformance_diff/provider_surface.rs`. Reading the module is the rule
+/// gh #574/#543 established - a guard keyed on one filename goes vacuous the
+/// moment the code moves - and `body_of` then finds the row wherever it now lives.
 fn source() -> String {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/crates/lca-ext-host/tests/conformance_diff.rs"
-    );
-    fs::read_to_string(path).expect("the conformance diff test file is readable")
+    crate::module_text("crates/lca-ext-host/tests/conformance_diff.rs")
 }
 
 /// The body of one top-level `fn`, from its signature to the next

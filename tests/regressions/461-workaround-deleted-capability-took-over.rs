@@ -33,7 +33,7 @@
 //! 3. **The workaround is gone and stays gone.** A grep-class row, so it cannot
 //!    quietly return.
 //!
-//! The parity rows live in `crates/lca-ext-host/tests/provider.rs`
+//! The parity rows live in `crates/lca-ext-host/tests/provider/shipped.rs`
 //! (`the_providers_env_reads_reach_the_guest`,
 //! `a_granted_env_key_is_read_by_the_guest`); this file pins the manifest shape
 //! those rows depend on.

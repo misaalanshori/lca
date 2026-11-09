@@ -4,7 +4,8 @@
 //! NFR-21 budget. The wait now polls `Capabilities::cancel` in short slices.
 //! This file guards the user-visible half (a blocked wait returns promptly
 //! after a cancel); the WASM epoch path is guarded by
-//! `crates/lca-ext-host/tests/provider.rs`.
+//! `crates/lca-ext-host/tests/provider/identity.rs`
+//! (`interrupting_a_blocked_oauth_wait_returns_promptly`).
 //!
 //! Verifies: NFR-21, FR-CONC-1.
 

@@ -434,7 +434,7 @@ are the review's to make, not something this list can pre-answer.
   `tests/network.rs` does it for net and net-local
   (`undeclared_net_is_a_recorded_permission_error`) and for oauth
   (`oauth_without_a_grant_never_binds`) and credentials; and
-  `tests/provider.rs` `denied_identity_capabilities_refuse_at_both_boundaries`
+  `tests/provider/identity.rs` `denied_identity_capabilities_refuse_at_both_boundaries`
   proves oauth and credentials refuse through the WASM imports as well. The
   Phase 4 conformance case covers `completion` in both delivery
   modes (`compaction_and_transform_agree_across_modes_with_

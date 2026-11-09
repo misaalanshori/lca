@@ -16,7 +16,7 @@
 //!   bound in the provider world; only the delegation was missing.
 //!
 //! The behavioral proof lives beside the code, where it can run the real
-//! guest: `crates/lca-ext-host/tests/provider.rs`'s
+//! guest: `crates/lca-ext-host/tests/provider/parity.rs`'s
 //! `the_provider_capability_delegations_cross_in_both_modes` drives the
 //! conformance component and compares it with the native twin -- measured
 //! red by reverting the delegations (`resource=<resource failed: not found:
