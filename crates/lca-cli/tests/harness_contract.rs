@@ -776,6 +776,27 @@ fn wait_for_layout_width_refuses_a_pane_that_never_painted() {
 // a loop, with nothing wider than the pane on any physical row. `logical_width` must
 // report the width the app laid out (>= the cap it composed), not the 60 it was
 // wrapped into.
+//
+// **Gh #587: the fixture paints the cap in ONE write.** It used to emit 138
+// separate `printf`s, one dash each, and between the `╭` write and the last dash the
+// screen genuinely stops changing for longer than a settle's poll interval - so
+// `wait_until_painted` declared a frame of `╭` + 19 dashes "painted" and the row
+// measured 20. That is not a product width; it is a row still being composed. Under
+// load the 138 writes take longer, which widens the window, which is why it appeared
+// only inside a full workspace run. One write means no intermediate frame exists at
+// any load (measured: 80 captures across two cycles, one distinct frame).
+
+/// The wrapped-cap fixture (gh #587): one 140-cell cap, built once and painted in
+/// **one** `printf`. Shared by the layout row and its behaviour row so there is one
+/// spelling of the paint under test.
+///
+/// Unix-gated with its two rows: the rows need tmux, and a Windows build has no
+/// caller for it.
+#[cfg(unix)]
+const WIDE_CAP_FIXTURE: &str = "sh -c 'd=$(printf \"\\342\\224\\200%.0s\" $(seq 1 138)); \
+         cap=$(printf \"\\342\\225\\255%s\\342\\225\\256\" \"$d\"); \
+         while :; do printf \"\\033[H\\033[K%s\\n\" \"$cap\"; sleep 0.2; done'";
+
 #[cfg(unix)]
 #[test]
 fn a_wrapped_box_cap_is_measured_at_the_width_it_was_laid_out() {
@@ -787,18 +808,131 @@ fn a_wrapped_box_cap_is_measured_at_the_width_it_was_laid_out() {
     // A 140-cell cap: `╭` + 138 dashes + `╮`, repainted so it stays put. Inside a
     // 60-column pane tmux wraps it, so the capture's first row is `╭` + 59 dashes
     // with no corner and the continuation row carries the rest.
-    session.spawn_raw(
-        "sh -c 'while :; do printf \"\\033[H\"; printf \"\\033[K\\342\\225\\255\"; \
-         i=0; while [ $i -lt 138 ]; do printf \"\\342\\224\\200\"; i=$((i+1)); done; \
-         printf \"\\342\\225\\256\\n\"; sleep 0.2; done'",
-    );
-    session.resize(60, 30);
-    session.wait_until_painted(std::time::Duration::from_secs(20));
-    let measured = session.logical_width();
+    //
+    // The string is built once and printed once (gh #587): the loop is over the
+    // *repaint*, not over the dashes, so there is no frame in which the row is
+    // half-composed. `printf`'s own escapes produce the box characters, because a
+    // shell string built by concatenation would carry the escapes literally.
+    session.spawn_raw(WIDE_CAP_FIXTURE);
+    // **The resize must not wait for a layout** (gh #587). `Tmux::resize` waits
+    // `wait_for_layout_width(60)` - "the app has re-laid-out narrow" - and this
+    // fixture deliberately never does: it paints a 140-wide row into a 60-column pane
+    // forever, so that wait could only ever be satisfied by a *transient* frame.
+    // Issue the resize and let the row wait on its own fact instead.
+    session.send_resize_immediately(60, 30);
+    // **The row waits on the fact it measures, not on the screen going quiet**
+    // (gh #587). `wait_until_painted` alone settles on whatever stopped moving, and two
+    // transient frames qualify: a row still being composed (`╭` + 19 dashes - the
+    // defect's `measured 20`), and tmux mid-wrap of an already-painted 140-column row,
+    // where the cap's three screen rows can settle on their own (`measured 20` again,
+    // with `╮` but no `╭`). Neither frame is a layout the app produced. So the row
+    // re-settles until the frame it read **already measures wider than the pane** -
+    // the same property the assertion checks, which is what keeps the loop from
+    // accepting a frame the assertion would reject.
+    //
+    // Bounded at 10 settles: the primitive needs two captures per settle at its 150 ms
+    // poll, so the ceiling is a few seconds against a fixture repainting every 200 ms
+    // - and a frame that never becomes whole still fails with the number it last saw.
+    let mut measured = 0usize;
+    for _ in 0..10 {
+        let settled = session.wait_until_painted(std::time::Duration::from_secs(20));
+        measured = Tmux::logical_width_of(&settled);
+        if measured > 60 {
+            break;
+        }
+    }
     assert!(
         measured > 60,
         "a 140-column cap wrapped into 60 columns is still a 140-column layout \
          (measured {measured}); a max-width rule would have answered 60 and called \
          it healthy"
+    );
+}
+
+// Verifies: gh #587 - **the single-write fixture really produces a whole row**, and
+// it does so from the first frame.
+//
+// The row above pins that a *half-composed* frame can no longer be settled on. This
+// one pins the other half: the fixture's own output is complete, so the absence of
+// intermediate frames is a property of the paint and not luck. At 140 columns the
+// cap fits one screen row, and every non-blank row of the capture must therefore
+// carry both corners - a row with `╭` and no `╮` is a row still being composed, which
+// is what the per-dash fixture produced (measured: 20 cells).
+#[cfg(unix)]
+#[test]
+fn the_wide_row_fixture_paints_both_corners_on_one_row() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal rows are Unix-only)");
+        return;
+    }
+    let session = Tmux::new("layout-cap-whole");
+    session.spawn_raw(WIDE_CAP_FIXTURE);
+    session.resize(140, 20);
+    let pane = session.wait_until_painted(std::time::Duration::from_secs(20));
+    let rows: Vec<&str> = pane
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    assert_eq!(
+        rows.len(),
+        1,
+        "at 140 columns the cap is one screen row; more than one means the pane is \
+         wrapping something the fixture did not intend:\n{pane}"
+    );
+    assert!(
+        rows[0].starts_with('\u{256d}') && rows[0].ends_with('\u{256e}'),
+        "the whole cap arrives in one write: `╭` at column 0 and `╮` at the end - a \
+         row missing its corner is a row still being composed (gh #587):\n{rows:0?}"
+    );
+    assert!(
+        !pane.chars().any(|c| c == '\\'),
+        "and the box characters are real glyphs, not shell escapes carried literally:\n{pane}"
+    );
+}
+
+// Verifies: gh #587 - **a wide row is painted in one write, so no half-composed
+// frame exists to settle on.**
+//
+// The structural half of the fix, and it fails on the pre-fix file: the wrapped-cap
+// fixture's command emitted the cap as `printf "╭"` + 138 × `printf "─"` + `printf
+// "╮"`, and a settle poll landing inside those 138 writes reads a screen that has
+// genuinely stopped changing at 20 cells. A rule that a wide row is emitted in one
+// write is cheaper than a heuristic that tries to guess "still composing" from the
+// frame, and it cannot redden a healthy row - which is why the heuristic was not
+// added to `settle` itself (a real app frame legitimately has an unclosed `╭`
+// mid-render, and `settle` serves every e2e row).
+//
+#[test]
+fn a_wide_row_fixture_paints_in_one_write() {
+    let source = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/harness_contract.rs"),
+    )
+    .expect("this file is readable from its own test");
+    // The cap fixture's command: from the `╭` byte to the `╮` byte. Anything the
+    // shell prints in between is a separate write, and a settle can land in it.
+    // The Rust source carries the shell's escapes doubled (`\\` in the string), so
+    // the needles are the doubled spelling - the same text the fixture line holds.
+    let open = "\\\\342\\\\225\\\\255"; // `╭`
+    let close = "\\\\342\\\\225\\\\256"; // `╮`
+    let mut checked = 0;
+    for line in source.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("//") || !trimmed.contains(open) || !trimmed.contains(close) {
+            continue;
+        }
+        let (_, after_open) = trimmed.split_once(open).expect("split just matched");
+        let (between, _) = after_open.split_once(close).expect("split just matched");
+        checked += 1;
+        assert!(
+            !between.contains("printf"),
+            "a wide row is painted in one write (gh #587): a `printf` between the \
+             opening and closing corner is a frame a settle can land in and measure \
+             half-composed - measured 20 cells for this exact shape:\n{trimmed}"
+        );
+    }
+    assert!(
+        checked >= 1,
+        "the wrapped-cap fixture is in this file and was checked; a rule that finds \
+         nothing to check is not a guard"
     );
 }
