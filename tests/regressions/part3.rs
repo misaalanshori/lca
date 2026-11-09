@@ -651,3 +651,13 @@ mod mcp_list_offers_resources;
 // the failure type and copies the pairs.
 #[path = "566-wasm-keeps-retryability-and-extras.rs"]
 mod wasm_keeps_retryability_and_extras;
+
+// Gh #574: the near-ceiling `lca-ui` files were split along the seams they already
+// had, and 64 public names (`state.rs`'s 55 host-callback aliases and 9 prompt/modal
+// structs) moved to sibling files. `state.rs` re-exports every one of them, so a
+// caller's path does not move - the pattern `setting_row.rs` already used (gh #30).
+// `rustc` proves it for today; this guard proves it stays true, because a name an
+// **embedder** uses and this crate does not can vanish from `state.rs` while every
+// in-crate file, every test here and `cargo build` stay green.
+#[path = "574-moved-state-names-keep-their-paths.rs"]
+mod moved_state_names_keep_their_paths;
