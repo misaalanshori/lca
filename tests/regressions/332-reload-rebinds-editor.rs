@@ -35,7 +35,10 @@ fn read(path: &str) -> String {
 // missing call, and the seam would still be there.
 #[test]
 fn the_key_map_is_not_publicly_writable() {
-    let source = read("crates/lca-ui/src/chat.rs");
+    // Gh #574: `chat.rs` is now a partition of `impl Chat`; read the whole
+    // `chat` module, not one file, or this row stops seeing the field the day
+    // it moves and passes vacuously.
+    let source = crate::ui_module_text("crates/lca-ui/src/chat.rs");
     let field = source
         .lines()
         .find(|line| line.contains("keybindings: Arc<KeybindingsManager>,"))
@@ -60,7 +63,7 @@ fn the_key_map_is_not_publicly_writable() {
 // history - which is precisely how `/reload` missed it.
 #[test]
 fn only_one_function_assigns_the_key_map() {
-    let source = read("crates/lca-ui/src/chat.rs");
+    let source = crate::ui_module_text("crates/lca-ui/src/chat.rs");
     let lines: Vec<&str> = source.lines().collect();
     let mut assigners: Vec<String> = Vec::new();
     for (index, line) in lines.iter().enumerate() {
@@ -105,7 +108,7 @@ fn only_one_function_assigns_the_key_map() {
 // editor would silently stall - the original bug, one refactor later.
 #[test]
 fn the_setter_updates_the_field_the_editor_and_the_hints() {
-    let source = read("crates/lca-ui/src/chat.rs");
+    let source = crate::ui_module_text("crates/lca-ui/src/chat.rs");
     let start = source
         .find("pub fn set_keybindings(")
         .expect("the setter exists");

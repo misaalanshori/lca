@@ -176,11 +176,9 @@ fn both_paths_go_through_the_shared_recogniser() {
 // the terminal is well-behaved.
 #[test]
 fn the_reply_path_consults_the_query_lifecycle() {
-    let chat = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/crates/lca-ui/src/chat.rs"
-    ))
-    .expect("chat.rs is readable");
+    // Gh #574: the two colour entry points moved to `chat/chat_theme_keys.rs`,
+    // so the row reads the module rather than one file of the partition.
+    let chat = crate::ui_module_text("crates/lca-ui/src/chat.rs");
 
     assert!(
         chat.contains("theme_query"),

@@ -147,7 +147,11 @@ fn both_the_live_and_replay_paths_build_the_same_card_type() {
         "the live path builds the shared card"
     );
 
-    let transcript = code_only(&read("crates/lca-ui/src/transcript/mod.rs"));
+    // Gh #574: the replay path moved to `transcript/replay_records.rs`, so the
+    // row reads the module - the file is what the split changes, not the arm.
+    let transcript = code_only(&crate::ui_module_text(
+        "crates/lca-ui/src/transcript/mod.rs",
+    ));
     assert!(
         transcript.contains("Card::replay("),
         "the replay path builds the shared card"
@@ -165,7 +169,9 @@ fn both_the_live_and_replay_paths_build_the_same_card_type() {
 // failure mode that leaves no trace to notice.
 #[test]
 fn a_branch_summary_is_handled_rather_than_dropped() {
-    let transcript = code_only(&read("crates/lca-ui/src/transcript/mod.rs"));
+    let transcript = code_only(&crate::ui_module_text(
+        "crates/lca-ui/src/transcript/mod.rs",
+    ));
     assert!(
         transcript.contains("Record::BranchSummary"),
         "a dedicated arm exists rather than the catch-all"

@@ -160,3 +160,42 @@ fn the_crate_root_still_names_the_moved_prompts() {
         );
     }
 }
+
+// Verifies: gh #574 - the module walk the structural guards now read actually
+// reaches the partitions a ceiling split creates.
+//
+// Six guards started failing when `impl Chat` and the replay path moved: they
+// keyed on one **filename**, which a split legitimately divides, and grepping a
+// file that no longer holds the arm passes *vacuously* rather than failing. They
+// now read the module (`crate::ui_module_sources`). This row pins that the walk
+// has the property the guards need - it follows `mod` declarations, including
+// `#[path]` ones and a `name.rs` file's sibling `name/` directory - so a future
+// split cannot quietly empty a guard's input.
+#[test]
+fn the_module_walk_reaches_every_ceiling_split_sibling() {
+    let chat = crate::ui_module_sources("crates/lca-ui/src/chat.rs");
+    let paths: Vec<&str> = chat.iter().map(|(path, _)| path.as_str()).collect();
+    for expected in [
+        "crates/lca-ui/src/chat/chat_input.rs",
+        "crates/lca-ui/src/chat/chat_turn_state.rs",
+        "crates/lca-ui/src/chat/chat_theme_keys.rs",
+    ] {
+        assert!(
+            paths.contains(&expected),
+            "the walk from chat.rs must reach {expected}: a guard reading the module \
+             otherwise stops seeing the code a split moved there. Found: {paths:?}"
+        );
+    }
+    let transcript = crate::ui_module_sources("crates/lca-ui/src/transcript/mod.rs");
+    let paths: Vec<&str> = transcript.iter().map(|(path, _)| path.as_str()).collect();
+    assert!(
+        paths.contains(&"crates/lca-ui/src/transcript/replay_records.rs"),
+        "and the walk follows `mod.rs` into its own directory. Found: {paths:?}"
+    );
+    // It must NOT pull in the test files: a guard that reads test sources can be
+    // satisfied by a test's own copy of the string it looks for.
+    assert!(
+        !paths.iter().any(|path| path.contains("_tests.rs")),
+        "the walk skips `#[cfg(test)]` modules. Found: {paths:?}"
+    );
+}

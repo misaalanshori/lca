@@ -633,7 +633,13 @@ fn the_space_precedence_is_one_predicate_over_the_query() {
 // diverged the next time a row shape was added.
 #[test]
 fn space_and_enter_share_one_activate_helper() {
-    let source = plain_source("crates/lca-ui/src/chat_keys.rs");
+    // Gh #574: the picker arms moved to `chat_modal_keys.rs`, declared from the
+    // crate root rather than from `chat_keys.rs`, so both roots are read - the
+    // guard is about whichever file holds the arms today.
+    let source = crate::ui_text_of(&[
+        "crates/lca-ui/src/chat_keys.rs",
+        "crates/lca-ui/src/chat_modal_keys.rs",
+    ]);
     let space = function_body(
         &source,
         "Some(\"space\") if picker.space_activates_row() =>",
@@ -674,7 +680,10 @@ fn space_and_enter_share_one_activate_helper() {
 // that the guard is the predicate and not a literal.
 #[test]
 fn the_space_arm_is_guarded_by_the_predicate_not_a_literal() {
-    let source = plain_source("crates/lca-ui/src/chat_keys.rs");
+    let source = crate::ui_text_of(&[
+        "crates/lca-ui/src/chat_keys.rs",
+        "crates/lca-ui/src/chat_modal_keys.rs",
+    ]);
     assert!(
         source.contains("Some(\"space\") if picker.space_activates_row() =>"),
         "the arm's guard is the picker's predicate"

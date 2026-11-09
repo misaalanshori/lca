@@ -66,3 +66,123 @@ mod follow_up_mode_and_async_teardown;
 // Gh #381 gaps 1-2: a paste chip is one unit for every motion, wrap and delete path.
 #[path = "381-chip-is-one-unit.rs"]
 mod chip_is_one_unit;
+
+/// Every implementation file an `lca-ui` module is spread across, as
+/// `(path, source)` pairs in declaration order.
+///
+/// Gh #574 split the near-ceiling files along their own seams, so a structural
+/// guard that reads one **filename** stops seeing the code it guards as soon as
+/// that code moves - and if it greps for one line, it may pass *vacuously*
+/// instead of failing. Guards therefore read the *module*: this walks the
+/// module file's own `mod` declarations (skipping `#[cfg(test)]` ones) and
+/// reads each child it finds, recursively, honouring `#[path = "…"]`.
+///
+/// The pairs carry their path so a failure message can still name the file the
+/// offending line is in.
+pub fn ui_module_sources(module_rel: &str) -> Vec<(String, String)> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut out = Vec::new();
+    collect_sources(root, module_rel, &mut out);
+    assert!(!out.is_empty(), "{module_rel} does not exist");
+    out
+}
+
+/// The concatenated source of a module's implementation files (see
+/// [`ui_module_sources`]). Use this when a guard greps for one line and the
+/// line's file is an implementation detail the ceiling split may change.
+pub fn ui_module_text(module_rel: &str) -> String {
+    ui_module_sources(module_rel)
+        .into_iter()
+        .map(|(_, text)| text)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The concatenation of several roots, for a guard whose partition the module
+/// walk cannot know: `chat_keys.rs`'s picker arms moved to a sibling declared
+/// from the crate root, not from `chat_keys.rs`, so no single root reaches both.
+pub fn ui_text_of(roots: &[&str]) -> String {
+    roots
+        .iter()
+        .map(|root| ui_module_text(root))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn collect_sources(root: &std::path::Path, rel: &str, out: &mut Vec<(String, String)>) {
+    let path = root.join(rel);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(err) => panic!("read {}: {err}", path.display()),
+    };
+    out.push((rel.to_string(), text.clone()));
+
+    // Where this file's children live: a `mod.rs` owns its directory, a plain
+    // `name.rs` owns the sibling directory `name/`.
+    let parent = std::path::Path::new(rel)
+        .parent()
+        .map(|dir| dir.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let stem = std::path::Path::new(rel)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let child_dir = if stem == "mod" || stem == "lib" {
+        parent.clone()
+    } else {
+        format!("{parent}/{stem}")
+    };
+
+    let mut pending_path: Option<String> = None;
+    let mut gated = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("#[cfg(test)]") {
+            gated = true;
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix("#[path = \"") {
+            pending_path = rest.strip_suffix("\"]").map(|s| s.to_string());
+            continue;
+        }
+        // Any other attribute keeps the state it is in; any real statement
+        // resets it, so a `#[cfg(test)]` further up never gates a later `mod`.
+        let Some(rest) = trimmed.strip_prefix("mod ") else {
+            if !trimmed.starts_with('#') && !trimmed.is_empty() {
+                pending_path = None;
+                gated = false;
+            }
+            continue;
+        };
+        // An inline `mod name { … }` has no file of its own.
+        let Some(name) = rest.strip_suffix(';') else {
+            pending_path = None;
+            gated = false;
+            continue;
+        };
+        let skip = gated;
+        gated = false;
+        let attribute = pending_path.take();
+        if skip {
+            continue;
+        }
+        let child = match attribute {
+            // `#[path]` resolves against the declaring file's own directory.
+            Some(path) => format!("{child_dir}/{path}"),
+            None => {
+                let candidates = [
+                    format!("{child_dir}/{name}.rs"),
+                    format!("{child_dir}/{name}/mod.rs"),
+                ];
+                match candidates
+                    .iter()
+                    .find(|candidate| root.join(candidate).exists())
+                {
+                    Some(found) => found.clone(),
+                    None => continue,
+                }
+            }
+        };
+        collect_sources(root, &child, out);
+    }
+}
