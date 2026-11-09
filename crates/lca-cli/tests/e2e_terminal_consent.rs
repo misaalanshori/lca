@@ -2,8 +2,8 @@
 //! §14 style: a tmux pane, with `capture-pane` receipts either side of
 //! Enter.
 //!
-//! The unit half of the fix is `confirm_with` beside
-//! `crates/lca-cli/src/ext.rs`, pinned by
+//! The unit half of the fix is `confirm_with`, now in
+//! `crates/lca-cli/src/ext/install.rs` (gh #543 made `ext` a directory), pinned by
 //! `tests/regressions/gh24-consent-confirm-requires-enter.rs`. What only a
 //! real terminal can show is the line discipline itself: the keystroke
 //! echoes, the prompt does not move, and the answer is handed over only

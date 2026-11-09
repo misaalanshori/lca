@@ -66,7 +66,10 @@ fn every_registration_site_consults_enablement() {
         // provider and the MCP bridge, then sweeps once at the end.
         "crates/lca-cli/src/registry.rs",
         "crates/lca-cli/src/project_ext.rs", // load_project_local, swept by assemble
-        "crates/lca-cli/src/ext.rs",         // load_installed / load_extra, ditto
+        // `load_installed` / `load_extra`, ditto. Gh #543: the module became a
+        // directory, so the *file* name is `ext/install.rs` - and the entry stays
+        // path-shaped, because the row compares paths.
+        "crates/lca-cli/src/ext/install.rs",
         // Headless registers the compaction handle at line 946 and calls
         // `apply_enablement` at 951 - five lines later, in the same function, after
         // every registration. Correct order today; if that sweep ever moves, this
