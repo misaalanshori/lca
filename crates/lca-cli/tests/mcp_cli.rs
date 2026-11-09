@@ -22,6 +22,16 @@ fn fixture() -> String {
         .replace('\\', "/")
 }
 
+/// The same forward-slash shape for a named fixture (gh #585 needs a server that
+/// offers resources and one that does not, side by side in one report).
+fn fixture_named(name: &str) -> String {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../lca-mcp/fixtures")
+        .join(name)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
 fn python3_available() -> bool {
     std::process::Command::new("python3")
         .arg("--version")
@@ -371,6 +381,116 @@ fn list_exits_one_when_a_server_cannot_connect() {
     );
     let text = common::stdout(&output);
     assert!(text.contains("broken: failed"), "{text}");
+}
+
+// Verifies: gh #585 - `lca mcp list` reports whether a server offers resources,
+// and it reports the **connection's** answer, not a constant.
+//
+// The defect: `cli.rs::transport_of` returned `(description, offers_resources)` and
+// both arms hard-coded `false`. It read a config entry, so it could not know - and
+// the surface a script reads said "no resources" about every server, forever.
+// `pi 1.3.0` prints `offers resources` for this same fixture, so the two agents
+// disagreed about a fact neither of them was guessing at.
+//
+// One row asserts **both renderings from one report**, because the two drifting
+// apart (text true, JSON false) is the failure mode a pair of separate rows would
+// leave open. Three servers in one invocation, so the row also pins that the flag is
+// per-server rather than a report-wide mood:
+//
+//   * `echo`  - advertises `capabilities.resources` (offers)
+//   * `probe` - advertises only tools (does not)
+//   * `ghost` - never connects (not asked)
+//
+// The ghost case is the one that needs the docs sentence: `false` there means "no
+// connection, no claim", never "we asked and it said no".
+#[test]
+fn list_reports_offers_resources_from_the_connection() {
+    if !python3_available() {
+        eprintln!("skip: python3 is not installed");
+        return;
+    }
+    let sandbox = sandbox("mcp-list-resources");
+    for (name, command) in [
+        ("echo", fixture_named("echo-mcp-server.py")),
+        ("probe", fixture_named("spawn-probe-mcp-server.py")),
+    ] {
+        let added = mcp(&sandbox, &["add", name, "--", "python3", &command]);
+        assert_eq!(added.status.code(), Some(0), "{}", common::stderr(&added));
+    }
+    mcp(
+        &sandbox,
+        &["add", "ghost", "--", "definitely-not-a-real-program-585"],
+    );
+
+    let started = std::time::Instant::now();
+    let text_output = mcp(&sandbox, &["list"]);
+    let text = common::stdout(&text_output);
+    let message = diagnostics("mcp list", &text_output, started.elapsed());
+    assert_eq!(
+        text_output.status.code(),
+        Some(1),
+        "the unconnectable server still decides the exit code: {message}"
+    );
+
+    // The text form: `echo` says it offers resources, and its `false` neighbours do
+    // not pretend otherwise. Each check reads the lines that belong to one row, so a
+    // flag printed anywhere in the report cannot make the assertion pass.
+    let row_lines = |name: &str| -> String {
+        let mut inside = false;
+        let mut taken = String::new();
+        for line in text.lines() {
+            // A header is `<server>: <state> (<exposure>, <scope>)`; its indented
+            // continuation lines belong to it.
+            if !line.starts_with(' ') && line.ends_with(')') {
+                inside = line.starts_with(&format!("{name}: "));
+            }
+            if inside {
+                taken.push_str(line);
+                taken.push('\n');
+            }
+        }
+        taken
+    };
+    assert!(
+        text.contains("echo: connected") && text.contains("  offers resources"),
+        "a connected server that advertises resources says so: {message}"
+    );
+    assert!(
+        row_lines("echo").contains("  offers resources"),
+        "the flag is inside the echo row: {message}"
+    );
+    assert!(
+        !row_lines("probe").contains("offers resources"),
+        "a server that advertises only tools does not claim resources: {message}"
+    );
+    assert!(
+        !row_lines("ghost").contains("offers resources"),
+        "a server that never connected claims nothing: {message}"
+    );
+
+    // The JSON form: the same facts, from the same value. A script reads this.
+    let json_output = mcp(&sandbox, &["list", "--json"]);
+    let report: serde_json::Value =
+        serde_json::from_str(&common::stdout(&json_output)).expect("the output is JSON");
+    let by_name = |name: &str| {
+        report["servers"]
+            .as_array()
+            .expect("servers is an array")
+            .iter()
+            .find(|row| row["name"] == name)
+            .unwrap_or_else(|| panic!("{name} is in the report: {report}"))
+    };
+    assert_eq!(by_name("echo")["resources"], true, "{report}");
+    assert_eq!(by_name("probe")["resources"], false, "{report}");
+    // Not connected, so not asked: `false` here is "no connection, no claim".
+    assert_eq!(by_name("ghost")["resources"], false, "{report}");
+    // The field is always present, so a `--json` consumer sees one shape.
+    for row in report["servers"].as_array().expect("servers is an array") {
+        assert!(
+            row["resources"].is_boolean(),
+            "`resources` is a bool on every row, never absent: {row}"
+        );
+    }
 }
 
 // Verifies: gh #418 Phase F - `list --json` is machine-readable and carries

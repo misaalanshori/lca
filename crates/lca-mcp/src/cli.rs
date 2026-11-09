@@ -364,9 +364,7 @@ impl CliMcp {
             .iter()
             .map(|status| {
                 let entry = entries.iter().find(|entry| entry.name == status.name);
-                let (transport, resources) = entry
-                    .map(transport_of)
-                    .unwrap_or_else(|| (String::new(), false));
+                let transport = entry.map(transport_of).unwrap_or_default();
                 let tool_exposure = entry
                     .map(|entry| {
                         entry
@@ -435,7 +433,13 @@ impl CliMcp {
                     transport,
                     tools,
                     tool_exposure,
-                    resources,
+                    // Gh #585: the fact comes from the connection that was made,
+                    // never from the config entry. `transport_of` used to return a
+                    // constant `false` here, so every server was reported as
+                    // offering no resources - a false statement in the surface a
+                    // script reads. A row that never connected reports `false`;
+                    // that means "not asked", not "asked and refused".
+                    resources: status.offers_resources,
                     error,
                 }
             })
@@ -585,15 +589,17 @@ fn exposure_name(exposure: McpExposure) -> &'static str {
 }
 
 /// The one-line transport description `list` prints.
-fn transport_of(entry: &ServerEntry) -> (String, bool) {
+///
+/// Description only, deliberately: whether a server offers resources is a fact
+/// about a **connection**, not about an entry. Returning it from a function that
+/// reads a config file is how it became a constant `false` (gh #585); it now
+/// travels on [`crate::ServerStatus`] with the other live facts.
+fn transport_of(entry: &ServerEntry) -> String {
     match &entry.kind {
-        EntryKind::Stdio { command, args, .. } => (
-            format!("stdio: {command} {}", args.join(" "))
-                .trim_end()
-                .to_string(),
-            false,
-        ),
-        EntryKind::Http { url, .. } => (format!("http: {url}"), false),
+        EntryKind::Stdio { command, args, .. } => format!("stdio: {command} {}", args.join(" "))
+            .trim_end()
+            .to_string(),
+        EntryKind::Http { url, .. } => format!("http: {url}"),
     }
 }
 

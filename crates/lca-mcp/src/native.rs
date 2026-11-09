@@ -275,6 +275,12 @@ pub struct ServerStatus {
     pub state: ServerStateKind,
     /// Live tools right now (zero unless connected).
     pub tools: usize,
+    /// Whether the live handshake offered resources (gh #585).
+    ///
+    /// False unless connected: no connection, no claim. That is not the same
+    /// statement as "connected and said no" - a server still connecting has
+    /// not been asked yet, so the reader must not take `false` as a denial.
+    pub offers_resources: bool,
 }
 
 /// One managed server's connection state.
@@ -319,6 +325,7 @@ impl ManagedServer {
                 .as_ref()
                 .map(|live| live.specs().len())
                 .unwrap_or(0),
+            offers_resources: self.live.as_ref().is_some_and(LiveServer::offers_resources),
         }
     }
 

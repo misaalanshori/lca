@@ -630,3 +630,14 @@ mod late_landing_server_is_declared;
 // 5/5. `start` now adopts the size the tty has now, before the reader starts.
 #[path = "522-resize-survives-the-handoff.rs"]
 mod resize_survives_the_handoff;
+
+// Gh #585: `lca mcp list` reported `resources: false` for every server, always - the
+// flag came from `transport_of`, which reads a config entry and hard-coded both arms
+// to `false`. A config file cannot know whether a handshake offered resources; the
+// bridge does. `pi 1.3.0` printed `offers resources` on the same fixture while LCA
+// printed nothing, and LCA was the one making a claim. The behavioural row drives the
+// real binary over three servers (offers / tools-only / never connects) and asserts
+// the text and JSON renderings of one report; this pins that the flag's source is the
+// connection, so a future refactor cannot derive it from the entry again.
+#[path = "585-mcp-list-offers-resources.rs"]
+mod mcp_list_offers_resources;
