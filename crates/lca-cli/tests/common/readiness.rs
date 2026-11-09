@@ -334,11 +334,43 @@ impl Tmux {
         // Two consecutive full rows is ordinary (a padded row then a border). A run
         // of three or more means content is spilling past the pane, i.e. the layout
         // is wider than the terminal.
-        if longest_run >= 3 {
+        let run_width = if longest_run >= 3 {
             physical * longest_run
         } else {
             physical
+        };
+        // Gh #522: **a box cap that lost its corner.** A frame laid out wider than the
+        // pane does not always arrive as a long run of full rows: the row that wraps is
+        // the editor frame's cap, so the capture shows a `╭`-row and then the *rest* of
+        // that row (`───╮`) as its own screen row. Neither row is wider than the pane,
+        // so the padding rule above cannot see it - which is exactly how this defect
+        // survived a cycle of measurement.
+        //
+        // The signature is unambiguous: a correct frame always carries its two corners
+        // on one row, whatever it pads, so an unclosed `╭`/`╰` means the row is
+        // continued somewhere the capture cut it. Joining the continuation rows
+        // recovers the width the app actually laid out.
+        let mut widest = run_width;
+        for (index, line) in pane.lines().enumerate() {
+            for (open, close) in [('╭', '╮'), ('╰', '╯')] {
+                if !line.contains(open) || line.contains(close) {
+                    continue;
+                }
+                let mut joined = lca_tui::engine::text::visible_width(line);
+                for next in pane.lines().skip(index + 1) {
+                    let trimmed = next.trim_end();
+                    if !trimmed.chars().all(|c| matches!(c, '─' | '╮' | '╯' | ' ')) {
+                        break;
+                    }
+                    joined += lca_tui::engine::text::visible_width(next);
+                    if next.contains(close) {
+                        break;
+                    }
+                }
+                widest = widest.max(joined);
+            }
         }
+        widest
     }
 
     /// Make "the pane will accept a keystroke" a fact before the scenario is

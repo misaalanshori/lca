@@ -7,6 +7,16 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **A resize during an `$EDITOR` handoff (or an interactive `!`, or a suspend) now reaches
+  the layout.** Those three hand the terminal to a child and take it back, and while the
+  child held it nobody was watching the window size - worse, the restarted reader seeded
+  itself from the size it found, so the change was never noticed at all. The resumed frame
+  could therefore be composed at the width from *before* the handoff, leaving a dock and an
+  editor frame laid out for a screen that no longer existed until the next unrelated resize
+  (gh #522). A resume now re-derives the size from the terminal and repaints immediately.
+  The test harness that measures layouts was also taught to see this shape: a wrapped box
+  border loses its corner on the screen it was wrapped into, and the old width check called
+  that healthy.
 - **An MCP server that connects after startup now reaches the model.** The bridge is
   registered before any server has answered, which is what keeps cold start inside its
   budget — and a server that landed afterwards was invisible in two places: it was never

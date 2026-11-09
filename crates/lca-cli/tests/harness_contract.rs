@@ -762,3 +762,43 @@ fn wait_for_layout_width_refuses_a_pane_that_never_painted() {
         "the panic says the pane was blank rather than misreporting a width: {message}"
     );
 }
+
+// Verifies: gh #522 - **a wrapped box cap is a stale layout, and the primitive sees
+// it.**
+//
+// The defect's real signature is not a long run of full rows: the row that wraps is
+// the editor frame's cap, so the capture shows a `╭`-row and the rest of it
+// (`───╮`) as its own screen row. Every physical row still fits the pane, so a
+// max-width or padding-run rule reports the pane width and calls a stale layout
+// healthy - which is how this survived a cycle of measurement.
+//
+// The fixture paints exactly that: one 140-column cap inside a 60-column pane, on
+// a loop, with nothing wider than the pane on any physical row. `logical_width` must
+// report the width the app laid out (>= the cap it composed), not the 60 it was
+// wrapped into.
+#[cfg(unix)]
+#[test]
+fn a_wrapped_box_cap_is_measured_at_the_width_it_was_laid_out() {
+    if !tmux_available() {
+        eprintln!("skip: tmux is not installed (real-terminal rows are Unix-only)");
+        return;
+    }
+    let session = Tmux::new("layout-cap-wrap");
+    // A 140-cell cap: `╭` + 138 dashes + `╮`, repainted so it stays put. Inside a
+    // 60-column pane tmux wraps it, so the capture's first row is `╭` + 59 dashes
+    // with no corner and the continuation row carries the rest.
+    session.spawn_raw(
+        "sh -c 'while :; do printf \"\\033[H\"; printf \"\\033[K\\342\\225\\255\"; \
+         i=0; while [ $i -lt 138 ]; do printf \"\\342\\224\\200\"; i=$((i+1)); done; \
+         printf \"\\342\\225\\256\\n\"; sleep 0.2; done'",
+    );
+    session.resize(60, 30);
+    session.wait_until_painted(std::time::Duration::from_secs(20));
+    let measured = session.logical_width();
+    assert!(
+        measured > 60,
+        "a 140-column cap wrapped into 60 columns is still a 140-column layout \
+         (measured {measured}); a max-width rule would have answered 60 and called \
+         it healthy"
+    );
+}

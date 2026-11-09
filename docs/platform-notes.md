@@ -36,6 +36,42 @@ The detection is `TERMUX_VERSION`, which is Termux's own variable. Deliberately 
 `TERM=screen` heuristic: tmux and GNU screen also report `screen`, and neither has a soft
 keyboard resizing the pane under the application.
 
+### A resize during a tty handoff (gh #522)
+
+The three tty handoffs - `$EDITOR` (Ctrl+X Ctrl+E), an interactive `!` command, and
+`Ctrl+Z` suspend - are the same sequence: leave the screen, `terminal.stop()`, run the
+child with the tty, `terminal.start()`, enter the screen. While the child owns the
+terminal nobody reads, and on **Unix** the resize signal (`SIGWINCH`) is not delivered to
+a process that has no reader waiting for it - so a resize in that window is not merely
+late, it is unobserved.
+
+`stop()` joins the reader thread and `start()` spawns a fresh one, and that reader seeds
+its own `last_size` baseline from `sys::terminal_size()` on its first pass. So the size it
+finds is not a *change* from anything it remembers, no resize fires, and the interface
+keeps composing frames at the width it recorded before the handoff. Measured in a real
+140-column pane with an `$EDITOR` that sleeps 2 s, resized to 60 columns while the child
+ran: three trials of three left the resumed frame with a 140-cell editor cap wrapped by
+tmux into `╭───` plus a continuation row. The same resize with **no** handoff was clean
+5 of 5, so the window is the cause, not the resize path.
+
+**The rule that follows: a resume re-derives the frame's size from the tty.** `start`
+calls `ProcessTerminal::adopt_current_size`, which re-reads `TIOCGWINSZ` and fires the
+resize handler only when the size actually moved - after installing the handlers, so the
+notification reaches the loop rather than the previous frame's no-op. The size is one
+fact with one owner (`shared.cols`/`rows`); the reader mirrors it, which is what makes
+re-seeding it at resume correct instead of a second source. A resume that finds the same
+size stays quiet, so exiting `$EDITOR` does not repaint for nothing.
+
+Windows is unaffected: a console reports the change as a `WINDOW_BUFFER_SIZE_EVENT`
+record, which the reader sees on its next wait after `start` (`WaitOutcome::Resize`).
+
+**Two measurement lessons, both paid for here.** (1) Count display cells, never bytes: a
+`─` is 3 bytes in UTF-8, and counting bytes once made a correct 60-column dock read as
+180. (2) A max-width check cannot see this defect at all: tmux wraps an over-wide frame, so
+every physical row *fits* the pane while the layout is 140. The signature that cannot be
+fooled is a box cap whose corner went missing - `╭` with no `╮`, or `╰` with no `╯` - which
+is what `wait_for_layout_width`'s `logical_width` now joins and reports.
+
 `shortcut:` the exemption covers the height change itself, not the deleted-lines arm
 further down - if a soft-keyboard toggle coincides with content shrinking below the new
 viewport top, that arm still calls the full render. pi has the identical hole, so closing

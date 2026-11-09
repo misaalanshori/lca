@@ -74,8 +74,11 @@ fn the_hangup_flags_are_checked_before_readiness() {
 // will answer 0 forever.
 #[test]
 fn end_of_file_is_a_hangup_in_the_reader() {
-    let source = read("crates/lca-tui/src/engine/terminal.rs");
-    let body = function_body(&source, "fn reader_loop(");
+    // Gh #522 split the reader loop into its own module for the line ceiling, so
+    // this row follows the code rather than the filename (the same rule #400's
+    // guard took after its split).
+    let source = read("crates/lca-tui/src/engine/reader_loop.rs");
+    let body = function_body(&source, "pub(crate) fn reader_loop(");
     let eof = body
         .find("Ok(0) => {")
         .unwrap_or_else(|| panic!("the reader special-cases an empty read: {body}"));

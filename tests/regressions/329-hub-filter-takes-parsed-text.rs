@@ -168,7 +168,8 @@ fn the_input_layer_hands_over_one_whole_paste() {
         "and emits it once, when the closer arrives"
     );
     // The terminal layer re-wraps before dispatch, so the handler sees the markers.
-    let terminal = read("crates/lca-tui/src/engine/terminal.rs");
+    // Gh #522 moved `dispatch` (and the paste arm inside it) to `reader_loop.rs`.
+    let terminal = read("crates/lca-tui/src/engine/reader_loop.rs");
     // Asserted on the marker literals and the single `forward_input` call, not
     // on the exact recipe: the property is that dispatch receives the markers
     // around the payload, not how the string is built.

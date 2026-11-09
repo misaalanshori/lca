@@ -70,13 +70,15 @@ fn run_source() -> String {
     .expect("run.rs is readable")
 }
 
-/// The terminal reader, where the DA1 answer is routed.
+/// The terminal reader, where the DA1 answer is routed. Gh #522 moved the
+/// reading and dispatching half of the reader into `reader_loop.rs` for the
+/// line ceiling, so this follows the code rather than the filename.
 fn terminal_source() -> String {
     std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/crates/lca-tui/src/engine/terminal.rs"
+        "/crates/lca-tui/src/engine/reader_loop.rs"
     ))
-    .expect("terminal.rs is readable")
+    .expect("reader_loop.rs is readable")
 }
 
 /// The lifecycle module that owns the dispatch, the recogniser choice and the grace.

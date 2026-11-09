@@ -620,3 +620,13 @@ mod blocked_pipe_holds_no_table;
 // planner so the collision and built-in-shadowing rules are identical.
 #[path = "584-late-landing-server-is-declared.rs"]
 mod late_landing_server_is_declared;
+
+// Gh #522: a resize that lands while a child owns the tty - the `$EDITOR` prompt handoff,
+// an interactive `!` command, a suspend - was seen by nobody. `stop()` joins the reader
+// thread and `start()` spawns a new one that seeds its baseline from the size it finds, so
+// the change was never "different from" anything, no resize fired, and the resumed frame
+// was composed at the width recorded before the handoff. Measured in a real pane: 140-cell
+// caps painted into a 60-column terminal, 3 trials of 3; the no-handoff control was clean
+// 5/5. `start` now adopts the size the tty has now, before the reader starts.
+#[path = "522-resize-survives-the-handoff.rs"]
+mod resize_survives_the_handoff;

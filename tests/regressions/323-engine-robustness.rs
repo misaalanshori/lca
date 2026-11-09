@@ -314,7 +314,8 @@ fn a_non_key_console_record_reaches_the_loop() {
         "and the console backend consults it:\n{wait}"
     );
 
-    let terminal = read("crates/lca-tui/src/engine/terminal.rs");
+    // Gh #522 moved the reader loop into its own module for the line ceiling.
+    let terminal = read("crates/lca-tui/src/engine/reader_loop.rs");
     let reader = function_body(&terminal, "reader_loop");
     assert!(
         !reader.contains("Ok(true)") && !reader.contains("Ok(false)"),
