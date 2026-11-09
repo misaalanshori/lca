@@ -28,6 +28,8 @@ mod chat_host_dialog;
 mod chat_hub;
 mod chat_jump;
 mod chat_keys;
+// Gh #574: the modal/picker handlers those predicates gate.
+mod chat_modal_keys;
 pub(crate) mod run_wake;
 mod theme_query;
 
