@@ -475,13 +475,6 @@ async fn a_queued_send_does_not_steal_the_running_turns_cancel_flag() {
         session.cancel();
     };
     let (first_outcome, second_outcome, ()) = tokio::join!(first, second, canceller);
-    eprintln!(
-        "FIXED MEASURED: first={:?}/{:?} second={:?}/{:?}",
-        first_outcome.status,
-        first_outcome.stop_reason,
-        second_outcome.status,
-        second_outcome.stop_reason
-    );
 
     assert_eq!(
         first_outcome.stop_reason,
