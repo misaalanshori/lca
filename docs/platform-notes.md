@@ -193,6 +193,18 @@ renderer's own waits, not cancellation. Escape-to-`cancelled` on the pane measur
 screen through the same capture loop - so the observable latency is the harness's
 sampling and repaint, not the cancel, and it is not comparable across machines.
 
+**The second family of macOS elapsed-time bounds (2026-11-10, gh #588).** Three paragraphs up, the NFR-29 recording is a *requirement* bound — NFR-29's 50 ms, relaxed to 120 ms on macOS because the platform cannot reach it — and its per-platform shape lives in `crates/lca-ext-host/tests/nfr.rs`. This is a different family: three **ordinary test rows** whose wall-clock assertion was finer than the platform's scheduler quantum, so they were red on every hosted macOS run while the code they check was correct. Measured on CI run `42701900918` (the first run since the billing lock lifted), and identical on the same cycle's first commit, so the code was not the cause:
+
+| row | macOS observation | bound before | bound now |
+|---|---:|---:|---:|
+| `lca-subscription::kit::a_cancelled_device_flow_returns_inside_the_cancellation_budget` (fake host) | **280.301 ms** | 150 ms | **500 ms** |
+| `regressions …::a_native_cancel_lands_inside_the_device_code_wait` (real `Capabilities` engine) | **298.199 / 366.4 ms** | 250 ms | **500 ms** |
+| `lca-ui::run_wake::tests::a_producer_wake_returns_immediately` | **55.227 ms** | `WAIT_TICK` 50 ms | **250 ms against a 1 s deadline** |
+
+The rule, and it is the durable half: **a bound finer than the platform's scheduling quantum is not a bound on that platform.** The first two rows slice their wait 25 ms at a time and then observe the cancel, so 50–100 ms of real work plus one 60–80 ms quantum *is* the number; no bound between 150 and 400 ms can separate a working cancel from a broken one there, because the defect costs 5 s (5.02 s measured with the flag read removed) and one quantum is a sixth of the current slack. Both bounds therefore come from the **defect interval** rather than from the observation: 500 ms proves "did not wait out a 5 s interval" ten to thirty times over, on any scheduler, and it leaves room for a loaded runner to insert three quanta before drifting toward the interval it rules out. The Linux bounds (150 ms measured at 50.7/50.7/54.0, and 250 ms measured at 100.9/101.5/106.0) are untouched.
+
+The third row is the one that needed a different fix, because widening the bound could not work: the fix's reading and the defect's overlap once a quantum is the size of the tick (the fix is 5 ms of sleep plus a quantum, the defect is 50 ms plus a quantum). So the row stops asking "did this beat the tick" and starts asking "did this beat the deadline it was given" — a **1 s** deadline, so a wake-less wait sits out 1000 ms while a producer's wake lands at 5 ms plus at most one quantum, and a 250 ms bound separates the two on every platform. Its own comment records the two mutants: dropping `waker.wake()` reddens the ordering assertion (`Tick` instead of `Producer`) rather than the timing one, and a 300 ms producer sleep reddens the timing assertion at 300.8 ms, so the two assertions keep the two halves of the proof. The general lesson, beside gh #489's: a fixture's own phases are the test's to choose, and a row that compares itself to a *shared* production constant inherits that constant's platform-specific jitter.
+
 ## The installers: per-platform behavior
 
 `install.sh` and `install.ps1` (repository root; `docs/installation.md`) have three platform-specific behaviors worth knowing before editing either.

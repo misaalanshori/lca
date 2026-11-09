@@ -311,6 +311,22 @@ fn the_stream_event_carries_the_wire_kits_retryability() {
 // Removing the flag check makes this row take **5.02 s** - the whole interval,
 // exactly the defect. The bound is 250 ms: 2.5x the measurement, still 20x
 // under the interval.
+//
+// **On macOS the bound is 500 ms** (gh #588; `docs/platform-notes.md` records the
+// family). Hosted macOS readings were **298.2 and 366.4 ms** against 250 - the
+// cancel lands at 100 ms of *work*, and the rest is the scheduling quantum plus the
+// 25 ms slice the flag is read at the end of, so a bound closer than two quanta to
+// the cancel's own arrival is measuring the runner. The number is derived from the
+// defect, not from the observation: the wait this row rules out is the 5 s interval
+// (5.02 s measured with the flag read removed), so 500 ms still proves it 10x over
+// on any scheduler. The per-platform shape is `crates/lca-ext-host/tests/nfr.rs`'s.
+fn cancel_budget() -> Duration {
+    if cfg!(target_os = "macos") {
+        Duration::from_millis(500)
+    } else {
+        Duration::from_millis(250)
+    }
+}
 #[test]
 fn a_native_cancel_lands_inside_the_device_code_wait() {
     use std::sync::{Arc, Mutex};
@@ -380,10 +396,11 @@ fn a_native_cancel_lands_inside_the_device_code_wait() {
     );
     let elapsed = started.elapsed();
     let err = outcome.expect_err("a cancelled wait is an error, not a token");
+    let budget = cancel_budget();
     assert!(
-        elapsed < Duration::from_millis(250),
+        elapsed < budget,
         "a native cancel must land inside the budget, not after the {}-second interval: \
-         took {elapsed:?} ({})",
+         took {elapsed:?} against {budget:?} ({})",
         auth.interval_secs,
         err.0
     );

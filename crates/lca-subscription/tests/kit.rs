@@ -437,6 +437,16 @@ fn the_device_flow_primitives_hold() {
     );
 }
 
+/// The cancellation budget for the row below, per platform: the macOS figure and
+/// the reason for it are in that row's comment (gh #588).
+fn budget() -> std::time::Duration {
+    if cfg!(target_os = "macos") {
+        std::time::Duration::from_millis(500)
+    } else {
+        std::time::Duration::from_millis(150)
+    }
+}
+
 // Verifies: gh #566 - a cancel during a device-code wait returns inside the
 // cancellation budget, not after the RFC 8628 interval.
 //
@@ -461,6 +471,18 @@ fn the_device_flow_primitives_hold() {
 // does not turn this into a flaky row, while still an order of magnitude under
 // the interval the defect cost. A bound at the measurement itself would fail on
 // any loaded machine and teach nothing.
+//
+// **On macOS the bound is 500 ms, and it is derived from the defect rather than from
+// an observation** (gh #588; `docs/platform-notes.md` records the family). Hosted
+// macOS readings were **280.3 ms** (CI 42701900918) against the 150 ms bound - not a
+// slow cancel but the platform's own quantum: the row slices 25 ms and probes twice,
+// so 50 ms of work plus one 60-80 ms quantum of scheduling delay is the whole
+// number, and a bound finer than a quantum is not a bound on this platform. What
+// the row is *for* is the 5 s interval (15 s on the pre-fix tree), so 500 ms proves
+// the same property ten to thirty times over on any scheduler; 400 would too, and
+// 500 is chosen because it also leaves room for a loaded runner to insert two or
+// three quanta without the number drifting toward the interval it rules out. Linux
+// keeps 150 ms: it is measured (50.7 / 50.7 / 54.0 ms locally) and it holds.
 #[test]
 fn a_cancelled_device_flow_returns_inside_the_cancellation_budget() {
     use lca_subscription::{DeviceAuthorization, poll_device_code};
@@ -484,9 +506,10 @@ fn a_cancelled_device_flow_returns_inside_the_cancellation_budget() {
     let outcome = poll_device_code(&cap, &auth, "https://x.test/token", &[("a", "b")]);
     let elapsed = started.elapsed();
     let err = outcome.expect_err("a cancelled wait is an error, not a token");
+    let budget = budget();
     assert!(
-        elapsed < std::time::Duration::from_millis(150),
-        "a cancel must land inside the budget, not after the {}-second interval: took {elapsed:?} ({})",
+        elapsed < budget,
+        "a cancel must land inside the budget, not after the {}-second interval: took {elapsed:?} against {budget:?} ({})",
         auth.interval_secs,
         err.0
     );

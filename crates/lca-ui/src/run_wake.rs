@@ -328,20 +328,48 @@ mod tests {
     // Verifies: gh #370 flaw 1 - **a producer wakes the loop**, with no input at all.
     // This is the row that bites: a streamed delta used to wait for the next 50 ms
     // poll because only stdin could wake the loop.
+    //
+    // Gh #588: this row now asks for a deadline **far longer than the tick** and
+    // asserts the wake beats it, instead of asserting it beats the tick. That is a
+    // deliberate change of question, made after a measurement: on a hosted macOS
+    // runner one scheduling quantum can exceed [`WAIT_TICK`], and the reading
+    // **55.227 ms** (CI 42701900918) was the *fix* failing a 50 ms bound - the wait
+    // returned after the producer's own 5 ms sleep, so the tick was never waited for
+    // at all. A bound taken from the measurement would not separate the fix from the
+    // defect either, because both sides carry the same jitter: the fix's 5 ms plus a
+    // quantum and the defect's 50 ms plus a quantum overlap once a quantum is ~50 ms.
+    // So the separation is made by **choosing the deadline** rather than by widening
+    // a bound. A producer's wake lands after its own 5 ms sleep plus at most one
+    // quantum; a wait that ignores the wake channel sits out the whole deadline.
+    // With a 1 s deadline, a 250 ms bound is 4.5x the recorded macOS observation and
+    // one quarter of what the defect costs, so the two sides cannot overlap for any
+    // scheduler that schedules this thread at all. The bound is **the same number on
+    // every platform**, because the separation comes from a deadline this row owns
+    // rather than from a per-platform allowance - which is the only way the two
+    // sides stop overlapping once a quantum is the size of the tick.
+    //
+    // Both mutants were run, and the two assertions carry different halves of the
+    // proof: dropping `waker.wake()` fails the `Woke::Producer` assertion (a
+    // wake-less wait reports `Tick`) while its *elapsed* time was 5.7 ms - the
+    // deadline is not what a broken channel waits for; a 300 ms producer sleep fails
+    // the timing assertion at 300.8 ms. So the ordering assertion is what proves the
+    // wake is used, and the bound is what proves it is not waited out.
     #[test]
     fn a_producer_wake_returns_immediately() {
+        let deadline = std::time::Duration::from_secs(1);
+        let bound = std::time::Duration::from_millis(250);
         let (waker, wakes) = Wakes::new();
         let start = std::time::Instant::now();
         let handle = std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(5));
             waker.wake();
         });
-        let woke = wakes.wait(never_input());
+        let woke = wakes.wait_for(deadline);
         handle.join().expect("the waker thread finishes");
         assert_eq!(woke, Woke::Producer, "the wake is reported as a producer");
         assert!(
-            start.elapsed() < WAIT_TICK,
-            "it did not wait out the tick: {:?}",
+            start.elapsed() < bound,
+            "the wake preempted the {deadline:?} deadline it was given: {:?}",
             start.elapsed()
         );
     }
