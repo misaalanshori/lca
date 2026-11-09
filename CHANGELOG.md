@@ -7,6 +7,20 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **A cancelled device-code sign-in no longer hangs for the poll interval.** The device flow
+  slept the whole RFC 8628 interval in one blocking call — five seconds, and five more after
+  every `slow_down` — so cancelling a `/login` could not take effect until it ended (gh #566).
+  The wait is now sliced in 25 ms steps with one host call between them, which is the boundary
+  the WASM runtime's cancellation trap can fire at and the point a native provider's cancel
+  flag is observed; a cancelled wait reports itself as cancelled rather than as a timeout.
+  Measured: 50.7 ms to return after a cancel, against 15.0 s on the old code.
+- **WASM-delivered subscription providers keep their retryability and their per-message
+  extras.** The shared guest flattened a failed stream open into its message text, so the
+  turn loop had to guess whether an HTTP 429 was worth retrying and could retry a 401 three
+  times before giving up on the wrong code; and it wrote an empty extras map where the ABI
+  record carries per-message pairs, dropping the steering marker (`extras["queue"]`) and the
+  thinking signature. A failed open is now delivered as the stream's own typed error, keeping
+  the provider's exact retryability, and the pairs are copied through (gh #566).
 - **`lca mcp list` no longer claims that no server offers resources.** The `resources`
   field was copied from a transport description that could not know — it read the config
   entry and hard-coded `false` on both arms — so every server was reported as offering
