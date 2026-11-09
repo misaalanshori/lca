@@ -154,7 +154,14 @@ fn the_adoption_asks_the_tty_and_notifies_only_on_a_change() {
 #[test]
 fn the_harness_measures_a_cap_whose_corner_wrapped_away() {
     let readiness = read("crates/lca-cli/tests/common/readiness.rs");
-    let width = body(&readiness, "    pub fn logical_width(&self) -> usize {");
+    // The join lives in `logical_width_of` - the helper that measures a capture the
+    // caller already has, and which `logical_width` and every layout wait delegate to
+    // (`a9307487` moved it there so a wait measures the frame it returns). Slicing
+    // `logical_width` itself would read a two-line delegation and see nothing.
+    let width = body(
+        &readiness,
+        "    pub fn logical_width_of(pane: &str) -> usize {",
+    );
     assert!(
         width.contains("'╭'") && width.contains("'╮'"),
         "the measurement joins a cap whose corner wrapped onto the next row: {width}"
