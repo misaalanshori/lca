@@ -36,6 +36,8 @@ mod prompt_dialogs;
 // widen what it re-exports, and `pub(super)` here would mean the crate root.
 pub(in crate::tui) use prompt_dialogs::{SessionDialogs, SessionPrompt};
 mod persona;
+// Gh #543: `/reload` and the `ui.json` flag it re-reads.
+mod reload;
 mod runner;
 mod session_hooks;
 pub mod startup;

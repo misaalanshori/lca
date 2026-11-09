@@ -190,7 +190,12 @@ fn the_late_registration_goes_through_the_gate() {
 // added there, this row's comment is the thing that explains why it is not needed.
 #[test]
 fn the_reload_path_registers_without_a_sweep_of_its_own() {
-    let hooks = read("crates/lca-cli/src/tui/hooks.rs");
+    // Gh #543: `/reload` moved from `tui/hooks.rs` to `tui/reload.rs`, so the
+    // row reads the file that holds it now. A module walk would be wrong here:
+    // this row's subject is *this* file's absence of a sweep, and the module
+    // contains `hooks.rs` (whose `hooks()` legitimately never sweeps either,
+    // but a future sweep in a third sibling must not be able to hide here).
+    let hooks = read("crates/lca-cli/src/tui/reload.rs");
     assert!(
         hooks.contains("register_compaction("),
         "`/reload` registers the compaction handle into a live registry"
