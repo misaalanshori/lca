@@ -510,10 +510,10 @@ Exits `0` when every enabled server connected, `1` when any config error exists 
 any enabled server did not. `--json` prints the same report as JSON.
 
 `resources` (the `  offers resources` line in the text form) is the **server's own
-answer in its handshake** — the same capability that makes the `list_mcp_resources`
-trio available to it — not something inferred from the entry. `false` on a server
-that is not connected therefore means *it was never asked*, not *it said no*: only a
-connected row can report `false` as a denial (gh #585).
+answer in its handshake** — the capability that also gates the `list_mcp_resources`
+trio for a server whose exposure lets resources through — not something inferred from
+the entry. `false` on a server that is not connected therefore means *it was never
+asked*, not *it said no*: only a connected row can report `false` as a denial (gh #585).
 
 ### `login` / `logout`
 
