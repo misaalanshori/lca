@@ -745,10 +745,14 @@ const WAIT_PROBE_RESOURCE: &str = "lca/device-flow-wait";
 /// ("request cancelled by the user"), so the wait reports the cancellation
 /// instead of sleeping out the rest of the interval.
 ///
-/// Deliberately **not** a new `ProviderCap` method: a pollable `is_cancelled()`
-/// is one a guest could not act on without the epoch anyway, and adding it to
-/// the shared trait means a new host import in the `0.6` ABI - a breaking
-/// change bought for a value that changes nothing (gh #566's report).
+/// The flag is `ProviderCap::is_cancelled` - **defaulted to `false` on the
+/// trait** (gh #566). It is not a host import: a guest keeps the default, because
+/// no ABI import could carry a cancellation to it and a polled value could not
+/// be acted on without the epoch trap that fires at its next host call. The
+/// **native** view overrides it with the engine's real flag, and that is what
+/// makes this wait work natively - the probe call beside it alone does *not*,
+/// because `resource_read` is served from the extension's own tree and never
+/// consults the flag (measured: the wait slept out its whole interval).
 fn sleep_between_polls(
     cap: &dyn ProviderCap,
     span: std::time::Duration,
@@ -762,6 +766,17 @@ fn sleep_between_polls(
             return Ok(());
         }
         std::thread::sleep(remaining.min(SLICE));
+        // Two observations, because the two delivery modes can see the cancel
+        // in different places: the probe is a real host call (a guest's epoch
+        // boundary), and the flag is what a native engine answers with. A host
+        // call alone is not enough - `resource_read` is served from the
+        // extension's own tree and never consults the flag, so a native wait
+        // leaning on it alone sleeps out the whole interval (measured, gh #566).
+        if cap.is_cancelled() {
+            return Err(IdentityFailure(
+                "device flow cancelled: the sign-in was interrupted".to_string(),
+            ));
+        }
         match cap.resource_read(WAIT_PROBE_RESOURCE) {
             // An abort: the host stopped the call, which is the cancel. Anything
             // else is this extension's own tree answering about a path it does

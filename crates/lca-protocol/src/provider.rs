@@ -190,6 +190,26 @@ pub trait ProviderCap: Send + Sync {
             "no resource `{path}`"
         )))
     }
+    /// Whether the work this view runs on has been cancelled (gh #566).
+    ///
+    /// **Defaulted to `false` on purpose, and the default is the honest answer
+    /// for a guest.** A WASM guest cannot observe a cancellation: there is no
+    /// host import that carries it (adding one would be a new import in the
+    /// `0.6` ABI) and a value it polled could not be acted on anyway - what
+    /// stops a guest is an epoch trap, which fires at a guest code point and
+    /// nowhere else. So a guest keeps this default and relies on its next host
+    /// call being the boundary, while the native view overrides it with the
+    /// engine's real flag.
+    ///
+    /// Kit code that waits between network polls needs this because a host
+    /// call is not guaranteed to consult the flag: `resource_read` answers from
+    /// the extension's own tree and would happily return `not found` forever
+    /// (measured: a 5 s interval slept out in full, gh #566). The flag is what
+    /// makes the sliced wait work natively; the host call beside it is what
+    /// makes it work in a guest.
+    fn is_cancelled(&self) -> bool {
+        false
+    }
 }
 
 /// The loopback authorization flow, the other half of the `provider`

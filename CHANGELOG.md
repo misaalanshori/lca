@@ -13,7 +13,9 @@ Dates are UTC.
   The wait is now sliced in 25 ms steps with one host call between them, which is the boundary
   the WASM runtime's cancellation trap can fire at and the point a native provider's cancel
   flag is observed; a cancelled wait reports itself as cancelled rather than as a timeout.
-  Measured: 50.7 ms to return after a cancel, against 15.0 s on the old code.
+  Measured: 50.7 ms to return after a cancel against a host that reports it at its next
+  probe, and 100.9 ms against the native engine whose cancel flag is read at the end of the
+  slice in flight - both against 5.0-15.0 s on the old code.
 - **WASM-delivered subscription providers keep their retryability and their per-message
   extras.** The shared guest flattened a failed stream open into its message text, so the
   turn loop had to guess whether an HTTP 429 was worth retrying and could retry a 401 three

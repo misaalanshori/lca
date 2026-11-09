@@ -53,6 +53,13 @@ impl lca_protocol::ProviderCap for Capabilities {
     fn resource_read(&self, path: &str) -> Result<Vec<u8>, CapabilityError> {
         Capabilities::resource_read(self, path)
     }
+
+    // Gh #566: the native view can answer this, so it does. The guest keeps
+    // the trait's `false` and relies on the epoch trap at its next host call -
+    // there is no host import that could carry the flag to it.
+    fn is_cancelled(&self) -> bool {
+        Capabilities::is_cancelled(self)
+    }
 }
 
 impl lca_protocol::OauthCap for Capabilities {

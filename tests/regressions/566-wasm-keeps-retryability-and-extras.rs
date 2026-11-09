@@ -293,6 +293,160 @@ fn the_stream_event_carries_the_wire_kits_retryability() {
     }
 }
 
+// Verifies: gh #566 - a **native** cancel lands during the wait too.
+//
+// The first fix trusted the host call alone, and that is not enough: the probe
+// path is served from the extension's own resource tree and never consults the
+// cancellation flag, so a native wait slept out its whole interval (measured
+// 5.00 s with `interval: 5`). The wait now also reads `ProviderCap::is_cancelled`,
+// which the native view answers from the engine's flag and a guest keeps at the
+// trait's `false` (it could not act on it without the epoch anyway).
+//
+// This row drives the **real** capability engine - the one the host's
+// `interrupt()` flags - rather than the kit's fake, because the defect was that
+// the real engine's probe path says nothing about cancelling.
+//
+// Measured: the cancel fires at 100 ms and the wait returns at **100.9 ms**
+// (two runs), because the flag is read at the end of the very slice in flight.
+// Removing the flag check makes this row take **5.02 s** - the whole interval,
+// exactly the defect. The bound is 250 ms: 2.5x the measurement, still 20x
+// under the interval.
+#[test]
+fn a_native_cancel_lands_inside_the_device_code_wait() {
+    use std::sync::{Arc, Mutex};
+
+    use lca_permissions::{Decision, GrantStore, PermissionPrompt, ProposalDiff, ScopeRoots};
+
+    struct Always;
+    impl PermissionPrompt for Always {
+        fn ask(&mut self, _action: &lca_permissions::Action) -> Decision {
+            Decision::Always
+        }
+        fn review_proposals(&mut self, _diff: &ProposalDiff) -> bool {
+            false
+        }
+    }
+
+    let root = lca_testkit::scratch_path("lca-gh566-native-cancel");
+    let _ = std::fs::remove_dir_all(&root);
+    for dir in ["project", "private", "config", "data", "tmp"] {
+        std::fs::create_dir_all(root.join(dir)).expect("mkdir");
+    }
+    let roots = ScopeRoots {
+        workspace: root.join("project"),
+        private: root.join("private"),
+        home_config: root.join("config"),
+        temp: root.join("tmp"),
+        state_dir: root.join("data"),
+    };
+    let grants = lca_tools::CapabilityGrants {
+        credentials: true,
+        net: vec![lca_permissions::parse_net_pattern("127.0.0.1").expect("loopback pattern")],
+        ..lca_tools::CapabilityGrants::default()
+    };
+    let cap: Arc<lca_tools::Capabilities> = Arc::new(lca_tools::Capabilities::new(
+        "gi566",
+        grants,
+        roots,
+        Arc::new(Mutex::new(Always)),
+        Arc::new(Mutex::new(
+            GrantStore::open(&root.join("grants.json")).expect("store"),
+        )),
+        root.join("project"),
+        None,
+    ));
+
+    // The cancel fires 100 ms in: inside the first 5 s interval, after the
+    // code page would have been shown.
+    let canceller = cap.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(100));
+        canceller.cancel();
+    });
+
+    let auth = lca_subscription::DeviceAuthorization {
+        device_code: "d".to_string(),
+        user_code: "u".to_string(),
+        verification_uri: "https://x.test/device".to_string(),
+        interval_secs: 5,
+        expires_in_secs: 30,
+    };
+    let started = std::time::Instant::now();
+    let outcome = lca_subscription::poll_device_code(
+        cap.as_ref() as &dyn lca_protocol::ProviderCap,
+        &auth,
+        "https://x.test/token",
+        &[("a", "b")],
+    );
+    let elapsed = started.elapsed();
+    let err = outcome.expect_err("a cancelled wait is an error, not a token");
+    assert!(
+        elapsed < Duration::from_millis(250),
+        "a native cancel must land inside the budget, not after the {}-second interval: \
+         took {elapsed:?} ({})",
+        auth.interval_secs,
+        err.0
+    );
+    assert!(
+        err.0.contains("cancelled"),
+        "the error names the cancellation: {}",
+        err.0
+    );
+}
+
+// Verifies: gh #566 - the flag is on the trait, defaulted for a guest.
+//
+// The default is the honest answer for a WASM guest: no host import carries a
+// cancellation there, and a polled value could not be acted on without the
+// epoch trap that fires at its next host call. Pinned so a future reader cannot
+// "fix" the default into an error the guest path would then trip over on every
+// call.
+#[test]
+fn the_cancellation_flag_is_on_the_trait_and_defaults_to_false() {
+    struct Bare;
+    impl lca_protocol::ProviderCap for Bare {
+        fn net_request(
+            &self,
+            _method: &str,
+            _url: &str,
+            _headers: &[(&str, &str)],
+            _body: Option<&[u8]>,
+        ) -> Result<u32, lca_protocol::CapabilityError> {
+            Ok(0)
+        }
+        fn net_response_status(&self, _handle: u32) -> Result<u16, lca_protocol::CapabilityError> {
+            Ok(200)
+        }
+        fn net_read_body(
+            &self,
+            _handle: u32,
+            _max: usize,
+        ) -> Result<Option<Vec<u8>>, lca_protocol::CapabilityError> {
+            Ok(None)
+        }
+        fn net_close_response(&self, _handle: u32) -> Result<(), lca_protocol::CapabilityError> {
+            Ok(())
+        }
+        fn credentials_get(&self, _key: &str) -> Option<String> {
+            None
+        }
+        fn credentials_set(
+            &self,
+            _key: &str,
+            _value: &str,
+        ) -> Result<(), lca_protocol::CapabilityError> {
+            Ok(())
+        }
+        fn credentials_delete(&self, _key: &str) -> Result<(), lca_protocol::CapabilityError> {
+            Ok(())
+        }
+    }
+    assert!(
+        !lca_protocol::ProviderCap::is_cancelled(&Bare),
+        "a view that cannot see a cancellation says so, and the default is not an error"
+    );
+}
+
 // Verifies: gh #566 - the guest no longer flatten a `StreamFailure`.
 //
 // Two things made the omission invisible: the `String` return type compiled
