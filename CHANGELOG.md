@@ -12,9 +12,11 @@ Dates are UTC.
   dash each; when a settle's poll landed inside those writes the screen really had stopped
   changing, so the row measured 20 cells and reported a stale layout. Under load the writes take
   longer, which widens the window — the flake only ever appeared inside a full workspace run.
-  The fixture now builds the row and paints it once, the row waits on the cap's closing corner
-  rather than on the absence of change, and a structural guard keeps a future wide-row fixture
-  from going back to a per-character loop (gh #587). No product behaviour changed.
+  The fixture now builds the row and paints it once, and the row re-settles until the frame it
+  read already measures wider than the pane - the assertion's own condition - instead of trusting
+  that "the screen stopped moving" means the row is whole. A structural guard keeps a future
+  wide-row fixture from going back to a per-character loop (gh #587). No product behaviour
+  changed.
 - **`lca mcp list` now annotates a tool's effective exposure, and a `hidden` server no longer
   reports zero tools.** Two columns of the same row were computed from the wrong side: the
   `[exposure]` annotation looked a *qualified* tool name up in a map keyed by the config rule's
