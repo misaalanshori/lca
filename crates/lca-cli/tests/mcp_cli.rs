@@ -950,3 +950,167 @@ fn removing_a_server_that_lives_only_in_the_other_scope_hints_and_exits_one() {
         "the user file is untouched"
     );
 }
+
+/// A fixture that lists exactly one tool, with the server's own spelling
+/// (`probe`), so a per-tool exposure rule has something to match.
+fn probe_fixture() -> String {
+    fixture_named("spawn-probe-mcp-server.py")
+}
+
+// Verifies: gh #586 - the `[exposure]` annotation prints the tool's
+// **effective** exposure, taken from the connection.
+//
+// The defect: `print_list` looked a *qualified* name (`mcp__probe__probe`) up in
+// `tool_exposure`, which is keyed by the **config rule** name (`probe`), so the
+// lookup was `None` forever and the annotation never printed - a fact `--json`
+// carried and the text form silently dropped. `pi 1.3.0` prints
+// `tools: probe [deferred]` for this same config.
+//
+// The check is per line: the annotation has to sit in the `tools:` line of that
+// server's row, not anywhere in the report.
+#[test]
+fn a_per_tool_override_prints_its_effective_exposure() {
+    if !python3_available() {
+        eprintln!("skip: python3 is not installed");
+        return;
+    }
+    let sandbox = sandbox("mcp-list-annotation");
+    let added = mcp(
+        &sandbox,
+        &["add", "probe", "--", "python3", &probe_fixture()],
+    );
+    assert_eq!(added.status.code(), Some(0), "{}", common::stderr(&added));
+    // The rule names the server's own tool, the way `mcp.json` carries it.
+    let config_path = sandbox.home.join(".lca/mcp.json");
+    let mut config: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&config_path).expect("read")).expect("json");
+    config["mcpServers"]["probe"]["toolExposure"] = serde_json::json!({"probe": "deferred"});
+    std::fs::write(
+        &config_path,
+        serde_json::to_vec_pretty(&config).expect("serialize"),
+    )
+    .expect("rewrite");
+
+    let started = std::time::Instant::now();
+    let output = mcp(&sandbox, &["list"]);
+    let message = diagnostics("mcp list", &output, started.elapsed());
+    let text = common::stdout(&output);
+    let tools_line = text
+        .lines()
+        .find(|line| line.trim_start().starts_with("tools: "))
+        .unwrap_or_else(|| panic!("the row lists its tools: {message}"));
+    assert!(
+        tools_line.contains("[deferred]"),
+        "the effective exposure is annotated on the tool: {message}"
+    );
+    assert!(
+        tools_line.contains("mcp__probe__probe"),
+        "and on the name the model calls: {message}"
+    );
+    // The JSON keeps pi's meaning: overrides keyed by the server's own name.
+    let json_output = mcp(&sandbox, &["list", "--json"]);
+    let report: serde_json::Value =
+        serde_json::from_str(&common::stdout(&json_output)).expect("the output is JSON");
+    assert_eq!(
+        report["servers"][0]["tool_exposure"]["probe"], "deferred",
+        "`tool_exposure` is still keyed by the server's spelling: {report}"
+    );
+}
+
+// Verifies: gh #586 - a server default exposure prints **no** annotation, which
+// is pi's rule (an inherited value is not an override).
+#[test]
+fn a_server_default_prints_no_annotation() {
+    if !python3_available() {
+        eprintln!("skip: python3 is not installed");
+        return;
+    }
+    let sandbox = sandbox("mcp-list-no-annotation");
+    let added = mcp(
+        &sandbox,
+        &["add", "probe", "--", "python3", &probe_fixture()],
+    );
+    assert_eq!(added.status.code(), Some(0), "{}", common::stderr(&added));
+    let started = std::time::Instant::now();
+    let output = mcp(&sandbox, &["list"]);
+    let text = common::stdout(&output);
+    let tools_line = text
+        .lines()
+        .find(|line| line.trim_start().starts_with("tools: "))
+        .unwrap_or_else(|| panic!("the row lists its tools: {text}"));
+    assert!(
+        !tools_line.contains('['),
+        "an inherited exposure is not an override and prints nothing: {}",
+        diagnostics("mcp list", &output, started.elapsed())
+    );
+}
+
+// Verifies: gh #586 - a `hidden` server reports the tools its **listing**
+// carried, not the ones that survived registration.
+//
+// The defect: `status.tools` counted `live.specs()`, and qualification drops
+// `hidden` tools, so a hidden server read `connected, 0 tools` while `pi` read
+// `connected, 1 tool` - the same word meaning two different numbers in two
+// surfaces. A hidden tool is not offered to the model; it still exists.
+#[test]
+fn a_hidden_server_reports_its_listed_tool_count() {
+    if !python3_available() {
+        eprintln!("skip: python3 is not installed");
+        return;
+    }
+    let sandbox = sandbox("mcp-list-hidden");
+    let added = mcp(
+        &sandbox,
+        &["add", "quiet", "--", "python3", &echo_fixture()],
+    );
+    assert_eq!(added.status.code(), Some(0), "{}", common::stderr(&added));
+    let config_path = sandbox.home.join(".lca/mcp.json");
+    let mut config: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&config_path).expect("read")).expect("json");
+    config["mcpServers"]["quiet"]["exposure"] = serde_json::json!("hidden");
+    std::fs::write(
+        &config_path,
+        serde_json::to_vec_pretty(&config).expect("serialize"),
+    )
+    .expect("rewrite");
+
+    let started = std::time::Instant::now();
+    let output = mcp(&sandbox, &["list"]);
+    let message = diagnostics("mcp list", &output, started.elapsed());
+    let text = common::stdout(&output);
+    assert!(
+        text.contains("quiet: connected, 1 tool"),
+        "a hidden server's listing still counts: {message}"
+    );
+    // The row lists the tool, and - like pi - prints no annotation: a hidden
+    // *server* makes every tool hidden, and the annotation marks an **override**
+    // against the server's own exposure, so an inherited value says nothing.
+    // Measured against `pi 1.3.0`, same config: `tools: echo` with no bracket.
+    let tools_line = text
+        .lines()
+        .find(|line| line.trim_start().starts_with("tools: "))
+        .unwrap_or_else(|| panic!("the hidden row lists its tool: {message}"));
+    assert!(
+        tools_line.contains("mcp__quiet__echo"),
+        "the hidden row names its tool: {message}"
+    );
+    assert!(
+        !tools_line.contains('['),
+        "a server-wide hidden exposure is not an override, so nothing is annotated: {message}"
+    );
+    let json_output = mcp(&sandbox, &["list", "--json"]);
+    let report: serde_json::Value =
+        serde_json::from_str(&common::stdout(&json_output)).expect("the output is JSON");
+    assert_eq!(
+        report["servers"][0]["tools"]
+            .as_array()
+            .expect("tools is an array")
+            .len(),
+        1,
+        "the JSON carries the listed tool too: {report}"
+    );
+}
+
+fn echo_fixture() -> String {
+    fixture_named("echo-mcp-server.py")
+}

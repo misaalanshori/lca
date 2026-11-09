@@ -34,8 +34,18 @@ pub struct ServerReport {
     pub state: String,
     /// The transport in one line (`stdio: <command>` or `http: <url>`).
     pub transport: String,
-    /// The tool names the server lists (empty unless connected).
+    /// The tool names the server lists (empty unless connected), `hidden`
+    /// included (gh #586).
     pub tools: Vec<String>,
+    /// Each listed tool's **effective** exposure, keyed by the name `tools`
+    /// carries, so the text form can annotate the tool it prints (gh #586).
+    ///
+    /// Not serialized: `--json` keeps pi's `tool_exposure` (the *override* rules,
+    /// keyed by the server's own spelling), and adding a second, differently
+    /// keyed map to the JSON would give a script two answers to one question.
+    /// The text form needs the effective value, which only the connection knows.
+    #[serde(skip)]
+    pub tool_exposures: std::collections::BTreeMap<String, String>,
     /// Per-tool exposure overrides that differ from the server default.
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub tool_exposure: std::collections::BTreeMap<String, String>,
@@ -377,26 +387,28 @@ impl CliMcp {
                             .collect()
                     })
                     .unwrap_or_default();
-                let (state, error, tools) = match &status.state {
+                let (state, error, tools, tool_exposures) = match &status.state {
                     crate::ServerStateKind::Connected => {
-                        let tools = manager
-                            .bridge()
-                            .tool_specs()
-                            .map(|specs| {
-                                specs
-                                    .into_iter()
-                                    .filter(|spec| {
-                                        spec.namespace.as_ref().is_some_and(|namespace| {
-                                            namespace.name == crate::mcp_namespace(&status.name)
-                                        })
-                                    })
-                                    .map(|spec| spec.name)
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-                        ("connected".to_string(), None, tools)
+                        // The **listing** (gh #586), not `tool_specs()`: that set
+                        // is global and already drops `hidden`, so a hidden server
+                        // reported no names at all as well as no count. The
+                        // listing is this server's own answer, with the effective
+                        // exposure on every entry.
+                        let listing = manager.bridge().server_tools(&status.name);
+                        let names: Vec<String> =
+                            listing.iter().map(|spec| spec.name.clone()).collect();
+                        let exposures = listing
+                            .into_iter()
+                            .map(|spec| (spec.name, spec.exposure.as_str().to_string()))
+                            .collect();
+                        ("connected".to_string(), None, names, exposures)
                     }
-                    crate::ServerStateKind::Disabled => ("disabled".to_string(), None, Vec::new()),
+                    crate::ServerStateKind::Disabled => (
+                        "disabled".to_string(),
+                        None,
+                        Vec::new(),
+                        std::collections::BTreeMap::new(),
+                    ),
                     crate::ServerStateKind::Connecting => (
                         "connecting".to_string(),
                         // Gh #459: name the deadline that passed rather than
@@ -410,15 +422,20 @@ impl CliMcp {
                             )
                         }),
                         Vec::new(),
+                        std::collections::BTreeMap::new(),
                     ),
                     crate::ServerStateKind::NeedsSignIn(detail) => (
                         "needs-sign-in".to_string(),
                         Some(detail.clone()),
                         Vec::new(),
+                        std::collections::BTreeMap::new(),
                     ),
-                    crate::ServerStateKind::Failed(detail) => {
-                        ("failed".to_string(), Some(detail.clone()), Vec::new())
-                    }
+                    crate::ServerStateKind::Failed(detail) => (
+                        "failed".to_string(),
+                        Some(detail.clone()),
+                        Vec::new(),
+                        std::collections::BTreeMap::new(),
+                    ),
                 };
                 ServerReport {
                     name: status.name.clone(),
@@ -432,6 +449,7 @@ impl CliMcp {
                     state,
                     transport,
                     tools,
+                    tool_exposures,
                     tool_exposure,
                     // Gh #585: the fact comes from the connection that was made,
                     // never from the config entry. `transport_of` used to return a

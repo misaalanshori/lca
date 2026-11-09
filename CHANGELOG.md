@@ -7,6 +7,15 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **`lca mcp list` now annotates a tool's effective exposure, and a `hidden` server no longer
+  reports zero tools.** Two columns of the same row were computed from the wrong side: the
+  `[exposure]` annotation looked a *qualified* tool name up in a map keyed by the config rule's
+  spelling, so the lookup was never a match and the annotation never printed — a fact `--json`
+  carried and the text dropped; and the tool count came from the registered specs, which drop
+  `hidden` tools, so a hidden server read `connected, 0 tools` while `pi` read `connected, 1
+  tool` for the same config. The count is now the server's own listing (hidden included) and
+  the annotation is the exposure the tool actually has; `/mcp`'s tool inspector reads the same
+  listing, so it shows a hidden tool marked `hidden` instead of an empty screen (gh #586).
 - **A `cancel()` issued while a second `send` was queued now stops the running turn.** The
   SDK re-armed the session's cancel flag *before* the queued send reached the turn gate, so a
   second `send` replaced the flag of the turn already running: `cancel()` then stopped the

@@ -402,12 +402,24 @@ fn print_list(report: &ListReport) {
             println!("  sign in with: lca mcp login {}", server.name);
         }
         if !server.tools.is_empty() {
+            // Gh #586: the annotation is the tool's **effective** exposure, keyed
+            // by the name this row prints. `tool_exposure` is a different map -
+            // the override *rules*, keyed by the server's own spelling - so
+            // looking one up in the other was always `None` and the annotation
+            // never printed. An inherited exposure prints nothing, which is pi's
+            // rule (only an override is worth a word).
             let tools: Vec<String> = server
                 .tools
                 .iter()
-                .map(|tool| match server.tool_exposure.get(tool) {
-                    Some(exposure) => format!("{tool} [{exposure}]"),
-                    None => tool.clone(),
+                .map(|tool| {
+                    match server
+                        .tool_exposures
+                        .get(tool)
+                        .filter(|exposure| exposure.as_str() != server.exposure)
+                    {
+                        Some(exposure) => format!("{tool} [{exposure}]"),
+                        None => tool.clone(),
+                    }
                 })
                 .collect();
             println!("  tools: {}", tools.join(", "));

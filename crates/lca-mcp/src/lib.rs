@@ -156,7 +156,32 @@ pub fn qualify_tools(
 /// The pair is what a caller building call routing needs: the model calls
 /// the assigned name (possibly `_<hash8>`-suffixed), and `tools/call` must
 /// send the server the name it listed (gh #418 Phase C#C2).
+///
+/// `hidden` tools are **excluded**: they register nothing and are not callable.
+/// [`assigned_pairs`] is the unfiltered view, kept for the surfaces that answer
+/// "what did this server list" rather than "what can the model reach" (gh #586).
 pub fn qualified_pairs(
+    server: &str,
+    tools: Vec<ServerTool>,
+    default: config::McpExposure,
+    rules: &[(String, config::McpExposure)],
+) -> Result<Vec<(String, lca_protocol::ToolSpec)>, String> {
+    Ok(assigned_pairs(server, tools, default, rules)?
+        .into_iter()
+        .filter(|(_, spec)| spec.exposure != lca_protocol::ToolExposure::Hidden)
+        .collect())
+}
+
+/// Every tool the server listed, with the name it was assigned and the
+/// exposure it actually has - `hidden` included (gh #586).
+///
+/// One planner, two views: [`qualified_pairs`] is this result minus the hidden
+/// tools, so a `toolExposure` rule, a sanitized collision and the `_<hash8>`
+/// suffix all resolve identically whichever surface asks. The distinction
+/// matters because "the server listed 3 tools" and "the model can reach 2" are
+/// different questions, and reporting one as the other made a `hidden` server
+/// read as `connected, 0 tools`.
+pub fn assigned_pairs(
     server: &str,
     tools: Vec<ServerTool>,
     default: config::McpExposure,
@@ -187,9 +212,6 @@ pub fn qualified_pairs(
     let mut specs: Vec<(String, lca_protocol::ToolSpec)> = Vec::with_capacity(tools.len());
     for (tool, name) in tools.into_iter().zip(names) {
         let exposure = config::exposure_for(default, rules, &tool.name);
-        if exposure == config::McpExposure::Hidden {
-            continue;
-        }
         let spec = lca_protocol::ToolSpec {
             name: name.clone(),
             description: tool.description,

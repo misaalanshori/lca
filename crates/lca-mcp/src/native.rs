@@ -15,7 +15,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use crate::{ServerConfig, qualified_pairs};
+use crate::ServerConfig;
 
 /// The capability grants this subsystem needs: `process` to spawn the
 /// servers, `fs` (workspace read) for the scope they run in, and `temp`
@@ -79,6 +79,12 @@ pub(crate) enum LiveServer {
         specs: Vec<lca_protocol::ToolSpec>,
         /// Qualified name back to the server-side tool name.
         calls: BTreeMap<String, String>,
+        /// Every tool the server listed, hidden included, with the name it was
+        /// assigned and its effective exposure (gh #586). `specs` is this minus
+        /// the hidden entries; the surfaces that answer "what does this server
+        /// have" read this, the ones that answer "what can the model reach" read
+        /// `specs`.
+        listing: Vec<lca_protocol::ToolSpec>,
         /// The entry's exposure (resource-tool width included).
         exposure: lca_protocol::ToolExposure,
         /// Whether the handshake offered resources.
@@ -90,6 +96,8 @@ pub(crate) enum LiveServer {
         specs: Vec<lca_protocol::ToolSpec>,
         /// Qualified name back to the server-side tool name.
         calls: BTreeMap<String, String>,
+        /// Same rule as the stdio listing above (gh #586).
+        listing: Vec<lca_protocol::ToolSpec>,
         /// The entry's exposure (resource-tool width included).
         exposure: lca_protocol::ToolExposure,
         /// Whether the handshake offered resources.
@@ -113,6 +121,17 @@ impl LiveServer {
     pub(crate) fn calls(&self) -> &BTreeMap<String, String> {
         match self {
             LiveServer::Stdio { calls, .. } | LiveServer::Http { calls, .. } => calls,
+        }
+    }
+
+    /// The server's listing (gh #586): every tool it said it has, `hidden`
+    /// included, with the assigned name and effective exposure on each. Crate
+    /// visibility because two in-crate surfaces read it - the status row's count
+    /// and the CLI's tool names - and a public accessor would be a second name
+    /// for a fact `specs` already half-tells.
+    pub(crate) fn listing(&self) -> &[lca_protocol::ToolSpec] {
+        match self {
+            LiveServer::Stdio { listing, .. } | LiveServer::Http { listing, .. } => listing,
         }
     }
 
@@ -273,7 +292,11 @@ pub struct ServerStatus {
     pub enabled: bool,
     /// The connection state.
     pub state: ServerStateKind,
-    /// Live tools right now (zero unless connected).
+    /// How many tools the server **listed** (gh #586): `hidden` entries count,
+    /// because the server does have them - they are simply not offered to the
+    /// model. Zero unless connected. Counting registered specs made a `hidden`
+    /// server read `0 tools` while the server had one, and the same word then
+    /// meant two different numbers in two surfaces.
     pub tools: usize,
     /// Whether the live handshake offered resources (gh #585).
     ///
@@ -323,7 +346,7 @@ impl ManagedServer {
             tools: self
                 .live
                 .as_ref()
-                .map(|live| live.specs().len())
+                .map(|live| live.listing().len())
                 .unwrap_or(0),
             offers_resources: self.live.as_ref().is_some_and(LiveServer::offers_resources),
         }
@@ -365,18 +388,45 @@ pub struct McpBridge {
 /// overlong name that is the `_<hash8>` form, not the server's spelling.
 /// Deriving it from the specs instead of the listing is what keeps two
 /// colliding tools separately callable (gh #418 Phase C#C2).
+/// What one connection's listing qualified into (gh #586).
+struct Qualified {
+    /// The listing, `hidden` included: every tool the server said it has.
+    listing: Vec<lca_protocol::ToolSpec>,
+    /// The reachable subset: the listing minus `hidden`.
+    specs: Vec<lca_protocol::ToolSpec>,
+    /// Qualified name back to the server-side spelling, for call routing.
+    calls: BTreeMap<String, String>,
+}
+
+/// One plan, two views (gh #586).
+///
+/// `assigned_pairs` resolves every listed tool - the entry's exposure, its
+/// `toolExposure` rules, a sanitized collision, the `_<hash8>` suffix - and
+/// `hidden` is the only thing that separates "what the server has" from "what
+/// the model can reach". Splitting the result here rather than after a second
+/// planning pass keeps the two views provably identical.
 fn qualify_listed(
     name: &str,
     listed: Vec<crate::ServerTool>,
     entry: &crate::config::ServerEntry,
-) -> Result<(Vec<lca_protocol::ToolSpec>, BTreeMap<String, String>), String> {
-    let pairs = qualified_pairs(name, listed, entry.exposure, &entry.tool_exposure)?;
-    let calls = pairs
+) -> Result<Qualified, String> {
+    let pairs = crate::assigned_pairs(name, listed, entry.exposure, &entry.tool_exposure)?;
+    let calls: BTreeMap<String, String> = pairs
         .iter()
+        .filter(|(_, spec)| spec.exposure != lca_protocol::ToolExposure::Hidden)
         .map(|(original, spec)| (spec.name.clone(), original.clone()))
         .collect();
-    let specs = pairs.into_iter().map(|(_, spec)| spec).collect();
-    Ok((specs, calls))
+    let listing: Vec<lca_protocol::ToolSpec> = pairs.iter().map(|(_, spec)| spec.clone()).collect();
+    let specs: Vec<lca_protocol::ToolSpec> = pairs
+        .into_iter()
+        .filter(|(_, spec)| spec.exposure != lca_protocol::ToolExposure::Hidden)
+        .map(|(_, spec)| spec)
+        .collect();
+    Ok(Qualified {
+        listing,
+        specs,
+        calls,
+    })
 }
 
 /// Connect one stdio entry: spawn (the permission layer asks),
@@ -402,13 +452,14 @@ fn connect_one_stdio(
         });
         let offers = session.initialize()?;
         let listed = session.tools(&entry.name)?;
-        let (specs, calls) = qualify_listed(&entry.name, listed, entry)?;
+        let qualified = qualify_listed(&entry.name, listed, entry)?;
         Ok(LiveServer::Stdio {
             caps: caps.clone(),
             handle,
             session: Arc::new(Mutex::new(session)),
-            specs,
-            calls,
+            specs: qualified.specs,
+            calls: qualified.calls,
+            listing: qualified.listing,
             exposure: entry.exposure.as_tool_exposure(),
             resources: offers,
         })
@@ -444,12 +495,12 @@ fn connect_one_http(
     let listed = session
         .tools(&entry.name)
         .map_err(ServerStateKind::Failed)?;
-    let (specs, calls) =
-        qualify_listed(&entry.name, listed, entry).map_err(ServerStateKind::Failed)?;
+    let qualified = qualify_listed(&entry.name, listed, entry).map_err(ServerStateKind::Failed)?;
     Ok(LiveServer::Http {
         session: Arc::new(Mutex::new(session)),
-        specs,
-        calls,
+        specs: qualified.specs,
+        calls: qualified.calls,
+        listing: qualified.listing,
         exposure: entry.exposure.as_tool_exposure(),
         resources: offers,
     })
@@ -826,14 +877,18 @@ impl McpBridge {
             .collect()
     }
 
-    /// One server's tools with each tool's **effective** exposure (gh #418
+    /// One server's **listing** with each tool's effective exposure (gh #418
     /// Phase G's inspector). Empty for an unknown or unconnected server.
+    ///
+    /// The listing, not `specs` (gh #586): the inspector answers "what does this
+    /// server have", so a `hidden` tool appears there marked `hidden` - otherwise
+    /// the inspector and `mcp list` disagree about how many tools a server has.
     pub fn server_tools(&self, server: &str) -> Vec<lca_protocol::ToolSpec> {
         self.locked()
             .iter()
             .find(|row| row.entry.name == server)
             .and_then(|row| row.live.as_ref())
-            .map(|live| live.specs().to_vec())
+            .map(|live| live.listing().to_vec())
             .unwrap_or_default()
     }
 

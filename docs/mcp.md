@@ -509,6 +509,24 @@ closes the connections. Those connections live for exactly one invocation.
 Exits `0` when every enabled server connected, `1` when any config error exists or
 any enabled server did not. `--json` prints the same report as JSON.
 
+The columns mean different things, and each is read from the side that knows it (gh #586):
+
+- **The tool count is the server's listing**, `hidden` included. A server whose
+  exposure is `hidden` still has its tools; they are simply not offered to the model.
+  Counting only the registered ones made such a server read `connected, 0 tools` while
+  the server had one, and the same word ("tools") then meant two different numbers in
+  two surfaces.
+- **The `[exposure]` annotation is the tool's effective exposure**, printed only when it
+  differs from the server's own exposure — an inheriting tool prints nothing, which is
+  `pi`'s rule (only an override is worth a word). It comes from the connection, never from
+  the config rule map: a rule is keyed by the server's spelling, the row prints the
+  qualified name, and looking one up in the other is how the annotation went missing
+  entirely.
+- **`--json`'s `tool_exposure` is the overrides** that differ from the server default,
+  keyed by the **server's** own tool name (`{"probe": "deferred"}`), because that is the
+  shape `pi`'s JSON carries and what a script consuming it expects. It is not the
+  annotation's lookup table; the two answer different questions.
+
 `resources` (the `  offers resources` line in the text form) is the **server's own
 answer in its handshake** — the capability that also gates the `list_mcp_resources`
 trio for a server whose exposure lets resources through — not something inferred from

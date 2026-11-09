@@ -174,3 +174,126 @@ fn guarded_remote_lands_needs_sign_in() {
     }
     assert!(bridge.tool_specs().expect("specs").is_empty());
 }
+
+// Verifies: gh #586 - the state row counts the server's **listing**, and the
+// inspector shows the hidden tool instead of pretending the server is empty.
+//
+// The defect: `status.tools` counted `live.specs()`, which drops `hidden` tools,
+// so a hidden server read `connected, 0 tools` while `pi 1.3.0` read
+// `connected, 1 tool` for the same config - and `/mcp`'s tool inspector, reading
+// the same filtered set, showed nothing at all. A hidden tool is not offered to
+// the model; the server still has it.
+#[test]
+fn a_hidden_server_counts_and_inspects_its_listing() {
+    if !python3_available() {
+        eprintln!("skip: python3 is not installed");
+        return;
+    }
+    let caps = sandbox("managed-hidden-listing", lca_mcp::manifest_grants());
+    let bridge = lca_mcp::McpBridge::connect_managed(
+        caps,
+        vec![stdio_entry("quiet", McpExposure::Hidden, true)],
+    );
+    let status = bridge
+        .statuses()
+        .into_iter()
+        .find(|status| status.name == "quiet")
+        .expect("the row landed");
+    assert!(
+        matches!(status.state, lca_mcp::ServerStateKind::Connected),
+        "the server connected: {:?}",
+        status.state
+    );
+    assert_eq!(
+        status.tools, 1,
+        "the listing has the echo tool; a hidden exposure does not remove it from the server"
+    );
+    // The inspector answers from the same listing, so the two agree - and the
+    // annotation it renders is the effective exposure, `hidden`.
+    let inspected = bridge.server_tools("quiet");
+    assert_eq!(
+        inspected.len(),
+        1,
+        "the inspector shows the hidden tool: {inspected:?}"
+    );
+    assert_eq!(
+        inspected[0].exposure,
+        lca_protocol::ToolExposure::Hidden,
+        "and marks it hidden"
+    );
+    // What the *model* can reach is still nothing: the two views differ by
+    // exactly the hidden entries.
+    assert!(
+        bridge
+            .tool_specs()
+            .expect("specs")
+            .iter()
+            .all(|spec| !spec.name.starts_with("mcp__quiet__")),
+        "a hidden server contributes no callable spec: {:?}",
+        bridge
+            .tool_specs()
+            .expect("specs")
+            .iter()
+            .map(|s| &s.name)
+            .collect::<Vec<_>>()
+    );
+}
+
+// Verifies: gh #586 - the listing keeps a hidden tool's assigned name and the
+// server's default exposure is carried, not invented.
+//
+// `assigned_pairs` is the unfiltered planner; `qualified_pairs` is it minus the
+// hidden entries. Pinning the relationship (rather than each set separately) is
+// what keeps a future rule change from applying to one view only.
+#[test]
+fn the_listing_is_the_unfiltered_plan_and_specs_are_its_hidden_free_subset() {
+    let tool = |name: &str| lca_mcp::ServerTool {
+        name: name.to_string(),
+        qualified: name.to_string(),
+        description: String::new(),
+        parameters: serde_json::json!({}),
+        annotations: lca_protocol::ToolAnnotations::default(),
+    };
+    use lca_mcp::config::McpExposure;
+    let bonus = |pairs: Vec<(String, lca_protocol::ToolSpec)>| -> Vec<(String, String)> {
+        pairs
+            .into_iter()
+            .map(|(original, spec)| (original, spec.exposure.as_str().to_string()))
+            .collect()
+    };
+    let assigned = bonus(
+        lca_mcp::assigned_pairs(
+            "s",
+            vec![tool("a"), tool("gone"), tool("b")],
+            McpExposure::Codemode,
+            &[("gone".to_string(), McpExposure::Hidden)],
+        )
+        .expect("planned"),
+    );
+    assert_eq!(
+        assigned,
+        vec![
+            ("a".to_string(), "codemode".to_string()),
+            ("b".to_string(), "codemode".to_string()),
+            ("gone".to_string(), "hidden".to_string()),
+        ],
+        "the listing carries every listed tool with its effective exposure: {assigned:?}"
+    );
+    let reachable = bonus(
+        lca_mcp::qualified_pairs(
+            "s",
+            vec![tool("a"), tool("gone"), tool("b")],
+            McpExposure::Codemode,
+            &[("gone".to_string(), McpExposure::Hidden)],
+        )
+        .expect("planned"),
+    );
+    assert_eq!(
+        reachable,
+        vec![
+            ("a".to_string(), "codemode".to_string()),
+            ("b".to_string(), "codemode".to_string()),
+        ],
+        "the callable subset drops exactly the hidden one: {reachable:?}"
+    );
+}
