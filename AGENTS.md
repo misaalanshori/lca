@@ -137,6 +137,13 @@ references), then pi's source.
   never the path a caller names it by. Keep one `impl` per new file, prefer
   fields over new getters, and re-export anything that was `pub` before -
   a split that forces a `pub(crate)` widening picked the wrong seam.
+  The same applies to a **module**: `src/ext.rs` becomes `src/ext/mod.rs` plus
+  siblings with no change to `crate::ext::<name>`, because a `x.rs` and an
+  `x/mod.rs` *are* the same module (gh #543). Two traps that shape carries:
+  `pub(super)` in `tui/mod.rs` means `pub(crate)` (it is the crate root's
+  child), so a `pub(super)` written in `tui/cells.rs` *narrows* a surface and
+  must be `pub(crate)`; and a `mod tests` block left in the barrel keeps every
+  test's path, so leave it there.
 - Settings: `Flag > Env (LCA_*) > ProjectFile (.lca/config.toml) >
   UserFile (~/.lca/config.toml) > Default`; `/settings` shows the
   winning source per key.
