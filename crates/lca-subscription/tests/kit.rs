@@ -16,6 +16,11 @@ struct FakeCap {
     requests: Mutex<Vec<RecordedRequest>>,
     responses: Mutex<VecDeque<(u16, Vec<u8>)>>,
     credentials: Mutex<HashMap<String, String>>,
+    /// How many `resource_read` probes have been answered.
+    probes: Mutex<usize>,
+    /// After this many probes, answer like a host that aborted the call
+    /// (gh #566's cancellation model: the engine's flag, seen at a host call).
+    abort_after_probes: Option<usize>,
 }
 
 impl FakeCap {
@@ -24,7 +29,15 @@ impl FakeCap {
             requests: Mutex::new(Vec::new()),
             responses: Mutex::new(responses.into()),
             credentials: Mutex::new(HashMap::new()),
+            probes: Mutex::new(0),
+            abort_after_probes: None,
         }
+    }
+
+    /// Answer the Nth resource probe onward like a cancelled host call.
+    fn abort_probes_after(mut self, n: usize) -> Self {
+        self.abort_after_probes = Some(n);
+        self
     }
 
     /// Seed the credential drawer, so a row can drive `access_token`'s refresh path.
@@ -119,6 +132,22 @@ impl ProviderCap for FakeCap {
     fn credentials_delete(&self, key: &str) -> Result<(), CapabilityError> {
         self.credentials.lock().unwrap().remove(key);
         Ok(())
+    }
+
+    /// The wait probe (gh #566): `poll_device_code`'s sliced sleep calls this
+    /// between slices precisely so a host call happens, which is the boundary
+    /// a WASM epoch trap can fire at and the point a native engine's cancelled
+    /// flag is observed. The answer for a path the extension does not define
+    /// is `NotFound`; after `abort_after_probes`, it is the engine's abort.
+    fn resource_read(&self, _path: &str) -> Result<Vec<u8>, CapabilityError> {
+        let mut probes = self.probes.lock().unwrap();
+        *probes += 1;
+        match self.abort_after_probes {
+            Some(n) if *probes >= n => Err(CapabilityError::Io(
+                "request cancelled by the user".to_string(),
+            )),
+            _ => Err(CapabilityError::NotFound("no resource".to_string())),
+        }
     }
 }
 
@@ -405,6 +434,105 @@ fn the_device_flow_primitives_hold() {
     assert_eq!(
         json.get("access_token").and_then(|v| v.as_str()),
         Some("tok-2")
+    );
+}
+
+// Verifies: gh #566 - a cancel during a device-code wait returns inside the
+// cancellation budget, not after the RFC 8628 interval.
+//
+// The defect: `poll_device_code` slept the whole interval in one
+// `std::thread::sleep`, so `/login` with `interval: 5` could not notice an Esc
+// for five seconds (ten, fifteen, twenty after each `slow_down`). In WASM mode
+// that is strictly worse than a slow cancel: a Wasmtime epoch trap fires only at
+// a **guest code point**, so a blocked guest sleep has no boundary to trap at,
+// and the login thread sat out the interval regardless (NFR-29's 50 ms budget).
+//
+// The fix is the wait's *shape*: 25 ms slices with one real host call between
+// them. That call is what makes a guest's loop reach the boundary the epoch
+// deadline is checked at, and what reaches the native engine the host's
+// `interrupt()` flagged.
+//
+// This row is about elapsed time because that **is** the claim, so the number is
+// measured and the bound is written beside it. Measured on this box, three runs:
+// **50.7, 50.7, 54.0 ms** - the fake aborts after two 25 ms slices, so the wait
+// returns on the second probe plus scheduling. On the pre-fix tree the same row
+// took **15.0 s** (three 5 s intervals, since the abort is only observed at a
+// network call). The bound is 150 ms: ~3x the measurement, so a busy scheduler
+// does not turn this into a flaky row, while still an order of magnitude under
+// the interval the defect cost. A bound at the measurement itself would fail on
+// any loaded machine and teach nothing.
+#[test]
+fn a_cancelled_device_flow_returns_inside_the_cancellation_budget() {
+    use lca_subscription::{DeviceAuthorization, poll_device_code};
+
+    // The server keeps saying "pending", so the loop would honour every one of
+    // its 5 s intervals; the fake host starts aborting after two wait probes,
+    // which lands during the *first* interval.
+    let cap = FakeCap::new(vec![
+        (200, br#"{"error":"authorization_pending"}"#.to_vec()),
+        (200, br#"{"error":"authorization_pending"}"#.to_vec()),
+    ])
+    .abort_probes_after(2);
+    let auth = DeviceAuthorization {
+        device_code: "d".to_string(),
+        user_code: "u".to_string(),
+        verification_uri: "https://x.test/device".to_string(),
+        interval_secs: 5,
+        expires_in_secs: 60,
+    };
+    let started = std::time::Instant::now();
+    let outcome = poll_device_code(&cap, &auth, "https://x.test/token", &[("a", "b")]);
+    let elapsed = started.elapsed();
+    let err = outcome.expect_err("a cancelled wait is an error, not a token");
+    assert!(
+        elapsed < std::time::Duration::from_millis(150),
+        "a cancel must land inside the budget, not after the {}-second interval: took {elapsed:?} ({})",
+        auth.interval_secs,
+        err.0
+    );
+    // And the error says what happened. "device flow timed out" would be a lie
+    // about a wait the user ended.
+    assert!(
+        err.0.contains("cancelled"),
+        "the error names the cancellation rather than blaming a timeout: {}",
+        err.0
+    );
+    assert!(
+        !err.0.contains("timed out after one or more slow_down") && !err.0.ends_with("timed out"),
+        "a cancel is never reported as a timeout: {}",
+        err.0
+    );
+}
+
+// Verifies: gh #566 - the sliced wait must not change what a successful flow
+// does: a pending answer still polls again after one interval and returns the
+// token. (The deadline/slow_down arithmetic is pinned by
+// `the_device_flow_primitives_hold`; this pins that slicing preserved it.)
+#[test]
+fn slicing_the_wait_preserves_the_poll_arithmetic() {
+    use lca_subscription::{DeviceAuthorization, poll_device_code};
+
+    let cap = FakeCap::new(vec![
+        (200, br#"{"error":"authorization_pending"}"#.to_vec()),
+        (200, br#"{"access_token":"tok"}"#.to_vec()),
+    ]);
+    let auth = DeviceAuthorization {
+        device_code: "d".to_string(),
+        user_code: "u".to_string(),
+        verification_uri: "https://x.test/device".to_string(),
+        interval_secs: 1,
+        expires_in_secs: 30,
+    };
+    let json = poll_device_code(&cap, &auth, "https://x.test/token", &[("a", "b")])
+        .expect("a pending answer is waited out, then a token");
+    assert_eq!(
+        json.get("access_token").and_then(|v| v.as_str()),
+        Some("tok")
+    );
+    assert_eq!(
+        cap.request_bodies().len(),
+        2,
+        "one poll for the pending answer, one that got the token"
     );
 }
 

@@ -708,12 +708,64 @@ pub fn poll_device_once(
     }
 }
 
+/// The resource path a device-flow wait probes between sleep slices (gh #566).
+///
+/// Nothing is ever stored here: every host answers "not found", and that answer
+/// is not the point. The call is.
+const WAIT_PROBE_RESOURCE: &str = "lca/device-flow-wait";
+
+/// Sleep `span`, in 25 ms slices, touching the capability view between them
+/// (gh #566).
+///
+/// The rule (`docs/capabilities.md`): a wait longer than the cancellation budget
+/// polls in short slices. A WASM guest has no flag it could read - the only
+/// thing that can interrupt it is a Wasmtime epoch trap, and a trap fires at a
+/// **guest code point**, never inside a blocked host call. So each slice ends
+/// with one real host import call, which is exactly the boundary the epoch
+/// deadline can fire at; a single 5-15 s `thread::sleep` has no such boundary,
+/// which is why a cancel during it waited out the whole interval.
+///
+/// Natively the same call reaches the capability engine the host's
+/// `interrupt()` flagged. A host that aborts an in-flight call answers `Io`
+/// ("request cancelled by the user"), so the wait reports the cancellation
+/// instead of sleeping out the rest of the interval.
+///
+/// Deliberately **not** a new `ProviderCap` method: a pollable `is_cancelled()`
+/// is one a guest could not act on without the epoch anyway, and adding it to
+/// the shared trait means a new host import in the `0.6` ABI - a breaking
+/// change bought for a value that changes nothing (gh #566's report).
+fn sleep_between_polls(
+    cap: &dyn ProviderCap,
+    span: std::time::Duration,
+) -> Result<(), IdentityFailure> {
+    use std::time::{Duration, Instant};
+    const SLICE: Duration = Duration::from_millis(25);
+    let deadline = Instant::now() + span;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(());
+        }
+        std::thread::sleep(remaining.min(SLICE));
+        match cap.resource_read(WAIT_PROBE_RESOURCE) {
+            // An abort: the host stopped the call, which is the cancel. Anything
+            // else is this extension's own tree answering about a path it does
+            // not define (not found, or a sandbox without the resources grant).
+            Err(lca_protocol::CapabilityError::Io(reason))
+            | Err(lca_protocol::CapabilityError::Timeout(reason)) => {
+                return Err(IdentityFailure(format!("device flow cancelled: {reason}")));
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Drive the poll loop to a token (pi's `pollOAuthDeviceCodeFlow`):
 /// wait one interval first, floor intervals at one second, grow 5
 /// seconds per `slow_down` (RFC 8628 section 3.5, the server's own
 /// interval winning when valid), and expire on the authorization's
-/// own clock. Sleeps run in-guest on the login thread; a host cancel
-/// lands on the next poll's network call.
+/// own clock. The waits are sliced, not one long sleep, so a cancel reaches
+/// the login thread inside the cancellation budget (gh #566).
 pub fn poll_device_code(
     cap: &dyn ProviderCap,
     authorization: &DeviceAuthorization,
@@ -724,7 +776,10 @@ pub fn poll_device_code(
     let deadline = Instant::now() + Duration::from_secs(authorization.expires_in_secs);
     let mut interval = Duration::from_secs(authorization.interval_secs.max(1));
     let mut slow_downs = 0u32;
-    std::thread::sleep(interval.min(deadline.saturating_duration_since(Instant::now())));
+    sleep_between_polls(
+        cap,
+        interval.min(deadline.saturating_duration_since(Instant::now())),
+    )?;
     while Instant::now() < deadline {
         match poll_device_once(cap, url, pairs)? {
             DevicePollOutcome::Complete(json) => return Ok(json),
@@ -742,7 +797,7 @@ pub fn poll_device_code(
         if remaining.is_zero() {
             break;
         }
-        std::thread::sleep(interval.min(remaining));
+        sleep_between_polls(cap, interval.min(remaining))?;
     }
     Err(IdentityFailure(if slow_downs > 0 {
         "device flow timed out after one or more slow_down responses; check the machine clock and try again"
