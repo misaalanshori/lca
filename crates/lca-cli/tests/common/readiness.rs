@@ -248,7 +248,13 @@ impl Tmux {
         // over-wide one; the two conditions differ only in what the failure says.
         let mut painted = false;
         loop {
-            let widest = self.logical_width();
+            // Gh #522: **measure the frame that is returned.** This used to call
+            // `logical_width()`, which captures the pane *again* - so a repaint between
+            // the two captures could make the primitive accept a frame it never looked
+            // at, and a row asserting on the returned frame then saw the older one
+            // (this row caught itself failing 1 in 3 that way). One capture, one
+            // measurement.
+            let widest = Self::logical_width_of(&last);
             if !last.trim().is_empty() {
                 painted = true;
             }
@@ -304,6 +310,13 @@ impl Tmux {
     pub fn logical_width(&self) -> usize {
         let out = Self::tmux(&["capture-pane", "-t", &self.name, "-p"]);
         let pane = String::from_utf8_lossy(&out.stdout).into_owned();
+        Self::logical_width_of(&pane)
+    }
+
+    /// [`Self::logical_width`] for a capture the caller already took, so a wait can
+    /// measure exactly the frame it is about to return (gh #522).
+    pub fn logical_width_of(pane: &str) -> usize {
+        let pane = pane.to_string();
         let physical = pane
             .lines()
             .map(lca_tui::engine::text::visible_width)
