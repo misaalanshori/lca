@@ -515,7 +515,10 @@ fn the_guest_copies_per_message_extras() {
         "and does not rebuild an empty map somewhere else:\n{completion}"
     );
     // The host's own half, so a future reader sees both ends of one contract.
-    let host = read("crates/lca-ext-host/src/host_imports.rs");
+    // Gh #552 split `host_imports.rs` into capability domains, so this reads the
+    // module (`crate::module_text`), which is the rule gh #574/#543 established:
+    // a guard keyed on one filename goes vacuous as soon as the code moves.
+    let host = crate::module_text("crates/lca-ext-host/src/host_imports.rs");
     assert!(
         host.contains("extra_pairs(&message.extras)"),
         "the host does send the pairs: one contract, two ends"

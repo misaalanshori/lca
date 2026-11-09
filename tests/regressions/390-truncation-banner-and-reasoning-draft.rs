@@ -270,7 +270,9 @@ fn the_truncation_survives_the_guest_boundary() {
         );
     }
     // ...and the host must map it back, or the round trip preserves nothing.
-    let host = read("crates/lca-ext-host/src/host_imports.rs");
+    // Gh #552 split `host_imports.rs` into capability domains; the module walk
+    // reaches `wit.rs`, where the stream mapping now lives.
+    let host = crate::module_text("crates/lca-ext-host/src/host_imports.rs");
     assert!(
         host.contains("TRUNCATED_KIND =>"),
         "the host maps the vendor event back to `Truncated`"

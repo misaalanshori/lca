@@ -37,9 +37,9 @@
 //! 1. **No re-entry.** A driver call cannot start another driver call on the same
 //!    extension. The one place host code runs inside a guest is the
 //!    `tools`/`completion` imports, and a nested tool call is handed to the
-//!    *turn's* task over `NestedCall` (`host_imports.rs`): the guest thread blocks
-//!    on `reply_rx`, the turn answers from its own task, and the driver is never
-//!    asked for a second call.
+//!    *turn's* task over `NestedCall` (`host_imports/ui_tools.rs`): the guest
+//!    thread blocks on `reply_rx`, the turn answers from its own task, and the
+//!    driver is never asked for a second call.
 //! 2. **The caller owns the wait; the driver holds no lock across a send.** Jobs
 //!    arrive on one channel and each replies on its own. A busy driver makes the
 //!    next caller queue, never spin.

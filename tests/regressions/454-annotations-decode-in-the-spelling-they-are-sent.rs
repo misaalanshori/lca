@@ -135,7 +135,7 @@ fn the_extras_decode_is_the_same_type_not_a_second_parser() {
 // someone outside this tree. Findings:
 ///
 /// - `ToolAnnotations` - the defect, fixed.
-/// - `Usage` - crosses WIT **structurally** (`host_imports::from_wit_usage`), never
+/// - `Usage` - crosses WIT **structurally** (`host_imports::wit::from_wit_usage`), never
 ///   as JSON, so its snake_case field names are not a wire spelling at all.
 /// - `ToolCall`, `ToolResult`, `ImageContent`, `NestedCallRecord`, and `Record`'s
 ///   payloads - JSON that this tree both writes and reads (session log, nested

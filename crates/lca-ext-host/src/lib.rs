@@ -19,6 +19,15 @@
 //!
 //! The crate needs no `unsafe`: components load through Wasmtime's safe
 //! `Component::new`, and calls go through generated typed bindings.
+//!
+//! **The host-import surface is partitioned by capability domain** (gh #552):
+//! `host_imports/` holds `bags` (log/resources/state), `sys` (fs/process/pty),
+//! `net_oauth` (net/oauth/credentials), `wit` (the ABI crossing) and `ui_tools`
+//! (dialogs and the nested `tools` import), one file per domain and one `mod.rs`
+//! that declares them. It is the code a security review reads - the linker's
+//! decision surface, `SECURITY.md`'s subject - so a reviewer reads the domain
+//! they are reviewing instead of a 1,000-line file, and each domain imports what
+//! it uses by name rather than through a glob.
 
 #![forbid(unsafe_code)]
 
@@ -33,7 +42,7 @@ use lca_ext_abi::host::tool::{Tool, ToolPre};
 use lca_ext_abi::host::ui::UiPre;
 use lca_ext_abi::{DeliveryMode, World};
 use lca_permissions::{
-    DialogPrompt, GrantStore, OAuthSettings, PermissionPrompt, Proposals, ScopeGrant, ScopeRoots,
+    GrantStore, OAuthSettings, PermissionPrompt, Proposals, ScopeGrant, ScopeRoots,
     ServeHttpSettings, SharedDialogs,
 };
 use lca_protocol::{
