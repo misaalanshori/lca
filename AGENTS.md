@@ -126,6 +126,11 @@ references), then pi's source.
   simplifications.
 - Error copy tells the user what to DO, not what the subsystem called
   the failure (the jargon purge is policy).
+- A mutex that serializes work should own the state that work touches: the SDK's
+  `Session` has one `turn: Mutex<ToolExecutor>`, not a gate `Mutex<()>` plus a second
+  lock around the executor (gh #563). And a per-turn flag is re-armed **after** the
+  gate is held, never before - an early re-arm lets a queued caller steal the running
+  turn's flag, which is exactly the defect that row exists for.
 - Settings: `Flag > Env (LCA_*) > ProjectFile (.lca/config.toml) >
   UserFile (~/.lca/config.toml) > Default`; `/settings` shows the
   winning source per key.

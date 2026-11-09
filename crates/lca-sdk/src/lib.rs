@@ -15,6 +15,22 @@
 //! standing grants already written to the data directory's grant store
 //! still apply. Turns run one at a time per session: `send` waits for
 //! its turn, and the next `send` queues on the same lock.
+//!
+//! Two rules keep that serialization honest (gh #563):
+//!
+//! 1. **The turn-exclusive state lives inside the gate.** [`Session`] has one
+//!    `turn` mutex, and it holds the [`ToolExecutor`] rather than guarding an
+//!    empty `()` beside a second mutex for the executor. The executor is
+//!    touched only by the turn that owns the gate, so a second lock nested a
+//!    second async guard across `.await` for nothing - and the type now says
+//!    "one turn owns the executor" without a comment.
+//! 2. **A per-turn flag is re-armed after the gate is held, never before.**
+//!    [`Session::send`] used to replace the session's cancel flag before it
+//!    reached the gate, so a `send` waiting its turn swapped the flag out from
+//!    under the turn that was running: [`Session::cancel`] then stopped the
+//!    queued call and the live turn ran on unstoppable. The flag is now
+//!    re-armed inside `run`, once the gate is held, and only when the caller
+//!    did not hand one in (`send_with_cancel` owns its flag, gh #309).
 
 #![forbid(unsafe_code)]
 
@@ -60,21 +76,27 @@ pub struct Session {
     /// The host's approval callback, when one is registered
     /// ([`Session::with_permission_prompt`]).
     approval: Option<PermissionCallback>,
-    /// Serializes turns: one session, one conversation, in order.
-    turn: tokio::sync::Mutex<()>,
-    /// The tool executor, built once (gh #310): its `ReadTracker` and
+    /// Serializes turns **and** owns the tool executor (gh #563).
+    ///
+    /// One mutex, not two: the executor is touched only inside the turn it
+    /// serializes, so a second lock around it bought nothing and nested two
+    /// async guards across `.await` points. The type now carries the invariant
+    /// - one turn owns the executor - and there is exactly one acquisition.
+    ///
+    /// The executor is built once (gh #310): its `ReadTracker` and
     /// loaded-instruction dedup are per session, not per turn, so
     /// `edit_requires_read` and "inject a subfolder AGENTS.md once" mean what
     /// they say across a conversation. A per-turn executor wiped both.
-    tools: tokio::sync::Mutex<ToolExecutor>,
+    turn: tokio::sync::Mutex<ToolExecutor>,
     /// The agent configuration, owned by the session (gh #310). Its `Arc`
     /// fields - `sent_stable`, `instruction_baseline`, `skills_cache`,
     /// `steer`, `extensions` - are the cross-turn state FR-CACHE-6's
     /// divergence check depends on; rebuilding it per turn reset them all.
     config: std::sync::Mutex<AgentConfig>,
-    /// The active turn's cancel flag (gh #309): re-armed at each `send`, so
-    /// [`Session::cancel`] from another task cancels the turn that is
-    /// actually running.
+    /// The active turn's cancel flag (gh #309): re-armed when a `send` turn
+    /// starts — inside the turn gate, never before it (gh #563) — so
+    /// [`Session::cancel`] from another task cancels the turn that is actually
+    /// running and nothing else.
     cancel: std::sync::Mutex<CancelFlag>,
     /// The event stream's fan-out point.
     events: tokio::sync::broadcast::Sender<TurnEvent>,
@@ -154,14 +176,34 @@ impl Session {
         provider: Arc<dyn lca_provider::Provider>,
         model: impl Into<String>,
     ) -> Result<Session, Error> {
+        Session::open(cwd, data_dir, provider, model, |store, cwd| {
+            store.create_session(cwd, lca_session::DEFAULT_TITLE)
+        })
+    }
+
+    /// The prologue [`Session::create`] and [`Session::resume`] share (gh #563):
+    /// the data directory, the store, the grants, the configured-model
+    /// fallback, and the assembly. `open_record` is the one thing that differs
+    /// between them - which record the store opens - so it is the whole of the
+    /// difference and nothing else is duplicated.
+    fn open(
+        cwd: impl Into<PathBuf>,
+        data_dir: impl Into<PathBuf>,
+        provider: Arc<dyn lca_provider::Provider>,
+        model: impl Into<String>,
+        open_record: impl FnOnce(
+            &SessionStore,
+            &std::path::Path,
+        ) -> lca_session::Result<lca_session::Session>,
+    ) -> Result<Session, Error> {
         let cwd = cwd.into();
         let data = data_dir.into();
         let store = Arc::new(SessionStore::new(data.clone()));
-        let session = store
-            .create_session(&cwd, lca_session::DEFAULT_TITLE)
-            .map_err(|err| Error::Start(err.to_string()))?;
+        let session = open_record(&store, &cwd).map_err(|err| Error::Start(err.to_string()))?;
         let grants = GrantStore::open(&data.join("grants.json"))
             .map_err(|err| Error::Start(err.to_string()))?;
+        // The configured-model rule from `docs/configuration.md`: an empty
+        // request takes the provider's first offer, else its own name.
         let requested = model.into();
         let model = if requested.is_empty() {
             provider
@@ -218,8 +260,7 @@ impl Session {
             provider,
             grants,
             approval: None,
-            turn: tokio::sync::Mutex::new(()),
-            tools: tokio::sync::Mutex::new(tools),
+            turn: tokio::sync::Mutex::new(tools),
             config: std::sync::Mutex::new(config),
             cancel: std::sync::Mutex::new(CancelFlag::new()),
             events,
@@ -238,33 +279,9 @@ impl Session {
         provider: Arc<dyn lca_provider::Provider>,
         model: impl Into<String>,
     ) -> Result<Session, Error> {
-        let cwd = cwd.into();
-        let data = data_dir.into();
-        let store = Arc::new(SessionStore::new(data.clone()));
-        let session = store
-            .session(&cwd, session_id)
-            .map_err(|err| Error::Start(err.to_string()))?;
-        let grants = GrantStore::open(&data.join("grants.json"))
-            .map_err(|err| Error::Start(err.to_string()))?;
-        let requested = model.into();
-        let model = if requested.is_empty() {
-            provider
-                .list_models()
-                .first()
-                .map(|model| model.id.clone())
-                .unwrap_or_else(|| provider.name().to_string())
-        } else {
-            requested
-        };
-        Ok(Session::assemble(
-            cwd,
-            data,
-            store,
-            session,
-            provider,
-            model,
-            Arc::new(std::sync::Mutex::new(grants)),
-        ))
+        Session::open(cwd, data_dir, provider, model, |store, cwd| {
+            store.session(cwd, session_id)
+        })
     }
 
     /// Register the host's approval callback (gh #14): wherever the
@@ -357,9 +374,13 @@ impl Session {
     /// Cancel the turn that is running now (gh #309).
     ///
     /// Before this, the `CancelFlag` was a local of `send`: an embedder could
-    /// see a turn start and had no way to stop it. The flag is re-armed at
-    /// each `send`, so calling this with no turn in flight is a no-op on a
-    /// fresh flag rather than a stale one.
+    /// see a turn start and had no way to stop it. The flag is re-armed when
+    /// a turn takes the gate, so calling this while no turn holds it is a no-op
+    /// on a flag the next turn replaces - never a poison for that turn.
+    ///
+    /// Gh #563: the re-arm's *position* is the contract. It happens inside
+    /// the gate; if it did not, a second `send` waiting its turn would replace
+    /// the running turn's flag and this call would stop the wrong turn.
     pub fn cancel(&self) {
         self.cancel_guard().cancel();
     }
@@ -375,27 +396,36 @@ impl Session {
     /// subscriber while the turn runs, records land in the log before
     /// this returns, and the outcome answers like headless mode's.
     pub async fn send(&self, input: &str) -> TurnOutcome {
-        // Re-arm the session's flag for this turn, so `cancel()` cancels the
-        // turn that is actually running (gh #309).
-        {
-            let mut flag = self.cancel_guard();
-            *flag = CancelFlag::new();
-        }
+        // The session flag is re-armed inside `run`, once the turn gate is
+        // held (gh #563). Re-arming here instead let a queued `send` replace
+        // the *running* turn's flag before it ever reached the gate, so
+        // `cancel()` cancelled the queued call and the live turn ran on
+        // unstoppable.
         self.run(input, None).await
     }
 
     /// The shared body of `send` and `send_with_cancel`: `external` is the
     /// caller's flag when one was handed in, else the session's.
     async fn run(&self, input: &str, external: Option<&CancelFlag>) -> TurnOutcome {
-        let _turn = self.turn.lock().await;
-        // Clone the flag rather than borrow it across the await: `CancelFlag`
-        // is an `Arc` pair inside, so the clone shares the cancel state.
-        let session_flag = {
-            let flag = self.cancel_guard();
-            flag.clone()
+        // The one acquisition (gh #563): holding the gate means owning this
+        // session's turn *and* its tool executor.
+        let mut tools = self.turn.lock().await;
+        // Re-arm the session's flag **here**, after the gate is held (gh #563),
+        // so the flag always belongs to the turn inside the gate: a `send`
+        // waiting its turn cannot swap the flag out from under the running
+        // turn, and a `cancel()` issued now reaches the live turn.
+        //
+        // A caller-owned flag is never touched (gh #309): `send_with_cancel`
+        // handed it in, so it is not ours to replace - and the clone shares
+        // the cancel state (`CancelFlag` is an `Arc` pair inside).
+        let cancel: CancelFlag = match external {
+            Some(flag) => flag.clone(),
+            None => {
+                let fresh = CancelFlag::new();
+                *self.cancel_guard() = fresh.clone();
+                fresh
+            }
         };
-        let cancel: CancelFlag = external.cloned().unwrap_or(session_flag);
-        let mut tools = self.tools.lock().await;
         // Gh #310: the config is cloned per turn, and its `Arc` fields are
         // shared - so `sent_stable`, `instruction_baseline`, `skills_cache`,
         // and `extensions` carry across turns instead of resetting.

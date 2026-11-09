@@ -7,6 +7,13 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **A `cancel()` issued while a second `send` was queued now stops the running turn.** The
+  SDK re-armed the session's cancel flag *before* the queued send reached the turn gate, so a
+  second `send` replaced the flag of the turn already running: `cancel()` then stopped the
+  queued call and the live turn could not be stopped at all, while the queued one failed
+  immediately as pre-cancelled. The flag is re-armed inside the gate now. The SDK's turn gate
+  is also one mutex that owns the tool executor, instead of a gate with a nested second lock
+  around it (gh #563).
 - **A cancelled device-code sign-in no longer hangs for the poll interval.** The device flow
   slept the whole RFC 8628 interval in one blocking call — five seconds, and five more after
   every `slow_down` — so cancelling a `/login` could not take effect until it ended (gh #566).

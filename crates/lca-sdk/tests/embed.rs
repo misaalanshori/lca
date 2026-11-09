@@ -422,3 +422,80 @@ async fn a_cancel_before_any_turn_does_not_poison_the_next_one() {
         "an idle cancel does not stick: {outcome:?}"
     );
 }
+
+// Verifies: gh #563 - `cancel()` stops the turn that is *running*, never the
+// queued one, even when a second `send` is already parked on the turn gate.
+//
+// The defect: `send` re-armed the session flag **before** `run` acquired the
+// gate, so a second `send` polled while a turn was in flight replaced the
+// running turn's flag. `cancel()` then cancelled the queued call's flag: the
+// running turn could not be stopped through `Session::cancel` at all, and the
+// queued one failed immediately as pre-cancelled once the gate freed. The
+// doc on `cancel` promises the opposite.
+//
+// Determinism, because this is a race and a row that cannot fail is worse than
+// none: the turn future is `!Send` (the tool executor holds non-`Send` state)
+// so `tokio::spawn` cannot be used, and the row drives all three participants
+// on one task in a single `join!`. `join!` polls every branch in order before
+// any timer can fire, so `second`'s first poll - the poll that re-arms the flag
+// on the defect side - has certainly happened by the time the timer cancels.
+// No scheduler luck involved.
+#[tokio::test]
+async fn a_queued_send_does_not_steal_the_running_turns_cancel_flag() {
+    let root = scratch("sdk-queued-cancel");
+    let provider = Arc::new(
+        FakeProvider::builder()
+            // The running turn: long enough that the cancel lands inside it.
+            .turn(|t| {
+                t.pause(1_500).text("first answer").usage(Usage {
+                    input: 5,
+                    output: 2,
+                    ..Usage::default()
+                })
+            })
+            // The queued turn: no pause, so its own outcome is unambiguous.
+            .turn(|t| {
+                t.text("second answer").usage(Usage {
+                    input: 4,
+                    output: 2,
+                    ..Usage::default()
+                })
+            })
+            .build(),
+    );
+    let session = Session::create(project_of(&root), root.join("data"), provider, "faux-1")
+        .expect("session starts");
+
+    let first = session.send("first");
+    // Polled from the first tick, so its flag re-arm (the defect) happens
+    // before the cancel below.
+    let second = session.send("second");
+    let canceller = async {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        session.cancel();
+    };
+    let (first_outcome, second_outcome, ()) = tokio::join!(first, second, canceller);
+    eprintln!(
+        "FIXED MEASURED: first={:?}/{:?} second={:?}/{:?}",
+        first_outcome.status,
+        first_outcome.stop_reason,
+        second_outcome.status,
+        second_outcome.stop_reason
+    );
+
+    assert_eq!(
+        first_outcome.stop_reason,
+        lca_protocol::StopReason::Cancelled,
+        "the cancel stops the turn that is running: {first_outcome:?}"
+    );
+    assert_ne!(
+        second_outcome.stop_reason,
+        lca_protocol::StopReason::Cancelled,
+        "the queued turn is not pre-cancelled by someone else's cancel: {second_outcome:?}"
+    );
+    assert_eq!(
+        second_outcome.status,
+        lca_core::TurnStatus::Ok,
+        "the queued turn runs to completion once the gate frees: {second_outcome:?}"
+    );
+}
