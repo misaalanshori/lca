@@ -66,7 +66,10 @@ fn source(rel: &str) -> String {
 // is caught rather than multiplying the decision.
 #[test]
 fn the_challenge_parser_normalises_member_case() {
-    let text = source("crates/lca-mcp/src/lib.rs");
+    // Gh #555 moved the shared domain types and the challenge parser into
+    // `types.rs` for the line ceiling; the crate root still re-exports them, and
+    // this follows the code rather than the filename.
+    let text = source("crates/lca-mcp/src/types.rs");
     let body = function_body(&text, "pub fn parse_www_authenticate(");
     assert!(
         body.contains("to_ascii_lowercase()"),

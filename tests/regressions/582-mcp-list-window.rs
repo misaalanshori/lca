@@ -92,7 +92,9 @@ fn the_list_window_is_not_the_first_turn_startup_window() {
 // number answering a different question).
 #[test]
 fn the_list_window_agrees_with_the_http_handshake_default() {
-    let lib = read("crates/lca-mcp/src/lib.rs");
+    // Gh #555 moved `HttpServerConfig` and its default into `types.rs`; the crate
+    // root re-exports it, and this reads where the code is.
+    let lib = read("crates/lca-mcp/src/types.rs");
     let default = lib
         .split("pub fn timeout(&self)")
         .nth(1)
