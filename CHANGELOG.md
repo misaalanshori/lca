@@ -7,6 +7,14 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **`lca mcp list` no longer claims that no server offers resources.** The `resources`
+  field was copied from a transport description that could not know — it read the config
+  entry and hard-coded `false` on both arms — so every server was reported as offering
+  nothing, in the text output and in `--json` alike, while `pi` printed
+  `offers resources` for the same server. The flag now comes from the handshake (the
+  capability that makes the `list_mcp_resources` trio available), so a connected
+  resource-bearing server says so and a tools-only server does not. A server that never
+  connected reports `false`, which means "never asked", not "said no" (gh #585).
 - **A resize during an `$EDITOR` handoff (or an interactive `!`, or a suspend) now reaches
   the layout.** Those three hand the terminal to a child and take it back, and while the
   child held it nobody was watching the window size - worse, the restarted reader seeded
