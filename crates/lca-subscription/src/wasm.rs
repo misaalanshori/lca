@@ -300,10 +300,22 @@ macro_rules! subscription_wasm_dispatcher {
         /// driver, so events leave as the host yields body chunks.
         pub struct QueuedStream {
             driver: RefCell<Option<::lca_wire_openai::ResponseStreamDriver<'static>>>,
+            /// The failure an open returned, delivered as the stream's first
+            /// (and only) event (gh #566). `retryable` survives this way; the
+            /// class does not - see `open_stream`'s note.
+            seed: RefCell<Option<(String, bool)>>,
         }
 
         impl GuestCompletionStream for QueuedStream {
             fn next(&self) -> Option<WasmEvent> {
+                // Gh #566: a failed open is delivered as the stream's own typed
+                // error, not as the `result<_, string>` the WIT signature
+                // allows - so `retryable` is the wire kit's exact answer and the
+                // turn loop's retry rule acts on it, instead of the host
+                // re-guessing from the message text.
+                if let Some((message, retryable)) = self.seed.borrow_mut().take() {
+                    return Some(WasmEvent::Error((message, retryable)));
+                }
                 let mut slot = self.driver.borrow_mut();
                 let driver = slot.as_mut()?;
                 match driver.next_event() {
@@ -322,14 +334,34 @@ macro_rules! subscription_wasm_dispatcher {
 
         /// Open one stream over the guest capability view: authenticate,
         /// build the Responses body, send it.
+        ///
+        /// Typed as `StreamFailure`, not `String` (gh #566): flattening here
+        /// threw away `class` and `retryable`, and the host fell back to
+        /// guessing the class from the message text (gh #356).
+        ///
+        /// What crosses the WIT boundary is `(message, retryable)` - the
+        /// stream-event case's shape - so `class` has no wire slot. The turn
+        /// loop labels every event-delivered failure `transport`, which is the
+        /// same exit code as `auth`/`invalid` (all three are the provider
+        /// failure code) but a different word in the headless envelope. Pinned
+        /// in the report rather than papered over: giving a class to a stream
+        /// event is either a turn-loop change or a WIT change, and this cycle
+        /// owns neither.
         fn open_stream(
             request: &lca_protocol::CompletionRequest,
-        ) -> Result<::lca_wire_openai::ResponseStreamDriver<'static>, String> {
-            let token =
-                ::lca_subscription::access_token(&GUEST_CAP, &$spec).map_err(|err| err.0)?;
+        ) -> Result<::lca_wire_openai::ResponseStreamDriver<'static>, ::lca_wire_openai::StreamFailure>
+        {
+            // `IdentityFailure` -> `StreamFailure` is the kit's existing
+            // bridge: class `invalid`, never retried (a missing login is a
+            // configuration problem).
+            let token = ::lca_subscription::access_token(&GUEST_CAP, &$spec)?;
             let account_id = $stored(&GUEST_CAP, "account_id");
             if account_id.is_empty() {
-                return Err($account_error.to_string());
+                return Err(::lca_wire_openai::StreamFailure {
+                    message: $account_error.to_string(),
+                    class: "invalid",
+                    retryable: false,
+                });
             }
             let system: String = request
                 .messages
@@ -350,8 +382,13 @@ macro_rules! subscription_wasm_dispatcher {
                 &request.model,
                 effort,
             );
-            let body_bytes =
-                serde_json::to_vec(&body).map_err(|err| format!("cannot build request: {err}"))?;
+            let body_bytes = serde_json::to_vec(&body).map_err(|err| {
+                ::lca_wire_openai::StreamFailure {
+                    message: format!("cannot build request: {err}"),
+                    class: "invalid",
+                    retryable: false,
+                }
+            })?;
             let url = format!(
                 "{}{}",
                 $endpoint(&GUEST_CAP, "api_base", $spec.api_base).trim_end_matches('/'),
@@ -369,7 +406,6 @@ macro_rules! subscription_wasm_dispatcher {
                 &body_bytes,
                 &|| ::lca_subscription::purge_tokens(&GUEST_CAP),
             )
-                .map_err(|failure| failure.message)
         }
 
         impl ModelsGuest for $wasm {
@@ -443,7 +479,21 @@ macro_rules! subscription_wasm_dispatcher {
                             .collect(),
                         tool_call_id: message.tool_call_id.clone(),
                         usage: None,
-                        extras: Default::default(),
+                        // Gh #566: the WIT `message` record carries
+                        // `extras: list<extra-pair>` and the host copies it
+                        // through verbatim (the reserved-map contract). Writing
+                        // an empty map here dropped every per-message extra a
+                        // WASM-delivered subscription provider would have seen -
+                        // `extras["queue"]` (ADR-0038's steering marker) above
+                        // all, so a WASM codex/grok turn could not tell a steered
+                        // message from a typed one. Same omission gh #316 fixed
+                        // for `ModelInfo.extras` one screen above, and the same
+                        // fix: copy the pairs, no ABI change.
+                        extras: message
+                            .extras
+                            .iter()
+                            .map(|pair| (pair.key.clone(), pair.value.clone()))
+                            .collect(),
                     })
                     .collect();
                 let tools = request
@@ -475,10 +525,20 @@ macro_rules! subscription_wasm_dispatcher {
                         .map(|pair| (pair.key.clone(), pair.value.clone()))
                         .collect(),
                 };
-                let driver = open_stream(&protocol_request)?;
-                Ok(CompletionStream::new(QueuedStream {
-                    driver: RefCell::new(Some(driver)),
-                }))
+                match open_stream(&protocol_request) {
+                    Ok(driver) => Ok(CompletionStream::new(QueuedStream {
+                        driver: RefCell::new(Some(driver)),
+                        seed: RefCell::new(None),
+                    })),
+                    // Gh #566: the stream is created and carries the failure as
+                    // its own typed error, so the exact `retryable` reaches the
+                    // turn loop's retry rule. Returned as `Err(String)` instead,
+                    // the host would re-derive it from the message text.
+                    Err(failure) => Ok(CompletionStream::new(QueuedStream {
+                        driver: RefCell::new(None),
+                        seed: RefCell::new(Some(::lca_subscription::open_failure_event(&failure))),
+                    })),
+                }
             }
         }
 

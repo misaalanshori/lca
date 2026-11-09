@@ -641,3 +641,13 @@ mod resize_survives_the_handoff;
 // connection, so a future refactor cannot derive it from the entry again.
 #[path = "585-mcp-list-offers-resources.rs"]
 mod mcp_list_offers_resources;
+
+// Gh #566: the shared subscription guest flattened a `StreamFailure` into a string
+// (dropping the `retryable` the turn loop's retry rule reads) and wrote an empty extras
+// map on messages whose WIT twin carries `list<extra-pair>` (dropping
+// `extras["queue"]`, ADR-0038). Both are WASM/native parity omissions of the gh #316
+// class. The behavioural half runs the real turn loop on the pair the guest now
+// delivers (429 retries, 401 does not); the structural half pins that the guest keeps
+// the failure type and copies the pairs.
+#[path = "566-wasm-keeps-retryability-and-extras.rs"]
+mod wasm_keeps_retryability_and_extras;

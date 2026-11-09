@@ -708,6 +708,21 @@ pub fn poll_device_once(
     }
 }
 
+/// The `(message, retryable)` pair a failed stream open is delivered as, on any
+/// delivery mode (gh #566).
+///
+/// The WIT `stream-event` case `error` carries a message and a retryability
+/// flag, and the host maps it straight onto `StreamEvent::Error`. `class` has no
+/// slot in that record, so what crosses is exactly these two facts - the ones
+/// the retry rule needs. The guest returns the failure as the stream's own
+/// event (rather than as the `result<_, string>` the signature also allows)
+/// precisely so this flag travels **verbatim**: returned as a string error, the
+/// host would re-derive retryability from the message text (the gh #356 class of
+/// guesswork).
+pub fn open_failure_event(failure: &StreamFailure) -> (String, bool) {
+    (failure.message.clone(), failure.retryable)
+}
+
 /// The resource path a device-flow wait probes between sleep slices (gh #566).
 ///
 /// Nothing is ever stored here: every host answers "not found", and that answer
