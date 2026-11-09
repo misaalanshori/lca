@@ -51,6 +51,7 @@ mod chat_project_override;
 mod chat_queue;
 mod chat_render;
 mod chat_search;
+mod chat_session_commands;
 mod chat_setting_cycle;
 mod chat_settings_footer;
 pub mod chat_shell;
