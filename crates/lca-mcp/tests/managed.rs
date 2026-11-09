@@ -97,6 +97,51 @@ fn one_failure_never_blocks_the_rest() {
     );
 }
 
+// Verifies: gh #585 - a state row carries the handshake's resource answer, and a row
+// with no connection carries nothing (which reads as "not asked").
+//
+// The CLI row (`crates/lca-cli/tests/mcp_cli.rs`) drives the printed report; this is
+// the fact underneath it, at the one place a live fact becomes a reported one. A
+// disabled or failed entry has no `live`, so `false` there is honest silence rather
+// than a claim - which is exactly the reading `docs/mcp.md` states.
+#[test]
+fn a_status_row_reports_the_handshakes_resource_answer() {
+    if !python3_available() {
+        eprintln!("skip: python3 is not installed");
+        return;
+    }
+    let caps = sandbox("managed-resources-flag", lca_mcp::manifest_grants());
+    let mut failing = stdio_entry("failing", McpExposure::Direct, true);
+    failing.kind = EntryKind::Stdio {
+        command: "mcp-585-definitely-missing-binary".to_string(),
+        args: Vec::new(),
+        cwd: None,
+        env: std::collections::BTreeMap::new(),
+    };
+    let bridge = lca_mcp::McpBridge::connect_managed(
+        caps,
+        vec![
+            stdio_entry("echo", McpExposure::Direct, true),
+            stdio_entry("off", McpExposure::Direct, false),
+            failing,
+        ],
+    );
+    let flag = |name: &str| {
+        bridge
+            .statuses()
+            .into_iter()
+            .find(|status| status.name == name)
+            .unwrap_or_else(|| panic!("{name} has a row"))
+            .offers_resources
+    };
+    assert!(
+        flag("echo"),
+        "the fixture advertises `capabilities.resources`, so the connected row says so"
+    );
+    assert!(!flag("off"), "a disabled server was never asked");
+    assert!(!flag("failing"), "a failed server was never asked");
+}
+
 // Verifies: gh #53 - a guarded remote server lands needs-sign-in
 // (with the scopes named), not failure.
 #[test]
