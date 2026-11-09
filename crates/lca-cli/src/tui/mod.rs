@@ -30,6 +30,11 @@ mod model_select;
 // Gh #543: the pre-interface half of the composition root.
 mod open;
 mod pending_step;
+// Gh #543: the CLI's own prompt surfaces (`SessionPrompt`, `SessionDialogs`).
+mod prompt_dialogs;
+// `pub(in crate::tui)`, matching the items' own reach: a re-export may not
+// widen what it re-exports, and `pub(super)` here would mean the crate root.
+pub(in crate::tui) use prompt_dialogs::{SessionDialogs, SessionPrompt};
 mod persona;
 mod runner;
 mod session_hooks;
@@ -41,9 +46,7 @@ use std::sync::{Arc, Mutex};
 
 use lca_config::Config;
 use lca_core::{AgentConfig, ExtensionRegistry};
-use lca_permissions::{
-    Decision, GrantStore, PermissionPrompt, ProposalDiff, Proposals, SharedPrompt,
-};
+use lca_permissions::{GrantStore, Proposals, SharedPrompt};
 use lca_provider::Provider;
 use lca_session::{Session, SessionStore};
 use lca_tools::ToolExecutor;
@@ -357,138 +360,6 @@ pub fn run(
     let result = lca_ui::run(options, runner);
     ui.close();
     result
-}
-
-/// The prompt the host's own consent asks through when no turn is running:
-/// it sends the request into the interface's session channel and waits for
-/// the answer, exactly as a turn's prompt does, so the *same*
-/// [`crate::net_consent::endpoint_consent`] seam works before `/model`'s
-/// live discovery (gh #31 review; gh #29's rule that every live request
-/// to a profile endpoint is consented first). With no channel yet - before
-/// `run` starts - it denies, which is the honest answer with nobody to ask.
-pub(super) struct SessionPrompt {
-    slot: Arc<Mutex<Option<std::sync::mpsc::SyncSender<lca_ui::PromptRequest>>>>,
-}
-
-impl PermissionPrompt for SessionPrompt {
-    fn ask(&mut self, action: &lca_permissions::Action) -> Decision {
-        self.ask_annotated(action, None)
-    }
-
-    /// #78: tool hints ride to the prompt surface; the decision path
-    /// never reads them.
-    fn ask_annotated(
-        &mut self,
-        action: &lca_permissions::Action,
-        annotations: Option<&lca_protocol::ToolAnnotations>,
-    ) -> Decision {
-        let Some(sender) = self
-            .slot
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
-        else {
-            return Decision::Denied;
-        };
-        let (respond, response) = std::sync::mpsc::sync_channel(1);
-        if sender
-            .send(lca_ui::PromptRequest {
-                action: action.display_annotated(annotations),
-                respond,
-            })
-            .is_err()
-        {
-            return Decision::Denied;
-        }
-        response.recv().unwrap_or(Decision::Denied)
-    }
-
-    fn review_proposals(&mut self, _diff: &ProposalDiff) -> bool {
-        false
-    }
-}
-
-/// The session-lifetime dialog bridge (gh #124): `SharedDialogs` routes
-/// here, and each question rendezvous with the TUI loop over
-/// `dialog_slot`. A dead loop answers the denied values, exactly like
-/// [`SessionPrompt`] denies a dead prompt.
-struct SessionDialogs {
-    slot: Arc<Mutex<Option<std::sync::mpsc::SyncSender<lca_ui::DialogExchange>>>>,
-}
-
-impl SessionDialogs {
-    /// Ask one question: send the exchange, wait for the answer, and map
-    /// a dead loop to `denied`.
-    fn ask(&mut self, dialog: lca_protocol::UiDialog) -> lca_protocol::DialogAnswer {
-        // Decided up front: both dead-loop paths below answer this.
-        let denied = denied_answer(&dialog);
-        let Some(sender) = self
-            .slot
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
-        else {
-            return denied;
-        };
-        let (respond, response) = std::sync::mpsc::sync_channel(1);
-        if sender
-            .send(lca_ui::DialogExchange { dialog, respond })
-            .is_err()
-        {
-            return denied;
-        }
-        response.recv().unwrap_or(denied)
-    }
-}
-
-/// The denied value for one question (gh #124's headless contract,
-/// shared with the dead-loop path above).
-fn denied_answer(dialog: &lca_protocol::UiDialog) -> lca_protocol::DialogAnswer {
-    match dialog {
-        lca_protocol::UiDialog::Confirm { .. } => lca_protocol::DialogAnswer::Confirm(false),
-        lca_protocol::UiDialog::Select { .. } => lca_protocol::DialogAnswer::Select(None),
-        lca_protocol::UiDialog::Input { .. } => lca_protocol::DialogAnswer::Input(None),
-        lca_protocol::UiDialog::Notify { .. } => lca_protocol::DialogAnswer::Notify,
-    }
-}
-
-impl lca_permissions::DialogPrompt for SessionDialogs {
-    fn confirm(&mut self, title: &str, message: &str) -> bool {
-        matches!(
-            self.ask(lca_protocol::UiDialog::Confirm {
-                title: title.to_string(),
-                message: message.to_string(),
-            }),
-            lca_protocol::DialogAnswer::Confirm(true)
-        )
-    }
-
-    fn select(&mut self, title: &str, options: &[String]) -> Option<String> {
-        match self.ask(lca_protocol::UiDialog::Select {
-            title: title.to_string(),
-            options: options.to_vec(),
-        }) {
-            lca_protocol::DialogAnswer::Select(choice) => choice,
-            _ => None,
-        }
-    }
-
-    fn input(&mut self, label: &str, placeholder: Option<&str>) -> Option<String> {
-        match self.ask(lca_protocol::UiDialog::Input {
-            label: label.to_string(),
-            placeholder: placeholder.map(str::to_string),
-        }) {
-            lca_protocol::DialogAnswer::Input(text) => text,
-            _ => None,
-        }
-    }
-
-    fn notify(&mut self, message: &str, level: &str) {
-        let _ = self.ask(lca_protocol::UiDialog::Notify {
-            message: message.to_string(),
-            level: level.to_string(),
-        });
-    }
 }
 
 /// A stashed `/login` answer: the provider, the chosen option id, and the

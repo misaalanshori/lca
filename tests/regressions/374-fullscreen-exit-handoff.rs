@@ -586,7 +586,10 @@ fn the_right_click_gate_excludes_vscode_and_non_windows() {
 // from freezing the interface.
 #[test]
 fn the_right_click_paste_uses_the_one_clipboard_path() {
-    let hooks = production_source("crates/lca-cli/src/tui/hooks.rs");
+    // Gh #543: `hooks.rs` is a module (`session_hooks.rs` and the future dialog
+    // sibling sit beside it), so read it as one - a row that greps one filename
+    // stops seeing the seam the day it moves.
+    let hooks = crate::module_text("crates/lca-cli/src/tui/hooks.rs");
     assert!(
         hooks.contains("read_clipboard: Some(super::attach::read_clipboard_hook())"),
         "the host fills the reader from `attach.rs`, where `/paste` already reads: \
