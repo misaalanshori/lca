@@ -6,8 +6,10 @@
 //! the one the modal already had, now named: `manager` owns **lifecycle** -
 //! entries, the bridge, background sign-ins, the verbs - and this module owns the
 //! **projection** of that state into rows. It reaches back through
-//! [`McpManager`]'s existing accessors (`entries`, `bridge`, `source_path`,
-//! `drain_landed`), so no field widens and there is still one owner of each fact.
+//! [`McpManager`]'s existing accessors (`entries`, `bridge`, `drain_landed`) and
+//! three `pub(crate)` fields (`user_path`, `project_path`, `bridge` - the same
+//! `Arc`, so the projection shares the lifecycle's view rather than opening a
+//! second one), so there is still one owner of each fact.
 //!
 //! UI-free by the same rule as the manager: values, never widgets (ADR-0047).
 

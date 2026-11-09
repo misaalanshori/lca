@@ -4,8 +4,10 @@
 //! Split, not moved in ownership: the crate root still re-exports all of it
 //! (`lca_mcp::ServerConfig`, `lca_mcp::StoredToken`, …), so no caller's path
 //! changes. What lives here is the **data** an `mcp.json` entry or an OAuth
-//! credential is made of, plus the three predicates that decide what a listed
-//! server, a credential scope, or an HTTP status means.
+//! credential is made of, plus the predicates that decide what a listed server
+//! (`is_valid_server_name`, `parse_servers`), a credential scope (`merge_scopes`,
+//! `token_key`), a challenge header (`parse_www_authenticate`), or an HTTP status
+//! (`is_transient_status`) means.
 //!
 //! Naming (`mcp_namespace`, `tool_name`, `create_tool_name`) stays in the crate
 //! root, next to `qualified_pairs`: the rules there are one decision about how a
