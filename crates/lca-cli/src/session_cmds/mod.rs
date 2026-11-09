@@ -1,10 +1,16 @@
 //! The session subcommands: `config`, `resume`, `fork`, `rename`,
 //! `export`, and `session gc` (S3's ceiling split).
+//!
+//! **Gh #543 made this a directory without changing its path.** It was
+//! `src/session_cmds.rs`; the routing vocabulary (`Route`, `Invocation`,
+//! `SessionSelector`, `OutputMode`, `route`, `route_with`,
+//! `check_flag_contradictions`, `resolve_session`) is still reached at
+//! `lca_cli::session_cmds::<name>` because a `x.rs`/`x/mod.rs` file is the same
+//! module. `export.rs` holds the export artifact and `session_maint.rs` (a
+//! sibling module, unchanged) holds `gc`/`import`/`migrate`.
 
 use super::*;
-use lca_permissions::GrantStore;
-use lca_session::Session;
-use lca_session::{ExportOptions, SessionStore};
+use lca_session::SessionStore;
 use std::path::{Path, PathBuf};
 
 /// Which session a headless run appends to (#111: `-c` continues the
@@ -355,49 +361,6 @@ pub fn check_flag_contradictions(cli: &Cli) -> Option<String> {
     None
 }
 
-pub(super) fn config_command(cwd: &Path, approve: bool, no_approve: bool) -> i32 {
-    let data = data_dir();
-    let mut grants = match GrantStore::open(&data.join("grants.json")) {
-        Ok(grants) => grants,
-        Err(err) => {
-            eprintln!("error: {err}");
-            return exit::INTERNAL;
-        }
-    };
-    // gh #80: the dump shows what this process would load.
-    let flags = CliFlags {
-        approve,
-        no_approve,
-        ..Default::default()
-    };
-    let trust_default = crate::trust_default_fallback();
-    crate::apply_startup_trust(&mut grants, cwd, &flags, &trust_default);
-    let config = match load_config(cwd, &grants, false, false) {
-        Ok(config) => config,
-        Err(err) => {
-            eprintln!("error: {err}");
-            return exit::USAGE;
-        }
-    };
-    // gh #30 (PG-032): print-only by design - the interactive editor is
-    // the `/settings` selector, and this is the same dump `/settings`
-    // used to print: every key with its winning source, the live
-    // overrides labelled, `shell.resolved`, and the screen renderer.
-    let shell = crate::resolve_shell(&config).ok();
-    let shell_error = crate::resolve_shell(&config).err();
-    print!(
-        "{}",
-        crate::tui::settings_text(
-            &config,
-            config.thinking(),
-            config.ui_theme(),
-            shell.as_ref(),
-            shell_error.as_deref(),
-        )
-    );
-    0
-}
-
 pub(super) fn open_store() -> Result<(SessionStore, PathBuf), i32> {
     let data = data_dir();
     Ok((SessionStore::new(data.clone()), data))
@@ -614,189 +577,6 @@ pub fn route_with(cli: &Cli, inv: &Invocation) -> Route {
     }
 }
 
-pub(super) fn resume_list(cwd: &Path) -> i32 {
-    let Ok((store, _)) = open_store() else {
-        return exit::INTERNAL;
-    };
-    match store.list_sessions(cwd) {
-        Ok(sessions) => {
-            if sessions.is_empty() {
-                println!("No sessions yet. Start one with `lca -p \"...\"`.");
-                return exit::OK;
-            }
-            for session in sessions {
-                println!(
-                    "{}\t{}\t{} messages",
-                    session.id,
-                    session.display_title(),
-                    session.message_count
-                );
-            }
-            exit::OK
-        }
-        Err(err) => {
-            eprintln!("error: cannot list sessions: {err}");
-            exit::SESSION
-        }
-    }
-}
-
-pub(super) fn fork_command(cwd: &Path, id: &str, message: &str) -> i32 {
-    let Ok((store, _)) = open_store() else {
-        return exit::INTERNAL;
-    };
-    let parent = match store.session(cwd, id) {
-        Ok(parent) => parent,
-        Err(err) => {
-            eprintln!("error: {err}");
-            return exit::SESSION;
-        }
-    };
-    match store.fork(&parent, message) {
-        Ok(child) => {
-            println!("{}", child.id());
-            exit::OK
-        }
-        Err(err) => {
-            eprintln!("error: {err}");
-            exit::SESSION
-        }
-    }
-}
-
-pub(super) fn clone_command(cwd: &Path, id: &str, title: Option<&str>) -> i32 {
-    let Ok((store, _)) = open_store() else {
-        return exit::INTERNAL;
-    };
-    let parent = match store.session(cwd, id) {
-        Ok(parent) => parent,
-        Err(err) => {
-            eprintln!("error: {err}");
-            return exit::SESSION;
-        }
-    };
-    match store.clone_session(&parent, title) {
-        Ok(child) => {
-            println!("{}", child.id());
-            exit::OK
-        }
-        Err(err) => {
-            eprintln!("error: {err}");
-            exit::SESSION
-        }
-    }
-}
-
-pub(super) fn rename_command(cwd: &Path, id: &str, title: &str) -> i32 {
-    let Ok((store, _)) = open_store() else {
-        return exit::INTERNAL;
-    };
-    match store.session(cwd, id) {
-        Ok(session) => match store.rename(&session, title) {
-            Ok(()) => exit::OK,
-            Err(err) => {
-                eprintln!("error: {err}");
-                exit::SESSION
-            }
-        },
-        Err(err) => {
-            eprintln!("error: {err}");
-            exit::SESSION
-        }
-    }
-}
-
-/// `lca delete <id>`: move a session to the trash directory (gh
-/// #75). Prints where it went so recovery is one `mv` away.
-pub(super) fn delete_command(cwd: &Path, id: &str) -> i32 {
-    let Ok((store, _)) = open_store() else {
-        return exit::INTERNAL;
-    };
-    match store.session(cwd, id) {
-        Ok(session) => match store.trash(&session) {
-            Ok(target) => {
-                println!(
-                    "trashed {} (recover with `mv {} <sessions-dir>`)",
-                    id,
-                    target.display()
-                );
-                exit::OK
-            }
-            Err(err) => {
-                eprintln!("error: {err}");
-                exit::SESSION
-            }
-        },
-        Err(err) => {
-            eprintln!("error: {err}");
-            exit::SESSION
-        }
-    }
-}
-
-pub(super) fn export_command(
-    cwd: &Path,
-    id: &str,
-    audit: bool,
-    html: bool,
-    output: Option<&Path>,
-) -> i32 {
-    let Ok((store, _)) = open_store() else {
-        return exit::INTERNAL;
-    };
-    match store.session(cwd, id) {
-        Ok(session) => {
-            let json = match store.export(&session, ExportOptions { audit }) {
-                Ok(path) => path,
-                Err(err) => {
-                    eprintln!("error: {err}");
-                    return exit::SESSION;
-                }
-            };
-            // `--output` relocates the JSON; the HTML lands next to
-            // whichever JSON path this run reports.
-            let json = match output {
-                Some(dest) => match std::fs::copy(&json, dest) {
-                    Ok(_) => dest.to_path_buf(),
-                    Err(err) => {
-                        eprintln!("error: {err}");
-                        return exit::SESSION;
-                    }
-                },
-                None => json,
-            };
-            println!("{}", json.display());
-            if html {
-                match store.export_html(&session, ExportOptions { audit }) {
-                    Ok(path) => {
-                        let shown = match output {
-                            Some(dest) => {
-                                let sibling = dest.with_extension("html");
-                                if std::fs::copy(&path, &sibling).is_ok() {
-                                    sibling
-                                } else {
-                                    path
-                                }
-                            }
-                            None => path,
-                        };
-                        println!("{}", shown.display());
-                    }
-                    Err(err) => {
-                        eprintln!("error: {err}");
-                        return exit::SESSION;
-                    }
-                }
-            }
-            exit::OK
-        }
-        Err(err) => {
-            eprintln!("error: {err}");
-            exit::SESSION
-        }
-    }
-}
-
 /// Resolve the session to open (gh #69): fork clones at the tip (with
 /// `--session-id` choosing the fork's id), an exact id opens or is
 /// created, otherwise the resumed one or a fresh one. `--name` titles
@@ -856,16 +636,6 @@ pub fn resolve_session(
         // the spec, so no quiet rename (which would materialize just
         // to warn).
         None => Ok(store.new_pending(cwd, title)),
-    }
-}
-
-/// Apply `--name` to an opened session (gh #69): a rename failure
-/// warns and the interface still opens.
-fn rename_quiet(store: &SessionStore, session: &Session, name: Option<&str>) {
-    if let Some(name) = name
-        && let Err(err) = store.rename(session, name)
-    {
-        eprintln!("warning: cannot name the session `{name}`: {err}");
     }
 }
 
@@ -1110,3 +880,15 @@ mod session_flag_tests {
         assert!(check(&["lca", "--name", "demo", "config"]).is_some());
     }
 }
+
+// The export artifact (gh #543): the dispatch in `run.rs` and the router keep
+// naming `session_cmds::export_command`, exactly as they did when it lived here.
+mod export;
+mod verbs;
+pub(crate) use export::export_command;
+// The per-verb bodies (gh #543); the router in `run.rs` names them through this
+// module, so their paths are unchanged.
+pub(crate) use verbs::{
+    clone_command, config_command, delete_command, fork_command, rename_command, rename_quiet,
+    resume_list,
+};
