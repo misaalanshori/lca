@@ -178,3 +178,40 @@ fn an_explicit_generated_path_is_refused_by_the_real_engine() {
     let outcome = state.format_file(cap.as_ref(), cap.as_ref(), "target/gen/out.rs");
     assert!(matches!(outcome, HookOutcome::Refused(_)), "{outcome:?}");
 }
+
+// Verifies: gh #284 - **a hash_edit result formats through the real engine.**
+//
+// The unit row proves the hook spawns for a hash_edit call; this one proves the same
+// call reaches the shipped capability engine and really rewrites the file, which is
+// the end-to-end claim the issue makes ("a session where the model uses hash_edit never
+// auto-formats"). The path comes from the tool's declared argument shape, not from a
+// special case in the test.
+#[test]
+fn a_hash_edit_result_is_formatted_by_the_real_engine() {
+    if !rustfmt_present() {
+        eprintln!("skipping: rustfmt is not installed (the extension degrades the same way)");
+        return;
+    }
+    let workspace = Workspace::new("hash-edit-format");
+    let before = workspace.read("src/main.rs");
+    let cap = workspace.capabilities();
+
+    let state = FormatterState::new();
+    // The exact shape `extensions/hash-edit` declares: `{path, edits}`.
+    let outcome = state.handle_result(
+        cap.as_ref(),
+        cap.as_ref(),
+        "hash_edit",
+        r#"{"path": "src/main.rs", "edits": [{"start_hash": "ab", "end_hash": "", "new_text": ""}]}"#,
+        true,
+    );
+    assert!(
+        matches!(outcome, HookOutcome::Formatted { .. }),
+        "a hash_edit result formats: {outcome:?}"
+    );
+    assert_ne!(
+        workspace.read("src/main.rs"),
+        before,
+        "and the file on disk really was reformatted (report: {outcome:?})"
+    );
+}

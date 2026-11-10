@@ -69,6 +69,48 @@ fn formatter_arguments_carry_the_file() {
     assert_eq!(go.args[0], "-w");
 }
 
+// Verifies: gh #284 - **every built-in writing tool's path extracts**, and
+// nothing else does.
+//
+// The hook covered `edit` and `write` only, and the tree ships a third writing
+// tool: `hash_edit` (extensions/hash-edit, args `{path, edits}`). A session whose
+// model used hash_edit therefore never auto-formatted - the hook returned
+// `Skipped("no formattable file in this call")` and nothing said so.
+//
+// `apply_patch` is deliberately absent: gh #284's title named it, but no crate,
+// manifest or doc in this tree declares such a tool (`grep -rn "apply_patch"
+// --include=*.rs --include=*.md --include=*.toml .` is empty outside `target`), so
+// supporting it here would be inventing a contract for a name nothing produces.
+// If a writing tool is added later it is added here with the same one-line reason:
+// it mutates a file the formatter may claim.
+#[test]
+fn a_hash_edit_path_extracts_and_the_negative_cases_stay_negative() {
+    // The declared shape: `{"path": ..., "edits": [...]}`.
+    assert_eq!(
+        formatter::extract_path("hash_edit", r#"{"path": "src/a.rs", "edits": []}"#),
+        Some("src/a.rs".to_string()),
+        "hash_edit is a writing tool, so its path must reach the hook"
+    );
+    // The negative cases, unchanged: non-mutating tools and a malformed body.
+    for tool in ["read", "shell"] {
+        assert_eq!(
+            formatter::extract_path(tool, r#"{"path": "src/a.rs"}"#),
+            None,
+            "`{tool}` does not mutate a file"
+        );
+    }
+    assert_eq!(
+        formatter::extract_path("hash_edit", r#"{"edits": []}"#),
+        None,
+        "a hash_edit with no path extracts nothing"
+    );
+    assert_eq!(
+        formatter::extract_path("hash_edit", "not json"),
+        None,
+        "a malformed body extracts nothing"
+    );
+}
+
 // Verifies: paths extract from edit/write arguments only — a `path`
 // field on any other tool (read included) never triggers a format.
 #[test]
@@ -86,6 +128,53 @@ fn paths_extract_from_edit_and_write_only() {
     assert_eq!(formatter::extract_path("shell", args), None);
     assert_eq!(formatter::extract_path("edit", r#"{"other": 1}"#), None);
     assert_eq!(formatter::extract_path("edit", "not json"), None);
+}
+
+// Verifies: gh #284 - **a hash_edit call really gets formatted end to end.**
+//
+// The sibling row above pins the extraction; this one pins that the *hook* uses
+// it, which is the half that was silently missing: `handle_result` returned
+// `Skipped("no formattable file in this call")` for a hash_edit result, so the
+// formatter never spawned and nothing said so. Asserting on `spawned` (not on the
+// extracted path) is deliberate - a row that only checked `extract_path` would
+// have passed on the defect the moment the list changed, without proving the
+// result reaches the process at all.
+#[test]
+fn a_hash_edit_result_is_formatted_end_to_end() {
+    let state = FormatterState::new();
+    let process = TestProcess::ok();
+    let outcome = state.handle_result(
+        &process,
+        &TestFs::empty(),
+        "hash_edit",
+        r#"{"path": "src/a.rs", "edits": [{"start_hash": "ab", "end_hash": "", "new_text": "x"}]}"#,
+        true,
+    );
+    assert!(
+        matches!(outcome, HookOutcome::Formatted { .. }),
+        "a hash_edit result formats like edit/write: {outcome:?}"
+    );
+    assert!(
+        process.spawned.borrow().iter().any(|p| p == "rustfmt"),
+        "the formatter actually spawned for a hash_edit path: {:?}",
+        process.spawned.borrow()
+    );
+    // The negative control, so this row cannot pass by formatting everything:
+    // a non-mutating tool with the same path field still skips, and spawns nothing.
+    let read = TestProcess::ok();
+    let skipped = state.handle_result(
+        &read,
+        &TestFs::empty(),
+        "read",
+        r#"{"path": "src/a.rs"}"#,
+        true,
+    );
+    assert!(matches!(skipped, HookOutcome::Skipped(_)), "{skipped:?}");
+    assert!(
+        read.spawned.borrow().is_empty(),
+        "`read` mutates nothing, so nothing spawned: {:?}",
+        read.spawned.borrow()
+    );
 }
 
 // Verifies: the hook outcome matrix — only enabled + ok + known

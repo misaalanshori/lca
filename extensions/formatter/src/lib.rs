@@ -1,6 +1,8 @@
 //! Auto-format on file-mutating tool results (gh #220): after a
-//! successful `edit` or `write`, the project's formatter runs over
-//! the touched file before the next step. Language knowledge
+//! successful `write`, `edit`, or `hash_edit` - **every built-in writing
+//! tool** (gh #284 added the third; a new writing tool belongs in
+//! [`extract_path`] with the same "it mutates a file" reason) - the
+//! project's formatter runs over the touched file before the next step. Language knowledge
 //! (`rustfmt`, `ruff`/`black`, `gofmt`, `biome`/`prettier`, `zig fmt`)
 //! lives here, not in core (ADR-0013: external tool wrapping is a
 //! runtime extension).
@@ -130,8 +132,14 @@ pub fn refusal_reason(path: &str) -> Option<String> {
 /// Extract the touched path from a tool call's arguments — but only
 /// for the file-mutating tools. Any other tool's `path` field (a
 /// `read` included) never triggers a format.
+///
+/// The list is **every built-in writing tool**: the two core tools (`write`,
+/// `edit`) and the shipped extension `hash_edit` (gh #284 - before that, a session
+/// whose model used hash_edit never auto-formatted, and nothing reported the
+/// skip). A tool that does not mutate a file (`read`, `grep`, `glob`, `list`,
+/// `shell`) is never listed here, however convenient `path` looks.
 pub fn extract_path(tool: &str, arguments: &str) -> Option<String> {
-    if !matches!(tool, "edit" | "write") {
+    if !matches!(tool, "edit" | "write" | "hash_edit") {
         return None;
     }
     serde_json::from_str::<serde_json::Value>(arguments)

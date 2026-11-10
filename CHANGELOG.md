@@ -7,6 +7,12 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **`hash_edit` results are auto-formatted** (gh #284). The result hook covered only `edit` and
+  `write`, so a session whose model used `hash_edit` never formatted its files: the hook returned
+  "no formattable file in this call" and nothing said so. The path list is now **every built-in
+  writing tool** (`write`, `edit`, `hash_edit`), and the module docs say so, so the next writing
+  tool gets considered here rather than silently skipped. (`apply_patch`, which the issue's title
+  also names, is not a tool this tree declares - checked by grep across `.rs`/`.md`/`.toml`.)
 - **Test harness: the load-scaling allowance works on macOS and Windows, not only Linux** (gh #589).
   `load_factor()` read `/proc/loadavg` and defaulted the absent file to `0.0`, i.e. **1x** — so
   `docs/testing-plan.md` §14's promise held on the Linux developer's box and was a placebo on the two
