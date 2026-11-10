@@ -21,19 +21,38 @@ use std::time::{Duration, Instant};
 
 /// The portable scheduling signal: how far a fixed sleep overran (gh #589).
 ///
-/// Three samples of 20 ms, taking the **smallest** overshoot. Why the minimum:
-/// a single sleep's overrun is dominated by whatever else the box was doing at
-/// that instant, and the harness is asking "is this machine slow *in general*",
-/// not "was my thread unlucky once". One lucky sample is the signal; three
-/// unlucky ones are a loaded box. Measured on an idle four-core box with 60
-/// samples: median overshoot 0.2 ms, p90 3-4 ms. With 16 spinners on the same
-/// four cores: median 4 ms, p90 12 ms, max 62 ms — and the minimum-of-three
-/// stayed at 1x on the idle box and went to 2-4x on the loaded one.
+/// Three samples of 20 ms, taking the **smallest** overshoot — `min` on purpose,
+/// and the reasoning is worth stating because it is the opposite of the intuitive
+/// choice.
 ///
-/// This is not a perfect instrument and it is not meant to be: it only has to
-/// tell "nothing is waiting" from "a thread is waiting for the CPU". A platform
-/// that publishes no load average (macOS, Windows) gets this instead of nothing.
-#[cfg(unix)]
+/// A signal that took the *mean* would answer "how busy is this box on average",
+/// which the load average already answers and which a busy-but-responsive box
+/// deserves a 1x for. What the harness needs to know is whether the scheduler
+/// **reliably** hands a sleeping thread its slice: a pane's first paint is one
+/// long wait, and what hurts it is systematic delay, not an occasional hiccup.
+/// Taking the minimum asks exactly that - "even the best of three was late" - so
+/// the factor only rises when lateness is the norm.
+///
+/// # Evidence, measured and cited rather than assumed
+///
+/// On this Linux box the minimum stays **1x even at load 37**: CFS gives a
+/// sleeping task its slice as soon as one is free, so 20 ms sleeps land within a
+/// fraction of a millisecond (min-of-3: 82-132 us over 20-odd trials at idle, and
+/// still 1x with 16 and then 32 spinners running). That is a *weakness of the
+/// signal here* and it is deliberately harmless: Linux never takes this branch,
+/// because `/proc/loadavg` answers first and costs nothing.
+///
+/// The branch exists for platforms where the delay is **systematic**, and the
+/// evidence for that is recorded rather than invented: gh #588 measured a macOS
+/// hosted runner where a thread that slept 5 ms and then sent a wake returned to
+/// its reader at **55.227 ms** — one 60-80 ms quantum of scheduling delay
+/// (`docs/platform-notes.md`'s recording). A 20 ms sleep under that regime
+/// overshoots by most of a quantum, which classifies as 2-4x here. On an idle
+/// Mac it would land on time and stay 1x, which is the correct answer there too.
+///
+/// This is not a perfect instrument and it is not meant to be: it only has to tell
+/// "nothing is waiting" from "a thread is waiting for the CPU", and it needs no
+/// platform API to do it.
 #[cfg(unix)]
 pub(super) fn portable_overshoot() -> Duration {
     let mut best = Duration::MAX;
@@ -90,7 +109,6 @@ pub(crate) fn factor_for_overshoot(overshoot: Duration) -> u32 {
 #[cfg(unix)]
 const PROBE_SAMPLES: usize = 3;
 
-/// The sleep each probe sample asks for.
 /// The sleep each probe sample asks for — and the unit the overshoot rule counts
 /// in, which is why it is not behind `cfg(unix)`.
 const PROBE_SLEEP: Duration = Duration::from_millis(20);
