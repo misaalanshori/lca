@@ -717,3 +717,10 @@ mod every_committed_fixture_is_compared;
 // two invariants that a line count cannot see.
 #[path = "557-shell-split-keeps-paths.rs"]
 mod shell_split_keeps_paths;
+
+// gh #557 target 2: `lib.rs` (1,048 lines) became an index over `prompt.rs` +
+// `store.rs`. The crate root still re-exports every path a caller names, and the
+// store still behaves through those paths; `lib.rs` itself declares no item, so
+// the file cannot silently grow back into the place code accumulates.
+#[path = "557-crate-root-is-an-index.rs"]
+mod crate_root_is_an_index;
