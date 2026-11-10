@@ -14,6 +14,8 @@ pub mod login;
 pub mod message;
 pub mod provider;
 pub mod record;
+/// The one owner of a host response handle (gh #577).
+pub mod response_guard;
 pub mod skills;
 pub mod stream;
 pub mod stream_failure;
@@ -42,6 +44,7 @@ pub use record::{
     ToolSource, branch_point_record, branch_summary_record, is_previous_summary,
     session_info_record,
 };
+pub use response_guard::ResponseGuard;
 pub use stream::{StreamEvent, THINKING_SIGNATURE_KIND, TRUNCATED_KIND};
 pub use stream_failure::StreamFailure;
 pub use tool::{

@@ -22,6 +22,11 @@
 //! the non-2xx `net_read_body` loop *before* the driver exists - so the driver's own
 //! `Drop` cannot own it yet, and closing only on the success paths leaked the handle
 //! once per failed request (gh #577). `ResponseGuard` owns it from that line on.
+//!
+//! The guard is [`lca_protocol::ResponseGuard`], not a private struct here: seven
+//! provider extensions open a response with this same shape, and one of them drives
+//! the Anthropic kit, which has no transport. A guard used by seven extensions but
+//! exported by none is a type seven extensions copy.
 
 pub mod chat_completions;
 pub mod error;

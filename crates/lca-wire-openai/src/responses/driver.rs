@@ -10,69 +10,17 @@ use crate::error::{StreamFailure, failure_for_status, json_error_message};
 
 use super::stream::{ResponsesStream, single_error};
 
-/// A host response handle that closes itself on drop (gh #577).
+/// The shared owner of the handle (gh #577, lifted to `lca_protocol` in gh #579's
+/// follow-up when seven extensions needed the same rule).
 ///
-/// # Why this exists
+/// The two things that matter and are not obvious:
 ///
-/// `open` acquires a handle from `net_request` and then makes **fallible** calls
-/// before a driver exists - `net_response_status`, and `net_read_body` inside the
-/// non-2xx path. `?` on either of those returned early with the handle still open
-/// in the capability engine's table: a leak per failed request, bounded only by the
-/// process's lifetime (measured: `net_close_response` called **zero** times).
-///
-/// The rule this encodes, and the one to keep: **a host handle acquired from a
-/// capability and followed by fallible calls gets a guard on the line after the call
-/// that produced it.** A driver constructed later does not own the handle yet, so
-/// its `Drop` cannot be the answer - and closing manually on the success paths only
-/// is how the leak shipped.
-///
-/// `handle` is an `Option` so [`Self::close`] can consume it: closing twice would be
-/// a `NotFound` in the engine (harmless there) but a *counted* double close in a test,
-/// which would make "closed exactly once" unprovable. One owner, one close.
-struct ResponseGuard<'a> {
-    cap: &'a dyn lca_protocol::ProviderCap,
-    handle: Option<u32>,
-}
-
-impl<'a> ResponseGuard<'a> {
-    /// Take ownership of `handle`; it is closed when this guard drops.
-    fn new(cap: &'a dyn lca_protocol::ProviderCap, handle: u32) -> ResponseGuard<'a> {
-        ResponseGuard {
-            cap,
-            handle: Some(handle),
-        }
-    }
-
-    /// The handle, for the driver's own reads.
-    ///
-    /// Falls back to `0` if the guard were ever closed first, which no caller does:
-    /// `close` consumes `self`, so a closed guard cannot be asked. Avoiding `expect`
-    /// here is the workspace lint (`unwrap_used`/`expect_used` denied), and a
-    /// programming error would surface as a host `NotFound` on the first read rather
-    /// than as a panic in a library.
-    fn handle(&self) -> u32 {
-        self.handle.unwrap_or(0)
-    }
-
-    /// Close it **now**, leaving nothing for `Drop`.
-    ///
-    /// The non-2xx path uses this: a host handle table entry outliving a failed
-    /// request is exactly the leak this type removes, and closing there (rather than
-    /// only on the success path) is the fix.
-    fn close(mut self) {
-        if let Some(handle) = self.handle.take() {
-            let _ = self.cap.net_close_response(handle);
-        }
-    }
-}
-
-impl Drop for ResponseGuard<'_> {
-    fn drop(&mut self) {
-        if let Some(handle) = self.handle.take() {
-            let _ = self.cap.net_close_response(handle);
-        }
-    }
-}
+/// * it is constructed **on the line after `net_request`**, because everything
+///   between there and the driver construction is fallible, and a `?` in that
+///   window used to return with the handle still open (measured: zero closes);
+/// * `close()` consumes it, so a manual close leaves `Drop` nothing to do - which is
+///   what makes "closed exactly once" a statement a test can check.
+use lca_protocol::ResponseGuard;
 
 /// A pull-based driver over one Responses streaming completion: open
 /// sends the request and checks the status (a 401 purges the stored
