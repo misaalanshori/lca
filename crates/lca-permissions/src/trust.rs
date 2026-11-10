@@ -6,7 +6,7 @@
 
 use std::path::Path;
 
-use super::{GrantStore, canonical_key};
+use crate::store::{GrantStore, canonical_key};
 
 impl GrantStore {
     /// Refuse the project folder for this session (gh #80,

@@ -3,7 +3,7 @@
 //! `lib.rs` for the workspace file ceiling (gate 11). Behaviour
 //! unchanged.
 
-use super::*;
+use std::path::PathBuf;
 
 /// Something sensitive the model or an extension wants to do.
 #[derive(Debug, Clone, PartialEq, Eq)]

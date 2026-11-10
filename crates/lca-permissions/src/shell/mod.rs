@@ -516,9 +516,9 @@ fn basename(program: &str) -> String {
 #[cfg(test)]
 mod deny_tests;
 
-// The behaviour rows live in `tests.rs`, `#[path]`-declared so every test path
-// stays `shell::tests::<row>` (gh #557: a renamed security row would be worse
-// than a longer file). Re-indenting the block is the only change it took.
+// The behaviour rows live in `tests.rs`; a plain `mod tests;` finds it because
+// `mod.rs` owns this directory, so every test path stays `shell::tests::<row>`
+// (gh #557: a renamed security row would be worse than a longer file).
+// Re-indenting the block is the only change it took.
 #[cfg(test)]
-#[path = "tests.rs"]
 mod tests;

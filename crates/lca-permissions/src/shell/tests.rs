@@ -2,7 +2,7 @@
 //!
 //! These are the security guards: each row proves the analyzer refuses what it
 //! must (or keeps auto-approving what it should). Declared as `mod tests` from
-//! `mod.rs` with `#[path]`, so every path is still `shell::tests::<row>` - a
+//! `mod.rs` (`mod tests;`), so every path is still `shell::tests::<row>` - a
 //! renamed security row would be worse than a longer file (gh #557).
 
 use super::*;

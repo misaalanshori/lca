@@ -364,11 +364,10 @@ fn the_slot_lock_is_released_before_the_inner_prompt_runs() {
 
     // No `.await` under a lock: the three methods are synchronous. A future
     // `async fn` here would break this scan, which is the point.
-    let source = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/crates/lca-permissions/src/lib.rs"
-    ))
-    .expect("permissions source is readable");
+    // Gh #557 moved this block to `prompt.rs`, so the row reads the module
+    // (`crate::module_text`) rather than one filename - a filename-keyed guard
+    // turns green by reading nothing as soon as the code moves.
+    let source = crate::module_text("crates/lca-permissions/src/lib.rs");
     let impl_block = &source[source
         .find("impl PermissionPrompt for SharedPrompt")
         .expect("slot impl found")..];
@@ -414,11 +413,7 @@ fn the_only_production_prompt_still_dropping_hints_is_the_known_one() {
     );
 
     // And the fixed one stays fixed.
-    let permissions = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/crates/lca-permissions/src/lib.rs"
-    ))
-    .expect("permissions source is readable");
+    let permissions = crate::module_text("crates/lca-permissions/src/lib.rs");
     let shared = &permissions[permissions
         .find("impl PermissionPrompt for SharedPrompt")
         .expect("slot impl found")..];
