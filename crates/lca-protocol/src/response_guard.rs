@@ -2,7 +2,7 @@
 //!
 //! # Why this is a type at all
 //!
-//! Seven provider extensions acquire a handle from `net_request` and then make
+//! Eight provider extensions acquire a handle from `net_request` and then make
 //! **fallible** calls - `net_response_status`, and `net_read_body` inside the
 //! non-2xx path - before the driver that would eventually own the handle exists.
 //! A `?` in that window returns with the handle still in the engine's table, so

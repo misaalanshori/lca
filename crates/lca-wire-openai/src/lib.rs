@@ -23,10 +23,10 @@
 //! `Drop` cannot own it yet, and closing only on the success paths leaked the handle
 //! once per failed request (gh #577). `ResponseGuard` owns it from that line on.
 //!
-//! The guard is [`lca_protocol::ResponseGuard`], not a private struct here: seven
+//! The guard is [`lca_protocol::ResponseGuard`], not a private struct here: eight
 //! provider extensions open a response with this same shape, and one of them drives
-//! the Anthropic kit, which has no transport. A guard used by seven extensions but
-//! exported by none is a type seven extensions copy.
+//! the Anthropic kit, which has no transport. A guard used by eight extensions but
+//! exported by none is a type eight extensions copy.
 
 pub mod chat_completions;
 pub mod error;
