@@ -693,7 +693,7 @@ If an extension needs a response from the current model as an input to its own l
 
 Test the denied path. A user can revoke a grant, and an extension that panics when a capability is missing fails badly at the worst moment. Every capability call returns a result. Handle it.
 
-A `[limits]` table is optional and independent of `[capabilities]` — a limits-only package still gets it applied. `memory_mb` is **mebibytes** (1..512, default 64) and caps the instance's linear memory; `fuel_per_call` is the execution budget for a single call (schema default 10,000,000). The host clamps each request to its own maximum, so asking for more is a hint, not an error. The whole table is a resource hint: it never grants anything and never widens what the manifest asked for.
+A `[limits]` table is optional and independent of `[capabilities]` — a limits-only package still gets it applied. `memory_mb` is **mebibytes** (1..512, default 64) and caps the instance's linear memory; `fuel_per_call` is the execution budget for a single call (1,000..1,000,000,000; the host's default when the key is absent is 25,000,000, `DEFAULT_FUEL_PER_CALL`, measured for a 32-model provider catalog). The host clamps each request to its own maximum, so asking for more is a hint, not an error. The whole table is a resource hint: it never grants anything and never widens what the manifest asked for.
 
 ## Testing
 

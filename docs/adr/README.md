@@ -66,6 +66,8 @@ Status is one of: proposed, accepted, superseded by ADR-NNNN, or deprecated.
 | 0045 | MCP arrives as an extension bridge, not a host service | Superseded by 0047 | gh #53 phase 1 |
 | 0046 | Sessions grow a tree on top of forks, not instead of them | Accepted | gh #37 phase 1 |
 | 0047 | MCP is a first-class internal subsystem | Accepted | gh #418 |
+| 0048 | A capability-gated environment grant | Accepted | Extensions (gh #170) |
+| 0049 | An inbound HTTP capability that the host owns, Mode A only | Accepted | Extensions (gh #363) |
 
 ADR-0001 is proposed rather than accepted because Phase 0 measures the numbers that justify it. Every other record can be accepted on reasoning alone.
 

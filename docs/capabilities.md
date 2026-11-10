@@ -420,7 +420,8 @@ call from a failed one, by design); the refusal is recorded
 A manifest may also carry a `[limits]` table, which is **not** a
 capability and grants nothing: it hints at resource ceilings the host may
 lower. `memory_mb` is mebibytes (1..512, default 64) and `fuel_per_call`
-is the execution budget for one call. The table applies whether or not the
+is the execution budget for one call (1,000..1,000,000,000; the host's
+default when the key is absent is **25,000,000**, `DEFAULT_FUEL_PER_CALL`). The table applies whether or not the
 manifest declares `[capabilities]`. See the authoring guide's "Capabilities
 in practice" for the practical advice.
 

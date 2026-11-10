@@ -104,7 +104,7 @@ First-party extensions, including the default OpenAI-compatible provider and ski
 
 `lca-cli` is the binary. It wires everything, parses arguments, and owns `main`.
 
-`xtask` is the build automation crate. It runs cross-compilation, size checks, WIT validation, and release packaging.
+Build automation is `scripts/` plus the CI workflows, not a crate: there is no `xtask` workspace member (the tree diagram below says so too). Cross-compilation and packaging run in `.github/workflows/`, and the gates -- size, WIT validation, the file-size ceiling, traceability -- are `scripts/*.sh`, each called by a CI job.
 
 ### Agent loop
 
@@ -797,12 +797,9 @@ Build-time tools do not ship in the binary. Only the library crates in the top h
 │   ├── ollama/                 local provider; net-local - specified, not yet in the tree
 │   ├── skills/                 a `context-transform` example; not registered by default (skills merge is host-side, ADR-0034)
 │   └── compaction-default/     the default compaction extension; native-linked by default
-├── web/
-│   ├── orchestrator/           JS glue for the browser build
-│   └── examples/
 ├── scripts/                    build automation and gates (wasm-check, gates, installers' suites); no `xtask` crate was ever tracked - the SRDD once named one, and `scripts/` plus CI workflows are what actually run
 ├── docs/
-│   ├── adr/                    architecture decision records, 0001 through 0046 (0020 unused)
+│   ├── adr/                    architecture decision records, 0001 through 0049 (0020 unused)
 │   ├── capabilities.md         the capability catalog
 │   ├── compaction.md           compaction behavior and the reserve math
 │   ├── conpty-testing-plan.md  Windows console testing

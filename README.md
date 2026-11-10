@@ -256,7 +256,7 @@ shell exactly as written
 
 ## Architecture
 
-One process, sixteen crates: the binary drives a Tokio agent loop that owns
+One process, twenty-one crates: the binary drives a Tokio agent loop that owns
 one turn at a time, hands the model's tool calls to built-in tools or to
 extensions instantiated in Wasmtime (or linked in natively), and renders
 every record it writes through a terminal engine that was ported from pi's
@@ -280,6 +280,11 @@ widget tree. Everything below is one workspace member:
 | `lca-tui` | the terminal engine and widget library — the pi TUI port (ADR-0036) |
 | `lca-ui` | the agent interface built on that engine: transcript, theme, footer, overlays |
 | `lca-testkit` | the scripted fake provider (pi's `providers/faux.ts` idea) and fixtures |
+| `lca-debug` | lifecycle tracing, redaction, rotating debug logs — compiled out unless the `debug-trace` feature is on |
+| `lca-mcp` | MCP servers over stdio and streamable HTTP, served as one tool suite (ADR-0047) |
+| `lca-subscription` | the shared OAuth/refresh kit for subscription-gateway providers |
+| `lca-wire-anthropic` | the shared Anthropic-family wire kit: Messages builder, SSE decoder |
+| `lca-wire-openai` | the shared OpenAI-family wire kit: Chat Completions and Responses |
 
 The extension contract itself lives in [`wit/`](wit/), a WIT package
 versioned as the ABI line (currently `0.6`); the crates are internal
@@ -373,7 +378,7 @@ Implemented, gated, and released — currently **0.6.0**, extension ABI **0.6**
 | Sessions: resume, fork, export, attach, compaction | shipped |
 | Permissions: pattern store, folder trust, read-only tools, `--yolo` | shipped |
 | Extensions: WIT ABI `0.6`, installed from OCI/HTTPS/local or linked in natively | shipped |
-| Providers: 20 presets + any OpenAI-compatible endpoint, login/usage, Codex + Grok subscription extensions | shipped |
+| Providers: 21 presets (19 keyed endpoints plus Ollama and LM Studio) + any OpenAI-compatible endpoint, login/usage, Codex + Grok subscription extensions | shipped |
 | Built-in tools: `read` `write` `edit` `list` `glob` `grep` `shell` | shipped |
 | Windows: first-class, real CI runners and dedicated tests | shipped |
 | Web/browser target | designed, deferred (`FR-WEB-1/2/3`, `NFR-11`) |
