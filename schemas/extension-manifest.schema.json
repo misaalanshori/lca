@@ -1,14 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://lca.example/schemas/extension-manifest/0.1.json",
+  "$id": "https://lca.example/schemas/extension-manifest/0.6.json",
   "title": "LCA extension manifest",
-  "description": "Schema for the parsed form of extension.toml. The manifest is written in TOML and validated against this schema after parsing. Version 0.1, targets ABI 0.1.",
+  "description": "Schema for the parsed form of extension.toml. The manifest is written in TOML and validated against this schema after parsing. Version 0.6, targets ABI 0.6.",
   "type": "object",
   "required": [
     "name",
     "version",
-    "abi",
-    "worlds"
+    "abi"
   ],
   "additionalProperties": false,
   "properties": {
@@ -31,7 +30,7 @@
     },
     "worlds": {
       "type": "array",
-      "description": "The WIT worlds this component implements. The host verifies that the component exports each one.",
+      "description": "The WIT worlds this component implements. The host verifies that the component exports each one. An empty list is legal only when `resources` is non-empty: a data-only extension (ADR-0030).",
       "items": {
         "type": "string",
         "enum": [
@@ -54,7 +53,7 @@
           "serve-http"
         ]
       },
-      "minItems": 1,
+      "minItems": 0,
       "uniqueItems": true
     },
     "description": {
@@ -150,10 +149,21 @@
           "type": "integer",
           "minimum": 1000,
           "maximum": 1000000000,
-          "default": 10000000,
-          "description": "Execution budget for a single call. Exceeding it cancels the call."
+          "default": 25000000,
+          "description": "Execution budget for a single call. Exceeding it cancels the call. The default is the host's `DEFAULT_FUEL_PER_CALL` (25,000,000, measured for a 32-model provider catalog); omitting the key means the host default, never the schema's `default` vocabulary."
         }
       }
+    },
+    "resources": {
+      "type": "array",
+      "description": "Declared kinds in the extension's own `resources/` bag (ADR-0030, ADR-0032). A kind is the first path segment inside the bag: a folder's name (`skills` for `resources/skills/<name>/SKILL.md`), or a whole file name for a file sitting directly in `resources/` (`provider-presets.toml`). The installer refuses an undeclared kind and shows the counts at consent. Free strings on purpose: the host serves arbitrary names, and a fixed vocabulary here would reject a bag the host is happy to serve. **Required (non-empty) when `worlds` is empty**, which is what a data-only extension looks like.",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "minItems": 1,
+      "uniqueItems": true
     }
   },
   "$defs": {
@@ -183,11 +193,13 @@
           "items": {
             "$ref": "#/$defs/hostPattern"
           },
-          "minItems": 1,
+          "minItems": 0,
           "maxItems": 32,
-          "uniqueItems": true
+          "uniqueItems": true,
+          "description": "The hosts this extension may reach. **An empty list is a declaration, not an absence** (gh #302): it is the shape an extension ships when every host arrives by consent at run time - `webfetch` is the worked example, and the host distinguishes it from a manifest that never declared `net` at all (`docs/capabilities.md` \u00a7net). A non-empty list is the usual case and a bare `*` is still refused."
         }
-      }
+      },
+      "$comment": "Gh #340: `minItems: 1` here rejected a shipped first-party manifest (`extensions/webfetch`), which is how this schema came to contradict both the product and the host's own declaration rule."
     },
     "localAddressPattern": {
       "type": "string",
@@ -378,16 +390,16 @@
         },
         "reason": {
           "type": "string",
-          "description": "Shown verbatim at install time. A bare capability name gives the user nothing to evaluate.",
+          "description": "Optional here, unlike `process`/`pty`/`tools`/`completion`/`serve-http`, whose consent line quotes the reason verbatim. The env consent line names every key instead (`Read \\u0060FOO\\u0060 from your environment`), so the keys are the consent and a reason adds nothing the host reads: `crates/lca-ext-host/src/manifest.rs` validates `keys` and does not require `reason`, and `crates/lca-registry`'s consent arm prints the key names. A manifest may still carry one - `docs/capabilities.md` shows it - and it is shown nowhere, which is why it is not required.",
           "minLength": 10,
           "maxLength": 200
         }
       },
       "required": [
-        "keys",
-        "reason"
+        "keys"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "$comment": "Gh #340: this used to be required, and the shipped `openai-compatible` manifest omits it. A normative schema that rejects a first-party manifest is the defect, not the manifest (the host has never required it)."
     },
     "serveHttpCapability": {
       "type": "object",
@@ -418,6 +430,33 @@
     }
   },
   "allOf": [
+    {
+      "anyOf": [
+        {
+          "properties": {
+            "worlds": {
+              "minItems": 1
+            }
+          },
+          "required": [
+            "worlds"
+          ],
+          "$comment": "A component implements at least one world."
+        },
+        {
+          "properties": {
+            "resources": {
+              "minItems": 1
+            }
+          },
+          "required": [
+            "resources"
+          ],
+          "$comment": "A data-only extension ships only a resources bag (ADR-0030); the host refuses a manifest with neither (crates/lca-ext-host/src/manifest.rs)."
+        }
+      ],
+      "$comment": "Either a world or a declared resource kind: the normative form of the host's own rule. JSON Schema cannot say 'required if the other is empty' without a combinator, so this is the honest spelling."
+    },
     {
       "if": {
         "properties": {
@@ -512,7 +551,7 @@
     {
       "name": "example-provider",
       "version": "0.3.1",
-      "abi": "0.1",
+      "abi": "0.6",
       "worlds": [
         "provider",
         "command"
@@ -540,7 +579,7 @@
     {
       "name": "task-tracker",
       "version": "1.0.0",
-      "abi": "0.1",
+      "abi": "0.6",
       "worlds": [
         "tool",
         "hooks",
