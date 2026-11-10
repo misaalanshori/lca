@@ -419,10 +419,30 @@ async fn call_async(bridge: &lca_mcp::McpBridge) -> Result<String, String> {
 // Verifies: gh #554 - a cancel during the retry backoff is observed promptly.
 //
 // **This row asserts elapsed time on purpose**, because the claim *is* about
-// elapsed time: the backoff is 250 ms then 1 s, and a cancel must be seen inside
-// NFR-29's 50 ms budget rather than after the delay. The slice is 25 ms, so the
-// bound below is deliberately ~10x the honest figure - it fails only if the sleep
-// is uninterruptible again. The measured number is reported.
+// elapsed time: the backoff is 250 ms then 1 s, and a cancel must be seen rather
+// than after the delay. Getting the bound right took two tries, and the first one
+// was a guard that could fail on the *fix* while still passing on the defect:
+//
+// * the cancel used to land 120 ms into a 250 ms backoff, so the **defect**
+//   returned ~130 ms after it, while the fix under a loaded macOS runner measured
+//   **116-165 ms** (three CI attempts: 164.981, 162.851, 116.651). The two
+//   intervals *overlap* at that cancel point - no bound separates them there, and
+//   a 100 ms bound was below the fix's own jitter.
+//
+// So the cancel now lands once the first attempt has been **answered and the
+// caller is inside the backoff** (the mock has served `/resources/list`, plus one
+// 40 ms margin so the exchange is over and a slice has begun). That is the widest
+// separation the shape allows: the defect then returns ~250 ms after the cancel
+// (measured 316.881 ms through the mock's own latency, against the 175 ms bound),
+// the fix stays inside one 25 ms slice plus one scheduling quantum (measured
+// 11.1 ms on this box), and the bound is derived from the *defect interval* rather
+// than from an observation - gh #588/#589's rule, applied to a bound that had been
+// picked by feel.
+//
+// NFR-29's 50 ms budget is still not asserted here, on purpose: one quantum is
+// larger than that on macOS, so a 50 ms bound would fail a working fix there.
+// The budget's own rows assert it where it is measurable; this row's claim is
+// "did not wait out the backoff", which is what the defect did.
 #[test]
 fn a_cancel_during_a_retry_backoff_is_observed_promptly() {
     let mock = common::mock_server();
@@ -463,8 +483,24 @@ fn a_cancel_during_a_retry_backoff_is_observed_promptly() {
             let _ = answer_tx.send((answer.is_err(), began.elapsed()));
         })
     };
-    // Give the first attempt time to fail and the backoff to start.
-    std::thread::sleep(Duration::from_millis(120));
+    // Cancel the moment the first attempt has been answered: that is the start of
+    // the 250 ms backoff, and the widest gap between the fix and the defect. Polling
+    // the mock's own request list (rather than sleeping a fixed 120 ms) is what makes
+    // the cancel point a fact about the fixture instead of a guess about a scheduler.
+    let waited = Instant::now();
+    while mock.requests_of("resources/list").is_empty() {
+        if waited.elapsed() > Duration::from_secs(5) {
+            panic!("the first attempt never reached the mock (gh #554 fixture)");
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    // A further 40 ms: the mock has answered, the caller has read the 503 and is
+    // inside the first 25 ms slice, so the cancel lands **mid-backoff** with ~200 ms
+    // still to run. Cancelling at the request's arrival would be too early - the
+    // caller is still in the exchange, the flag is seen at the very next check, and
+    // an uninterruptible sleep would not have started yet (measured: the mutant
+    // returned in 5.7 ms from that point, i.e. it did not exercise the defect).
+    std::thread::sleep(Duration::from_millis(40));
     let cancelled_at = Instant::now();
     cancel_tx.send(()).expect("cancel signal");
 
@@ -474,19 +510,20 @@ fn a_cancel_during_a_retry_backoff_is_observed_promptly() {
     let _ = caller.join();
     assert!(failed, "a cancelled retry reports failure, not an answer");
     let observed = cancelled_at.elapsed();
-    // 100 ms, not 300: the slice is 25 ms, so the honest figure is a few
-    // milliseconds plus scheduling (measured 9-13 ms here) - and 300 ms did not
-    // bite, because the *first* backoff is only 250 ms, so an uninterruptible
-    // sleep that began before the cancel still finished inside 300 ms of it
-    // (measured 163 ms). A bound at 300 ms was a guard that could pass on the
-    // defect it exists for; 100 ms fails it (verified by mutation, both ways).
+    // 175 ms, derived from the DEFECT interval, not from the observation: with the
+    // cancel ~50 ms into the backoff an uninterruptible `sleep(250)` returns ~200 ms
+    // after it, while the fix is one 25 ms slice plus at most one quantum (<= 80 ms on
+    // a loaded macOS runner, measured 116-165 ms at the old, wrong cancel point).
+    // Mutation, both ways: restoring the one long sleep reads ~250 ms and fails;
+    // the fix reads 9-13 ms on Linux, 100-110 ms under macOS load.
     assert!(
-        observed < Duration::from_millis(100),
+        observed < Duration::from_millis(175),
         "the cancel was observed {observed:?} after it was set; an \
          uninterruptible retry sleep would make the delay elapse first \
          (the call took {elapsed:?})"
     );
     eprintln!(
-        "cancel observed {observed:?} into a 250 ms backoff; the call returned after {elapsed:?}"
+        "cancel observed {observed:?} inside a 250 ms backoff; the call returned \
+         after {elapsed:?}"
     );
 }
