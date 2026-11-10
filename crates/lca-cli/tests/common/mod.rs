@@ -33,6 +33,13 @@ pub use sockets::reap_stale_sockets;
 mod readiness;
 #[cfg(unix)]
 pub use readiness::{retry_once, settle_stats};
+// Gh #589: the load allowance's rule, probe and cache. Its own module because
+// `mod.rs` hit gate 11 with the fix, and because the *rule* is the part a row can
+// test on a platform it is not running on.
+mod load;
+// The pure rules have no platform in them, so the classification row runs
+// everywhere; only the probe and the cache are Unix-only alongside `Tmux`.
+pub(crate) use load::{factor_for_load, factor_for_overshoot, factor_from};
 // The contract rows read these; most e2e binaries use only `tmux_socket`, so
 // the unused-in-this-binary warning is expected and silenced with the module's
 // own `dead_code` allowance.
@@ -46,6 +53,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::sync::Mutex;
+use std::time::Duration;
 
 use http_body_util::{BodyExt as _, Full};
 use hyper::body::Bytes;
@@ -771,30 +779,60 @@ impl Tmux {
         );
     }
 
-    /// How long a pane gets before the harness treats it as not-yet-painted.
+    /// How long a pane gets before the harness treats it as not-yet-painted: the
+    /// load factor, sampled once per process (gh #589).
     ///
-    /// The caller's `timeout` stays the contract for *product* assertions; this
-    /// is the extra the harness allows a blank pane, because a blank pane says
-    /// nothing about the product. Measured on this box: a WASM-bearing session
-    /// takes 21-23 s to first paint on an idle 4-core machine (the component
-    /// JIT), against the 30 s budgets the rows carry — so two suites at once
-    /// halve the CPU and blow the budget on rows that are perfectly correct.
+    /// The caller's `timeout` stays the contract for *product* assertions; this is
+    /// the extra the harness allows a pane that has not painted, because a pane
+    /// that has not painted says nothing about the product. Measured on this box: a
+    /// WASM-bearing session takes 21-23 s to first paint on an idle 4-core machine
+    /// (the component JIT), against the 30 s budgets the rows carry — so two suites
+    /// at once halve the CPU and blow the budget on rows that are perfectly correct.
     ///
-    /// Scaling by the machine's load average is the honest knob: it is the
-    /// quantity that actually rose, and it costs nothing when the box is idle.
+    /// # The two signals (gh #589)
     ///
-    /// `pub(crate)` since gh #447: the readiness primitives in the sibling
-    /// `readiness` module apply the same allowance, and two budget rules that
-    /// disagreed would be worse than either.
+    /// This used to read `/proc/loadavg` and fall back to `0.0` when the file was
+    /// absent — which it is on macOS and Windows. The allowance was therefore **1x
+    /// on exactly the two platforms whose hosted runners are slowest**, while the
+    /// Linux dev box (where every local green is obtained) got the real scaling:
+    /// gh #489 round 3's shape with the instrument on the other side.
+    ///
+    /// A platform now gets whichever signal it publishes — **load average** where
+    /// there is one (Linux, free to read, and exactly the factor it always had),
+    /// **scheduling overshoot** where there is not (macOS, Windows: three 20 ms
+    /// sleeps, minimum overrun). The rule is in [`load`], as two pure functions
+    /// selected by `factor_from(Option<f64>, Duration)`, so the macOS branch is
+    /// testable from a table on Linux. `LCA_LOAD_STATS=1` prints which answered.
+    ///
+    /// # What the factor does, and what it does not do
+    ///
+    /// It multiplies the **polling budget** of every wait in the harness:
+    /// `wait_for`, the settle loop, the layout wait, the input-ready probe and the
+    /// probe's erase check (eight call sites). All of them wait for something to
+    /// *appear* or *stop moving* — for the machine to get round to painting — so
+    /// scaling them scales the harness, not the product.
+    ///
+    /// It does not change *whether* a wrong pane is a failure: a pane with content
+    /// that never shows the needle still panics, and a blank pane is still the one
+    /// case that re-spawns once (gh #413's rule). The correction gh #589 needed to
+    /// `docs/testing-plan.md` §14: the old sentence said a painted-but-wrong pane
+    /// "is judged at the caller's original timeout", and that was never quite true
+    /// — the poll runs on the scaled budget in both cases; what differs is the
+    /// *remedy*, a failure for content and one re-spawn for a blank pane. The doc
+    /// now says exactly that.
+    ///
+    /// `pub(crate)` since gh #447: the readiness primitives apply the same
+    /// allowance, and two budget rules that disagreed would be worse than either.
     pub(crate) fn load_factor() -> u32 {
-        let load = std::fs::read_to_string("/proc/loadavg")
-            .ok()
-            .and_then(|text| text.split_whitespace().next()?.parse::<f64>().ok())
-            .unwrap_or(0.0);
-        // 1.0x below light load, then +1x per core-ish of pressure, capped so a
-        // pathological runner cannot extend a suite for hours.
-        let factor = (load / 4.0).floor() as u32 + 1;
-        factor.clamp(1, 4)
+        load::cached_factor()
+    }
+
+    /// How many times [`Self::load_factor`] was asked, for the stats line and for a
+    /// receipt that the cache is doing its job. Not the number of probes: that is
+    /// always one per process.
+    #[cfg(test)]
+    pub(crate) fn load_factor_calls() -> u64 {
+        load::calls()
     }
 
     /// Poll the pane until `needle` appears (150 ms cadence). The timeout

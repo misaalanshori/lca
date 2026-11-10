@@ -936,3 +936,151 @@ fn a_wide_row_fixture_paints_in_one_write() {
          nothing to check is not a guard"
     );
 }
+
+// Verifies: gh #589 - **the allowance's classification, independent of the box.**
+//
+// The defect this cycle fixes is not "the number was too small", it is
+// "`load_factor()` returned 1 on macOS and Windows because `/proc/loadavg` does
+// not exist there". A row asserting on the *sampled* factor would test this
+// machine's current load and pass or fail for the wrong reason, so the rule is a
+// pure function over a measurement and this row is a table over it.
+//
+// The overshoot table is the half that matters on the two platforms with no load
+// average: an idle 20 ms sleep overruns by a fraction of a millisecond and stays
+// 1x; a machine whose quantum is 60-80 ms (`docs/platform-notes.md`) overruns by
+// most of a quantum and must scale. The last entry is the cap: a pathological
+// runner must not be allowed to extend a suite indefinitely.
+#[test]
+fn the_load_allowance_classifies_overshoot_and_load_the_same_way_it_always_meant() {
+    use std::time::Duration;
+    let quantum = Duration::from_millis(20);
+    for (overshoot, expected, why) in [
+        (Duration::ZERO, 1, "an on-time sleep is an idle box"),
+        (
+            Duration::from_micros(200),
+            1,
+            "sub-millisecond noise stays 1x",
+        ),
+        (
+            Duration::from_millis(19),
+            1,
+            "just under one quantum is still 1x",
+        ),
+        (
+            Duration::from_millis(21),
+            2,
+            "one quantum of overrun is +1x",
+        ),
+        (Duration::from_millis(45), 3, "two quanta is +2x"),
+        (Duration::from_millis(60), 4, "three quanta reaches the cap"),
+        (
+            Duration::from_millis(900),
+            4,
+            "and the cap holds, or a bad box runs for hours",
+        ),
+    ] {
+        assert_eq!(
+            common::factor_for_overshoot(overshoot),
+            expected,
+            "an overshoot of {overshoot:?} ({why}) classifies as {expected}x"
+        );
+    }
+    // The cap is the same 4x the load rule had, and the load rule is unchanged:
+    // Linux keeps exactly the factor it had before this cycle (its own rows and
+    // recordings depend on it).
+    for (load, expected) in [
+        (0.0, 1),
+        (3.9, 1),
+        (4.0, 2),
+        (8.0, 3),
+        (12.0, 4),
+        (1000.0, 4),
+    ] {
+        assert_eq!(
+            common::factor_for_load(load),
+            expected,
+            "a load average of {load} classifies as {expected}x (Linux is unchanged)"
+        );
+    }
+    // The quantum is the probe's own sleep, so a future edit to `PROBE_SLEEP`
+    // cannot leave the classification counting a quantum that is no longer
+    // measured. (The defect side of the first two entries above would be an
+    // always-1 function, which fails five of the seven overshoot cases.)
+    assert_eq!(
+        common::factor_for_overshoot(quantum),
+        2,
+        "one whole `PROBE_SLEEP` of overrun is exactly one extra step"
+    );
+
+    // **The branch a Linux box cannot exercise by running** (gh #589): macOS and
+    // Windows publish no `/proc/loadavg`, so `load` is `None` there and the
+    // overshoot must answer. This table is the guard for that branch - the defect
+    // was `None => 1`, and every entry below fails against it.
+    for (overshoot, expected) in [
+        (Duration::ZERO, 1),
+        (Duration::from_millis(45), 3),
+        (Duration::from_millis(200), 4),
+    ] {
+        assert_eq!(
+            common::factor_from(None, overshoot),
+            expected,
+            "with no load average (macOS/Windows) a {overshoot:?} overshoot is {expected}x"
+        );
+    }
+    // And where a load average *is* published it wins and keeps the old factor,
+    // so Linux does not silently change behaviour with this cycle's fix.
+    assert_eq!(
+        common::factor_from(Some(8.0), Duration::from_millis(200)),
+        3,
+        "a published load average decides, exactly as before"
+    );
+    assert_eq!(
+        common::factor_from(Some(0.0), Duration::from_millis(200)),
+        1,
+        "even when the probe would have scaled it: Linux's answer is load's"
+    );
+}
+
+// Verifies: gh #589 - **the platform that cannot read a load average is measured
+// by the clock instead, and the factor is cached once per process.**
+//
+// This is the receipt the macOS half cannot be checked by on Linux: the *branch*
+// is what is pinned, not this box's load. `LCA_LOAD_STATS=1` prints which signal
+// answered; here the assertion is that the sampled factor is in the legal range,
+// that asking twice costs one probe, and that the answer is stable - which is
+// what a `OnceLock` means and what a landing report means by "costs the suite
+// nothing measurable".
+// `Tmux` and its `load_factor` are `#[cfg(unix)]` (the harness is a Unix pty), so
+// this row carries the same gate; the *classification* row above does not, because
+// the pure functions it reads exist on every platform.
+#[cfg(unix)]
+#[test]
+fn the_allowance_is_sampled_once_per_process_and_stays_in_range() {
+    // The first call may be this row's own, or a sibling's: either way it is the
+    // process's single probe.
+    let first = common::Tmux::load_factor();
+    let calls = common::Tmux::load_factor_calls();
+    let second = common::Tmux::load_factor();
+    assert_eq!(
+        first, second,
+        "the factor is a per-process decision, not a re-sample"
+    );
+    assert!(
+        (1..=4).contains(&first),
+        "the factor is clamped to 1..=4 whatever the box is doing: {first}"
+    );
+    assert!(
+        calls >= 1,
+        "the probe ran at least once before returning ({calls} call(s) so far)"
+    );
+    // The cache is the whole cost argument: eight call sites in `readiness.rs`
+    // plus `wait_for` would otherwise be a probe each. Asking a third time must
+    // not add a probe, which is exactly what this asserts.
+    let before = common::Tmux::load_factor_calls();
+    let _ = common::Tmux::load_factor();
+    assert_eq!(
+        common::Tmux::load_factor_calls(),
+        before,
+        "the probe is cached: a repeated ask costs nothing"
+    );
+}

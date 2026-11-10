@@ -661,3 +661,12 @@ mod wasm_keeps_retryability_and_extras;
 // in-crate file, every test here and `cargo build` stay green.
 #[path = "574-moved-state-names-keep-their-paths.rs"]
 mod moved_state_names_keep_their_paths;
+
+// Gh #589: the harness's load allowance existed only on Linux. `load_factor()` read
+// `/proc/loadavg` and defaulted the absent file to `0.0`, i.e. 1x — so
+// `docs/testing-plan.md` §14's promise held on the developer's box and not on the
+// macOS/Windows runners it was written for, and every gh #447 readiness primitive
+// inherited the blind spot. The rule is now an `Option<f64>` selection with a
+// portable scheduling-overshoot probe as the fallback, sampled once per process.
+#[path = "589-load-allowance-is-portable.rs"]
+mod load_allowance_is_portable;
