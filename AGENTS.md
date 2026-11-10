@@ -149,6 +149,19 @@ references), then pi's source.
   child), so a `pub(super)` written in `tui/cells.rs` *narrows* a surface and
   must be `pub(crate)`; and a `mod tests` block left in the barrel keeps every
   test's path, so leave it there.
+  A **non-standard `#[path]` sibling becomes a directory**, not a second file
+  beside the barrel (gh #557): `shell.rs` that declares
+  `#[path = "shell_grammar.rs"] mod grammar;` is a barrel in disguise, so the
+  split is `shell/{mod,grammar,tokens,paths,tests}.rs` - the `#[path]`
+  attribute disappears, every child becomes an ordinary `mod`, and
+  `lca_permissions::shell::<name>` is untouched because the module identity
+  never depended on which file held the code. Keep the security rows reachable
+  as `shell::tests::<row>` (`#[path = "tests.rs"] mod tests;`), and check the
+  split by `cargo nextest list` before and after, not by reading. When the
+  split moves a function across a module boundary its visibility becomes
+  `pub(super)` - that is not a widening (it is the same reach the private item
+  had inside its own file), and a `fn` that must be `pub(crate)` is a split that
+  picked the wrong seam.
 - Settings: `Flag > Env (LCA_*) > ProjectFile (.lca/config.toml) >
   UserFile (~/.lca/config.toml) > Default`; `/settings` shows the
   winning source per key.

@@ -709,3 +709,11 @@ mod a_failed_turn_paints_one_line;
 // the stale files load fine, because they are a SUBSET of the fresh interface.
 #[path = "591-every-committed-fixture-is-compared.rs"]
 mod every_committed_fixture_is_compared;
+
+// gh #557: `lca-permissions`' security boundary - `src/shell.rs` (11 lines from
+// gate 11) became `src/shell/{mod,tokens,paths,grammar,tests}.rs`. Every public
+// path still resolves, every containment decision is in `paths.rs`, and the
+// analyzer's rows kept their names (test-set diff empty). These rows pin the
+// two invariants that a line count cannot see.
+#[path = "557-shell-split-keeps-paths.rs"]
+mod shell_split_keeps_paths;
