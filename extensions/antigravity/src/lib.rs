@@ -247,7 +247,12 @@ fn post_json(
         ("authorization", bearer.as_str()),
         ("user-agent", DEFAULT_USER_AGENT),
     ];
+    // Gh #577: the guard goes on the line after the request; the status read and the
+    // body read below are the fallible calls that used to return with the handle
+    // still in the host's table.
     let handle = cap.net_request("POST", url, &headers, Some(&body_bytes))?;
+    let guard = lca_protocol::ResponseGuard::new(cap, handle);
+    let handle = guard.handle();
     let status = cap.net_response_status(handle)?;
     let mut collected = Vec::new();
     while let Some(chunk) = cap.net_read_body(handle, 64 * 1024)? {
@@ -256,7 +261,7 @@ fn post_json(
             break;
         }
     }
-    let _ = cap.net_close_response(handle);
+    guard.close();
     Ok((status, String::from_utf8_lossy(&collected).into_owned()))
 }
 

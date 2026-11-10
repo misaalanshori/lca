@@ -280,7 +280,9 @@ pub fn run_provider_stream(
 /// over the shared chat decoder.
 pub struct ChatDriver<'a> {
     cap: &'a dyn ProviderCap,
-    handle: u32,
+    /// Owns the host handle from the line after `net_request`: closed in `Drop`,
+    /// or early by `close()` on the non-2xx path (gh #577).
+    guard: lca_protocol::ResponseGuard<'a>,
     decoder: lca_wire_openai::SseDecoder,
     pending: std::collections::VecDeque<StreamEvent>,
     finished: bool,
@@ -295,7 +297,12 @@ impl<'a> ChatDriver<'a> {
         headers: &[(&str, &str)],
         body: &[u8],
     ) -> Result<ChatDriver<'a>, StreamFailure> {
+        // Gh #577: **the guard goes on the line after the fallible call that
+        // produced the handle.** The status read and the error-body read below can
+        // both return early, and a handle outliving a failed request is a leak.
         let handle = cap.net_request("POST", url, headers, Some(body))?;
+        let guard = lca_protocol::ResponseGuard::new(cap, handle);
+        let handle = guard.handle();
         let status = cap.net_response_status(handle)?;
         if !(200..300).contains(&status) {
             let mut detail = Vec::new();
@@ -309,7 +316,9 @@ impl<'a> ChatDriver<'a> {
             // its handle table on close, so a later read is `NotFound` and the
             // server's `retry-after` is lost.
             let headers = retry_after_of(cap, handle);
-            let _ = cap.net_close_response(handle);
+            // The guard closes it here, before the failure is built; `close`
+            // consumes the guard, so `Drop` cannot close it a second time.
+            guard.close();
             let text = String::from_utf8_lossy(&detail);
             let message = format!(
                 "provider returned HTTP {status}: {}",
@@ -331,7 +340,7 @@ impl<'a> ChatDriver<'a> {
         }
         Ok(ChatDriver {
             cap,
-            handle,
+            guard,
             decoder: lca_wire_openai::SseDecoder::default(),
             pending: std::collections::VecDeque::new(),
             finished: false,
@@ -348,7 +357,7 @@ impl<'a> ChatDriver<'a> {
             if self.finished {
                 return None;
             }
-            match self.cap.net_read_body(self.handle, 64 * 1024) {
+            match self.cap.net_read_body(self.guard.handle(), 64 * 1024) {
                 Ok(Some(chunk)) => {
                     let mut events = Vec::new();
                     self.decoder.feed(&chunk, &mut |event| events.push(event));
@@ -369,11 +378,9 @@ impl<'a> ChatDriver<'a> {
     }
 }
 
-impl Drop for ChatDriver<'_> {
-    fn drop(&mut self) {
-        let _ = self.cap.net_close_response(self.handle);
-    }
-}
+// Gh #577: no `Drop` of its own - the guard's `Drop` closes the handle, and one
+// owner is the point (a second close would be a counted double close rather than
+// "closed exactly once").
 
 /// The curated fallback table: the `openai-compatible` preset's three
 /// rows, with windows from the endpoint's own `/models` answer where
@@ -481,11 +488,14 @@ fn discover_models(cap: &dyn ProviderCap) -> Option<(Vec<lca_protocol::ModelInfo
         ("accept", "application/json"),
         ("authorization", bearer.as_str()),
     ];
+    // Gh #577: the guard goes on the line after the request, so the optional reads
+    // below (`.ok()?`) cannot leave the handle open when model discovery bails.
     let handle = cap.net_request("GET", &url, &headers, None).ok()?;
-    let status = cap.net_response_status(handle).ok();
+    let guard = lca_protocol::ResponseGuard::new(cap, handle);
+    let status = cap.net_response_status(guard.handle()).ok();
     let mut body = Vec::new();
     for _ in 0..100 {
-        match cap.net_read_body(handle, 64 * 1024) {
+        match cap.net_read_body(guard.handle(), 64 * 1024) {
             Ok(Some(chunk)) => {
                 body.extend_from_slice(&chunk);
                 if body.len() > 1024 * 1024 {
@@ -495,7 +505,7 @@ fn discover_models(cap: &dyn ProviderCap) -> Option<(Vec<lca_protocol::ModelInfo
             _ => break,
         }
     }
-    let _ = cap.net_close_response(handle);
+    guard.close();
     if !matches!(status, Some(200..=299)) {
         return None;
     }

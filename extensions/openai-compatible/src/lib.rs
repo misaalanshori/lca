@@ -146,7 +146,9 @@ fn clamp_cache_key(key: &str) -> String {
 /// [`next_event`]: StreamDriver::next_event
 pub struct StreamDriver<'a, C: ProviderCap + ?Sized> {
     cap: &'a C,
-    handle: u32,
+    /// Owns the host handle from the line after `net_request`: closed in `Drop`,
+    /// or early by `close()` on the non-2xx path (gh #577).
+    guard: lca_protocol::ResponseGuard<'a, C>,
     decoder: SseDecoder,
     pending: std::collections::VecDeque<StreamEvent>,
     finished: bool,
@@ -246,7 +248,12 @@ impl<'a, C: ProviderCap + ?Sized> StreamDriver<'a, C> {
             bearer = format!("Bearer {key}");
             headers.push(("authorization", bearer.as_str()));
         }
+        // Gh #577: **the guard goes on the line after the fallible call that
+        // produced the handle.** The status read and the error-body read below can
+        // both return early, and a handle outliving a failed request is a leak.
         let handle = cap.net_request("POST", &url, &headers, Some(&body_bytes))?;
+        let guard = lca_protocol::ResponseGuard::new(cap, handle);
+        let handle = guard.handle();
         let status = cap.net_response_status(handle)?;
         if !(200..300).contains(&status) {
             let mut detail = Vec::new();
@@ -267,7 +274,9 @@ impl<'a, C: ProviderCap + ?Sized> StreamDriver<'a, C> {
                         .filter(|value| !value.is_empty())
                 })
             });
-            let _ = cap.net_close_response(handle);
+            // The guard closes it here, before the failure is built; `close`
+            // consumes the guard, so `Drop` cannot close it a second time.
+            guard.close();
             let text = String::from_utf8_lossy(&detail);
             let message = error_message(&text, status);
             // Issue #3: a model the endpoint does not offer reads as a legible
@@ -305,7 +314,7 @@ impl<'a, C: ProviderCap + ?Sized> StreamDriver<'a, C> {
         }
         Ok(StreamDriver {
             cap,
-            handle,
+            guard,
             decoder: SseDecoder::default().with_max_tokens(max_tokens),
             pending: std::collections::VecDeque::new(),
             finished: false,
@@ -322,7 +331,7 @@ impl<'a, C: ProviderCap + ?Sized> StreamDriver<'a, C> {
             if self.finished {
                 return None;
             }
-            match self.cap.net_read_body(self.handle, 64 * 1024) {
+            match self.cap.net_read_body(self.guard.handle(), 64 * 1024) {
                 Ok(Some(chunk)) => {
                     let mut events = Vec::new();
                     self.decoder.feed(&chunk, &mut |event| events.push(event));
@@ -343,11 +352,9 @@ impl<'a, C: ProviderCap + ?Sized> StreamDriver<'a, C> {
     }
 }
 
-impl<C: ProviderCap + ?Sized> Drop for StreamDriver<'_, C> {
-    fn drop(&mut self) {
-        let _ = self.cap.net_close_response(self.handle);
-    }
-}
+// Gh #577: no `Drop` of its own - the guard's `Drop` closes the handle, and one
+// owner is the point (a second close would be a counted double close rather than
+// "closed exactly once").
 
 /// The whole completion call, over capabilities only. `emit` returning
 /// `false` stops the read (the receiver went away, FR-CONC-3).
@@ -827,13 +834,16 @@ pub fn discover_models(
     if let Some(auth) = &auth {
         headers.push(("authorization", auth.as_str()));
     }
+    // Gh #577: the guard goes on the line after the request, so the optional reads
+    // below (`.ok()?`) cannot leave the handle open when model discovery bails.
     let handle = cap.net_request("GET", &url, &headers, None).ok()?;
-    let status = cap.net_response_status(handle).ok();
+    let guard = lca_protocol::ResponseGuard::new(cap, handle);
+    let status = cap.net_response_status(guard.handle()).ok();
     let mut body = Vec::new();
     // One megabyte and one hundred chunks: discovery is a convenience, and
     // a response that never ends must not pin the login flow.
     for _ in 0..100 {
-        match cap.net_read_body(handle, 64 * 1024) {
+        match cap.net_read_body(guard.handle(), 64 * 1024) {
             Ok(Some(chunk)) => {
                 body.extend_from_slice(&chunk);
                 if body.len() > 1024 * 1024 {
@@ -843,7 +853,7 @@ pub fn discover_models(
             _ => break,
         }
     }
-    let _ = cap.net_close_response(handle);
+    guard.close();
     if !matches!(status, Some(200..=299)) {
         return None;
     }

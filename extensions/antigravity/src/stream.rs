@@ -5,7 +5,7 @@ use crate::{
     DEFAULT_API_BASE, DEFAULT_USER_AGENT, StreamFailure, access_token, endpoint,
     failure_for_status, json_error_message, now_epoch,
 };
-use lca_protocol::ProviderCap;
+use lca_protocol::{ProviderCap, ResponseGuard};
 use sha1::Digest as _;
 
 /// Pure agy CLI wire alignment (pi-antigravity `src/utils/util.ts` & `src/stream/stream.ts`):
@@ -699,7 +699,9 @@ fn handle_chunk(
 /// A pull-based driver over one Antigravity streaming completion.
 pub struct StreamDriver<'a> {
     cap: &'a dyn ProviderCap,
-    handle: u32,
+    /// Owns the host handle from the line after `net_request`: closed in `Drop`,
+    /// or early by `close()` on the non-2xx path or a 404 candidate advance (gh #577).
+    guard: ResponseGuard<'a>,
     buffer: String,
     open_calls: Vec<String>,
     pending: std::collections::VecDeque<lca_protocol::StreamEvent>,
@@ -751,8 +753,7 @@ impl<'a> StreamDriver<'a> {
             ("authorization", bearer.as_str()),
             ("user-agent", DEFAULT_USER_AGENT),
         ];
-        let mut handle = 0;
-        let mut status = 0;
+        let mut chosen: Option<(u16, ResponseGuard<'a>)> = None;
         for (index, candidate) in candidates.iter().enumerate() {
             let body = build_request(request, &system, &project_id, candidate);
             let body_bytes = serde_json::to_vec(&body).map_err(|err| StreamFailure {
@@ -760,14 +761,29 @@ impl<'a> StreamDriver<'a> {
                 class: "invalid",
                 retryable: false,
             })?;
-            handle = cap.net_request("POST", &url, &headers, Some(&body_bytes))?;
-            status = cap.net_response_status(handle)?;
+            // Gh #577: the guard goes on the line after `net_request`, because the
+            // status read and the 404 branch are both fallible and the driver that
+            // would own the handle does not exist yet.
+            let handle = cap.net_request("POST", &url, &headers, Some(&body_bytes))?;
+            let owned = ResponseGuard::new(cap, handle);
+            let handle = owned.handle();
+            let status = cap.net_response_status(handle)?;
             if status == 404 && index + 1 < candidates.len() {
-                let _ = cap.net_close_response(handle);
+                // The candidate walk closes the rejected response before asking
+                // again; `close` consumes the guard so `Drop` cannot double close.
+                owned.close();
                 continue;
             }
+            chosen = Some((status, owned));
             break;
         }
+        // The walk always ends on the first candidate that does not 404-advance, so
+        // this arm is unreachable while `candidates` is non-empty - and it is an
+        // ordinary failure rather than an `expect` because the workspace denies
+        // panics in library code.
+        let Some((status, guard)) = chosen else {
+            return Err(StreamFailure::invalid("no candidate model to request"));
+        };
         if !(200..300).contains(&status) {
             if status == 401 {
                 // A rejected token poisons every later call: purge it so
@@ -775,19 +791,19 @@ impl<'a> StreamDriver<'a> {
                 crate::purge_tokens(cap);
             }
             let mut detail = Vec::new();
-            while let Some(chunk) = cap.net_read_body(handle, 64 * 1024)? {
+            while let Some(chunk) = cap.net_read_body(guard.handle(), 64 * 1024)? {
                 detail.extend_from_slice(&chunk);
                 if detail.len() > 1024 * 1024 {
                     break;
                 }
             }
-            let _ = cap.net_close_response(handle);
+            guard.close();
             let text = String::from_utf8_lossy(&detail);
             return Err(failure_for_status(status, &json_error_message(&text)));
         }
         Ok(StreamDriver {
             cap,
-            handle,
+            guard,
             buffer: String::new(),
             open_calls: Vec::new(),
             pending: std::collections::VecDeque::new(),
@@ -805,7 +821,7 @@ impl<'a> StreamDriver<'a> {
             if self.finished {
                 return None;
             }
-            match self.cap.net_read_body(self.handle, 64 * 1024) {
+            match self.cap.net_read_body(self.guard.handle(), 64 * 1024) {
                 Ok(Some(chunk)) => {
                     self.buffer.push_str(&String::from_utf8_lossy(&chunk));
                     self.drain_frames();
@@ -903,11 +919,8 @@ impl<'a> StreamDriver<'a> {
     }
 }
 
-impl Drop for StreamDriver<'_> {
-    fn drop(&mut self) {
-        let _ = self.cap.net_close_response(self.handle);
-    }
-}
+// Gh #577: no `Drop` of its own - the guard's `Drop` closes the handle, and one
+// owner is the point.
 
 #[cfg(test)]
 mod tests {
