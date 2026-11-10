@@ -88,6 +88,8 @@ The agent's own data lives under **`~/.lca`** (R7), like every other platform. T
 
 The loopback listener binds `127.0.0.1` for the same reason as Linux. Process group cancellation uses the same `setsid`-equivalent approach as Linux, since macOS shares the POSIX process model there.
 
+**`/proc` does not exist here, and a harness that assumed it did was silently idle (gh #589).** `crates/lca-cli/tests/common/mod.rs`'s wait budget is scaled by a load factor, and that factor was read from `/proc/loadavg` with `.unwrap_or(0.0)` — so on macOS (and Windows) every real-terminal wait got **1x**, the same as an idle box, while the Linux dev machine got the scaling the rule was written for. The family of consequences is in `docs/testing-plan.md` §14; the platform lesson is this file's: **a Linux-only file read is a silent default on the other two platforms, and "silent default" is what turns a designed allowance into a placebo.** macOS publishes no load average at all (no `/proc`, and `getloadavg(3)` exists but returns a decaying 1/5/15-minute figure rather than instantaneous pressure). The harness now measures **scheduling overshoot** instead — three 20 ms sleeps, minimum overrun — because that is the quantity a slow runner actually inflicts on a thread waiting to repaint, and it needs no platform API. Measured here, four cores: idle median 0.2 ms / p90 3-4 ms (factor 1); sixteen spinners median 4 ms / p90 12 ms / max 62 ms (factor 2-4). Windows is in the same position for the same reason: no `/proc`, and the same sleep-based probe answers.
+
 **Screenshot paths resolve by shape, not by one template** (gh #405). macOS has named screenshot files at least four ways, and a user pastes whichever one Finder shows them:
 
 | shape | notes |

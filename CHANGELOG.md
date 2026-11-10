@@ -7,6 +7,16 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **Test harness: the load-scaling allowance works on macOS and Windows, not only Linux** (gh #589).
+  `load_factor()` read `/proc/loadavg` and defaulted the absent file to `0.0`, i.e. **1x** — so
+  `docs/testing-plan.md` §14's promise held on the Linux developer's box and was a placebo on the two
+  hosted runners it was written for, and every readiness primitive gained since gh #447 inherited that
+  blind spot. Linux still uses the load average (unchanged); a platform with no `/proc` now measures
+  **scheduling overshoot** instead (three 20 ms sleeps, minimum overrun), selected by a pure function
+  over `Option<f64>` so the absent-load-average branch is testable on any host. The probe runs once
+  per test process (`OnceLock`), `LCA_LOAD_STATS=1` prints which signal answered, and
+  `e2e_stale_selection`'s post-turn wait is now a settled wait rather than a flat 30 s (the row that
+  read 41.0 s on macOS with no allowance at all). Harness-only change: no product behaviour moved.
 - **Test harness: a wide row is painted in one write, so a settle cannot measure it half-composed.**
   `harness_contract`'s wrapped-cap fixture emitted its 140-cell row as 138 separate writes, one
   dash each; when a settle's poll landed inside those writes the screen really had stopped

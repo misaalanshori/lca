@@ -30,6 +30,27 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 
+// **Which wait each of this file's waits is** (gh #589's classification, done once
+// here so the next row does not re-derive it). The rule is what the claim *is*:
+//
+// | wait | row | claim | primitive |
+// |---|---|---|---|
+// | `[session in` | both | the interface came up and painted its header | `wait_for` — appearance is the claim |
+// | `ESC[?1049h` | both | the alt screen was *entered* (one escape in one frame) | `wait_for_e` — appearance |
+// | the answer text | both | the turn's answer painted | `wait_for_e` — appearance; the row then locates the row it drags over, which is a position, not a settled frame |
+// | `done` | the replacement row | **the turn is over** — a precondition for `/fork`, so a frame carrying it *mid-turn* would not satisfy it | `wait_settled_for` — appearance is not enough, and this is the one gh #589 could not scale |
+// | `Forked from turn` | the replacement row | the fork's status line appeared | `wait_for` — appearance is the claim; the highlight assertion below polls its own frame |
+// | `C-x` → `copied` | the replacement row | the copy notice appeared | `wait_for` — appearance |
+// | `wait_for_pane_end` | both | the pane emptied after `/exit` | `wait_for_pane_end` — an absence, with `capture().trim().is_empty()` as its positive half |
+//
+// Two waits are *not* `wait_for` and are deliberately not converted: the
+// highlight polls (`has_highlight` over `capture_e` in a 10 s loop) and the
+// resize's 600 ms pause. The highlight is a **receipt about a frame**, polled
+// until it carries the selection; converting it to a settle would ask "has the
+// screen stopped changing", which a live spinner can never answer (gh #447's
+// animation rule) — and the row already polls with a bounded deadline and asserts
+// on the frame it read.
+
 // `Duration` is only used by the unix-gated rows below, so the import carries
 // the same gate; without it `windows-latest` clippy fails on an unused import
 // (the sibling of the `Tmux` gate added in 972d39bc).
@@ -81,7 +102,14 @@ fn a_transcript_replacement_clears_the_highlighted_rows() {
     // mid-turn (a live agent and its stream must not be swapped in flight),
     // so a `/clone` sent too early leaves the transcript in place - which
     // would make this row pass for the wrong reason.
-    session.wait_for("done", Duration::from_secs(30));
+    //
+    // **`wait_settled_for`, not `wait_for`** (gh #589). The precondition is not
+    // "the word `done` has been painted once" - a frame can carry the status
+    // line while the turn is still landing - it is "the turn's status line is
+    // settled", which is exactly what this primitive asks. It also inherits the
+    // load-scaled budget, so this wait is no longer the harness's only
+    // unscaled one on macOS (where a flat 30 s blew at 41.0 s: CI 42714522269).
+    session.wait_settled_for("done", Duration::from_secs(30));
 
     drag_over(&session, row, 1, 30);
     // The highlight is the next frame's business: poll for it rather than
