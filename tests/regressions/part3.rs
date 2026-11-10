@@ -670,3 +670,12 @@ mod moved_state_names_keep_their_paths;
 // portable scheduling-overshoot probe as the fallback, sampled once per process.
 #[path = "589-load-allowance-is-portable.rs"]
 mod load_allowance_is_portable;
+
+// Gh #340: the normative manifest schema refused manifests the product ships - a first-party
+// top-level `resources` key (ADR-0030's data-only shape), and `worlds` pinned at `minItems: 1`
+// while the host requires `resources` exactly when `worlds` is empty. Plus a stale `$id`/fuel
+// default (10M documented against the host's 25M). The rows here are the Rust *subset* of the
+// schema's rules so they are pinned without the Python `jsonschema` module; the script's check
+// (`scripts/docs-consistency.sh`) runs the complete validation.
+#[path = "340-shipped-manifests-validate.rs"]
+mod shipped_manifests_validate;

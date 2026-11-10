@@ -36,9 +36,17 @@ fn the_drift_net_script_exists_and_runs_in_ci() {
 fn fixture_tree(name: &str) -> PathBuf {
     let repo = root();
     let tree = lca_testkit::scratch_path(name);
+    // Idempotent: the README-link pass below links every `docs/*.md` the README
+    // names, which overlaps the explicit list above and doc links added since.
+    // A second symlink for one path is an error, not a copy (the original
+    // closure's own comment made this the caller's duty; making it the helper's
+    // is one less thing every new fixture caller can get wrong).
     let link = |target: &str| {
         let from = repo.join(target);
         let to = tree.join(target);
+        if to.exists() {
+            return;
+        }
         std::fs::create_dir_all(to.parent().expect("parent")).expect("mkdir");
         std::os::unix::fs::symlink(&from, &to).expect("symlink");
     };
@@ -78,6 +86,47 @@ fn fixture_tree(name: &str) -> PathBuf {
     link("extensions/openai-compatible/resources/provider-presets.toml");
     link("AGENTS.md");
     link("README.md");
+    // Gh #340's checks read these too: the SRDD's crate/ADR prose, the ADR
+    // index, the crate tree itself, and every shipped manifest.
+    link("docs/lca-srdd.md");
+    for entry in std::fs::read_dir(repo.join("docs/adr")).expect("read the ADR directory") {
+        let entry = entry.expect("ADR entry");
+        let name = entry.file_name().to_string_lossy().into_owned();
+        // `README.md` is already linked above and the README-link pass may have
+        // reached it again; a second symlink for one path is an error, not a copy.
+        if !tree.join(format!("docs/adr/{name}")).exists() {
+            link(&format!("docs/adr/{name}"));
+        }
+    }
+    // The crate-count and per-crate-table checks enumerate `crates/`. A few
+    // files above already created real directories under `tree/crates`, so
+    // each *missing* crate name gets its own directory symlink rather than a
+    // link for the whole tree (which would also let a later `create_dir_all`
+    // write through into the working copy).
+    std::fs::create_dir_all(tree.join("crates")).expect("mkdir crates");
+    for entry in std::fs::read_dir(repo.join("crates")).expect("read crates") {
+        let entry = entry.expect("crate entry");
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let to = tree.join("crates").join(&name);
+        if !to.exists() {
+            std::os::unix::fs::symlink(entry.path(), &to).expect("symlink crate");
+        }
+    }
+    std::fs::create_dir_all(tree.join("extensions")).expect("mkdir extensions");
+    for entry in std::fs::read_dir(repo.join("extensions")).expect("read extensions") {
+        let entry = entry.expect("extension entry");
+        let path = entry.path();
+        if path.is_dir() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let from = repo.join("extensions").join(&name);
+            let to = tree.join("extensions").join(&name);
+            // `openai-compatible/resources/...` was linked above, so that one
+            // tree already exists in the fixture.
+            if !to.exists() {
+                std::os::unix::fs::symlink(&from, &to).expect("symlink extension tree");
+            }
+        }
+    }
     tree
 }
 
@@ -241,4 +290,117 @@ fn the_net_script_is_syntactically_valid() {
         "bash -n rejected the net: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+// ---------------------------------------------------------------------------
+// Gh #340: the three checks this cycle added. Each is a drift shape that
+// shipped, and each gets its own fixture so the net is seen failing on the
+// exact thing it was written for.
+// ---------------------------------------------------------------------------
+
+/// The README's crate sentence and its table, plus `crates/` itself.
+#[test]
+#[cfg(unix)]
+fn a_stale_crate_count_fails_the_net() {
+    let tree = fixture_tree("lca-drift-crate-count");
+    drift_file(
+        &tree,
+        "README.md",
+        "One process, twenty-one crates",
+        "One process, sixteen crates",
+    );
+    let output = run_net(&tree);
+    assert!(
+        !output.status.success(),
+        "a crate count the tree disagrees with must fail the net"
+    );
+    let _ = std::fs::remove_dir_all(&tree);
+}
+
+#[test]
+#[cfg(unix)]
+fn a_crate_missing_from_the_readme_table_fails_the_net() {
+    let tree = fixture_tree("lca-drift-crate-row");
+    let path = tree.join("README.md");
+    let repo_text = std::fs::read_to_string(root().join("README.md")).expect("read");
+    let dropped = repo_text
+        .lines()
+        .filter(|line| !line.starts_with("| `lca-mcp` |"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::remove_file(&path).expect("drop the symlink");
+    std::fs::write(&path, dropped).expect("write the drift");
+    let output = run_net(&tree);
+    assert!(
+        !output.status.success(),
+        "a crate with no README row must fail the net"
+    );
+    let _ = std::fs::remove_dir_all(&tree);
+}
+
+#[test]
+#[cfg(unix)]
+fn a_stale_adr_range_in_the_srdd_fails_the_net() {
+    let tree = fixture_tree("lca-drift-adr-range");
+    drift_file(
+        &tree,
+        "docs/lca-srdd.md",
+        "0001 through 0049",
+        "0001 through 0046",
+    );
+    let output = run_net(&tree);
+    assert!(
+        !output.status.success(),
+        "an ADR range the directory disagrees with must fail the net"
+    );
+    let _ = std::fs::remove_dir_all(&tree);
+}
+
+#[test]
+#[cfg(unix)]
+fn a_missing_adr_index_row_fails_the_net() {
+    let tree = fixture_tree("lca-drift-adr-row");
+    let path = tree.join("docs/adr/README.md");
+    let repo_text = std::fs::read_to_string(root().join("docs/adr/README.md")).expect("read");
+    let dropped = repo_text
+        .lines()
+        .filter(|line| !line.starts_with("| 0049 |"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::remove_file(&path).expect("drop the symlink");
+    std::fs::write(&path, dropped).expect("write the drift");
+    let output = run_net(&tree);
+    assert!(
+        !output.status.success(),
+        "an ADR with no index row must fail the net"
+    );
+    let _ = std::fs::remove_dir_all(&tree);
+}
+
+/// A shipped manifest the schema refuses - the defect this cycle fixed, in
+/// both directions: the top-level key and the capability rule.
+#[test]
+#[cfg(unix)]
+fn a_shipped_manifest_the_schema_refuses_fails_the_net() {
+    let tree = fixture_tree("lca-drift-manifest");
+    let path = tree.join("schemas/extension-manifest.schema.json");
+    let schema = std::fs::read_to_string(root().join("schemas/extension-manifest.schema.json"))
+        .expect("read the schema");
+    // Drop the `resources` property the shipped manifest declares: the schema
+    // is then `additionalProperties: false` with no way to accept it.
+    let schema: serde_json::Value = serde_json::from_str(&schema).expect("valid JSON");
+    let mut schema = schema;
+    schema["properties"]
+        .as_object_mut()
+        .expect("properties is an object")
+        .remove("resources");
+    std::fs::remove_file(&path).expect("drop the symlink");
+    std::fs::write(&path, serde_json::to_string(&schema).expect("serialize"))
+        .expect("write the drift");
+    let output = run_net(&tree);
+    assert!(
+        !output.status.success(),
+        "a shipped manifest the normative schema refuses must fail the net"
+    );
+    let _ = std::fs::remove_dir_all(&tree);
 }

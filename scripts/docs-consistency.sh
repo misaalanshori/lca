@@ -125,6 +125,114 @@ PYS
   fi
 done
 
+# Shipped-manifest conformance (gh #340). The manifest schema is the
+# normative document an author validates against, so a first-party manifest
+# that fails it is the schema contradicting the product -- and that is exactly
+# what shipped: `extensions/openai-compatible` declares a top-level
+# `resources` key, and `extensions/webfetch` ships `hosts = []` as a
+# declaration (gh #302), both of which the old schema refused.
+#
+# This is the COMPLETE check (real JSON-Schema validation through
+# `jsonschema`), because it is cheap here and the script already runs
+# python3 for the capability list below. The subset of the same rules in
+# Rust (`tests/regressions/340-shipped-manifests-validate.rs`) exists so the
+# rules are also pinned on a machine without that module.
+if python3 -c 'import jsonschema' >/dev/null 2>&1; then
+  schema_errors=$(python3 - "$schema" <<'PYS'
+import glob, json, sys
+import tomllib
+import jsonschema
+schema = json.load(open(sys.argv[1]))
+validator = jsonschema.Draft202012Validator(schema)
+bad = 0
+for path in sorted(glob.glob("extensions/*/extension.toml")):
+    manifest = tomllib.load(open(path, "rb"))
+    for error in validator.iter_errors(manifest):
+        where = "/".join(str(part) for part in error.absolute_path) or "(root)"
+        print(f"{path}: {where}: {error.message}")
+        bad = 1
+sys.exit(bad)
+PYS
+) || fail=1
+  if [ -n "${schema_errors:-}" ]; then
+    echo "$schema_errors"
+  fi
+else
+  # The house pattern for a missing harness: skip with a named reason, never
+  # pass silently. CI installs the module (`.github/workflows/ci.yml`), so an
+  # absent module is a local-machine condition rather than a gate.
+  echo "docs-consistency: skipping the shipped-manifest check (python3 jsonschema is not installed)"
+fi
+
+# The schema's own headline facts, so a future edit cannot quietly revert them:
+# `resources` is a declared top-level key (ADR-0030's data-only shape), and
+# `limits.fuel_per_call`'s documented default is the host's real one.
+resources_kind=$(python3 - "$schema" <<'PYS'
+import json, sys
+prop = json.load(open(sys.argv[1]))["properties"].get("resources")
+print("missing" if prop is None else prop.get("type", "untyped"))
+PYS
+)
+if [ "$resources_kind" != "array" ]; then
+  echo "docs-consistency: $schema's top-level \"resources\" property is $resources_kind, want an array (the ADR-0030 declared-kinds list)"
+  fail=1
+fi
+fuel_default=$(python3 - "$schema" <<'PYS'
+import json, sys
+print(json.load(open(sys.argv[1]))["properties"]["limits"]["properties"]["fuel_per_call"]["default"])
+PYS
+)
+if [ "$fuel_default" != "25000000" ]; then
+  echo "docs-consistency: $schema documents fuel_per_call default $fuel_default, host default is 25000000"
+  fail=1
+fi
+
+# Crate count and coverage (gh #340): the README's sentence and its table are
+# the only place the crate inventory is restated, and both drifted silently
+# (sixteen vs twenty-one, five crates absent from the table).
+crate_count=$(ls -d crates/*/ | wc -l | tr -d ' ')
+readme_crates=$(grep -oE '^One process, [a-z-]+ crates' README.md | sed 's/^One process, //; s/ crates$//')
+if [ -z "$readme_crates" ]; then
+  echo "docs-consistency: README.md no longer opens its architecture section with the crate count"
+  fail=1
+else
+  # The sentence is spelled out in English; the count is its own answer.
+  case "$crate_count" in
+    21) want="twenty-one" ;;
+    22) want="twenty-two" ;;
+    *)  want="(update the spelling)" ;;
+  esac
+  if [ "$readme_crates" != "$want" ]; then
+    echo "docs-consistency: README says '$readme_crates crates', the tree has $crate_count"
+    fail=1
+  fi
+fi
+for dir in crates/*/; do
+  name=$(basename "$dir")
+  if ! grep -qE "^\| \`$name\` \|" README.md; then
+    echo "docs-consistency: crate '$name' has no row in README.md's architecture table"
+    fail=1
+  fi
+done
+
+# ADR count and index coverage (gh #340): the SRDD's prose named a stale range,
+# and two records had no index row. Both are mechanical.
+adr_hi=$(ls docs/adr | grep -oE '^[0-9]{4}' | sort -n | tail -1)
+if ! grep -qF "0001 through $adr_hi" docs/lca-srdd.md; then
+  echo "docs-consistency: docs/lca-srdd.md does not name the ADR range as 0001 through $adr_hi"
+  fail=1
+fi
+# The index keys on the record's NUMBER ("| 0049 |"), not its whole filename,
+# so compare the number part only.
+for f in docs/adr/*.md; do
+  number=$(basename "$f" .md | cut -c1-4)
+  [ "$(basename "$f" .md)" = "README" ] && continue
+  if ! grep -qE "^\| $number \|" docs/adr/README.md; then
+    echo "docs-consistency: ADR '$number' ($f) has no row in docs/adr/README.md's index"
+    fail=1
+  fi
+done
+
 # Provider decoupling (gh #157): the host crate embeds no provider
 # literals. `api.openai.com` in `crates/lca-cli/src` is the QA-018
 # smell verbatim - the manifest owns default hosts now. Test fixtures
@@ -252,5 +360,6 @@ if [ "$fail" = 0 ]; then
   echo "docs-consistency: vocabulary tables match their validators"
   echo "docs-consistency: README doc links resolve"
   echo "docs-consistency: no doc table is split, no line repeats as a paste artefact"
+  echo "docs-consistency: every shipped manifest validates, and the crate/ADR counts match the tree"
 fi
 exit "$fail"
