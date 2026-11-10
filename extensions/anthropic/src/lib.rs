@@ -11,7 +11,7 @@
 
 use lca_protocol::{
     CompletionRequest, ContentBlock, IdentityOutcome, LoginAnswer, LoginOption, MessageRole,
-    ModelInfo, OauthCap, ProviderCap, StreamEvent, Usage,
+    ModelInfo, OauthCap, ProviderCap, ResponseGuard, StreamEvent, Usage,
 };
 use lca_subscription::{IdentityFailure, percent_encode, pkce_pair, post_json};
 
@@ -625,7 +625,8 @@ pub fn run_provider_stream(
 /// is the openai-compatible shape; the feed is the Messages kit.
 pub struct MessagesDriver<'a> {
     cap: &'a dyn ProviderCap,
-    handle: u32,
+    /// Owns the host handle: `handle()` for reads, closed in `Drop` (gh #577).
+    guard: ResponseGuard<'a>,
     stream: lca_wire_anthropic::AnthropicStream,
     buf: Vec<u8>,
     pending: std::collections::VecDeque<StreamEvent>,
@@ -641,7 +642,14 @@ impl<'a> MessagesDriver<'a> {
         headers: &[(&str, &str)],
         body: &[u8],
     ) -> Result<MessagesDriver<'a>, StreamFailure> {
+        // Gh #577's follow-up (finding F1): **the guard goes on the line after the
+        // fallible call that produced the handle.** Everything between here and the
+        // driver construction can return early - the status read, and the error-body
+        // read below - and a host handle table entry outliving a failed request is a
+        // leak. Measured before this fix: zero closes on either early error.
         let handle = cap.net_request("POST", url, headers, Some(body))?;
+        let guard = ResponseGuard::new(cap, handle);
+        let handle = guard.handle();
         let status = cap.net_response_status(handle)?;
         if !(200..300).contains(&status) {
             let mut detail = Vec::new();
@@ -658,7 +666,9 @@ impl<'a> MessagesDriver<'a> {
             // headers, then close: the body read must precede the close too,
             // and the header read costs nothing extra in between.
             let headers = cap.net_response_headers(handle).ok();
-            let _ = cap.net_close_response(handle);
+            // The guard closes it here, before the failure is built. `close`
+            // consumes the guard, so `Drop` cannot close it a second time.
+            guard.close();
             let text = String::from_utf8_lossy(&detail);
             // Gh #52: the host's retry honors the server's delay, which
             // rides the error text (the WIT boundary is string-only):
@@ -687,7 +697,7 @@ impl<'a> MessagesDriver<'a> {
         }
         Ok(MessagesDriver {
             cap,
-            handle,
+            guard,
             stream: lca_wire_anthropic::AnthropicStream::new(),
             buf: Vec::new(),
             pending: std::collections::VecDeque::new(),
@@ -740,7 +750,7 @@ impl<'a> MessagesDriver<'a> {
             if self.finished {
                 return None;
             }
-            match self.cap.net_read_body(self.handle, 64 * 1024) {
+            match self.cap.net_read_body(self.guard.handle(), 64 * 1024) {
                 Ok(Some(chunk)) => self.push_chunk(&chunk, false),
                 Ok(None) => {
                     self.finished = true;
@@ -755,11 +765,9 @@ impl<'a> MessagesDriver<'a> {
     }
 }
 
-impl Drop for MessagesDriver<'_> {
-    fn drop(&mut self) {
-        let _ = self.cap.net_close_response(self.handle);
-    }
-}
+// Gh #577: `MessagesDriver` has no `Drop` of its own any more. Its guard's `Drop`
+// closes the handle, and one owner is the point - a second close would be a counted
+// double close rather than "closed exactly once".
 
 /// The static model table (the issue's catalog): every row's window is
 /// Anthropic's documented 200k context for the Claude 3 generation;
