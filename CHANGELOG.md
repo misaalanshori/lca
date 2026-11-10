@@ -7,6 +7,18 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **The extension manifest schema now accepts the manifests this repo ships** (gh #340, schema
+  only). Three facts in `schemas/extension-manifest.schema.json` contradicted the product: it had
+  `additionalProperties: false` with no top-level `resources` property, so a **first-party** manifest
+  (`extensions/openai-compatible`) failed the normative document that authors validate against -
+  while the host *requires* `resources` for a data-only package, and the schema demanded at least
+  one world; and `limits.fuel_per_call` documented a default of 10,000,000 against the host's
+  `DEFAULT_FUEL_PER_CALL` of 25,000,000. It also still called itself ABI 0.1 while the line is 0.6.
+  `resources` is now a declared property, an empty `worlds` list is legal exactly when a resource
+  kind is declared, and the fuel default is the host's. `scripts/docs-consistency.sh` validates every
+  shipped manifest through real JSON-Schema validation, and `tests/regressions/340-…` pins the same
+  rules in Rust so they hold without the Python module. No product behaviour changed - and no WIT
+  import was added: the WASM formatter's spawn gap stays the 0.7 `abi-breaking` item.
 - **`hash_edit` results are auto-formatted, and a failing formatter's own error text reaches the
   warning** (gh #284). The result hook covered only `edit`/`write`, so a session whose model used
   `hash_edit` never formatted its files - the hook returned "no formattable file in this call" and
