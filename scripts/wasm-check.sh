@@ -12,10 +12,12 @@
 #
 # This checks every extension crate builds for the component target on
 # every push. It is a build only: no fixtures are refreshed here (that is
-# a deliberate, reviewed step) - but the conformance fixture is VERIFIED
-# against the build below, because a committed component with no refresh
-# step anywhere (not here, not the publish workflow's five other packages)
-# silently went stale against ABI 0.6 once already (gh #427).
+# a deliberate, reviewed step) - but **every committed component** is
+# VERIFIED against the build below, by interface, because a committed binary
+# with no refresh step anywhere (not here, not the publish workflow's five
+# other packages) silently went stale against ABI 0.6 once already (gh #427),
+# and two more had by 2026-11-10 while this check named only one of them
+# (gh #591).
 #
 # Verifies: docs/testing-plan.md section 13 (an extension component must
 # actually build for the target it ships on), FR-EXT-1.
@@ -52,7 +54,15 @@ echo "wasm-check: building $packages for $target"
 cargo build --release --target "$target" --quiet $(for p in $packages; do echo "-p $p"; done)
 echo "wasm-check: every extension component builds"
 
-# gh #427: the committed conformance fixture must still match the source.
+# gh #427 / gh #591: EVERY committed component must still match its source.
+#
+# This used to compare one fixture - `extensions/conformance`'s - and nothing
+# else. Every other committed component was covered by nothing, and by 2026-11-10
+# two of them (`codex`, `grok`) had drifted: a fresh build of their own crate
+# imports `lca:host/resources@0.6.0` and the `net` interface's
+# `response-headers`, while the committed file imports neither. A 0.6 host
+# *loads* a guest that imports a subset, so the CLI's own e2e rows kept passing
+# against the stale binary - the silent-drift shape gh #591 is about.
 #
 # Compared by **interface**, not by bytes. Byte equality was the first attempt
 # and it does not survive the environment: this tree builds byte-stable
@@ -75,51 +85,77 @@ echo "wasm-check: every extension component builds"
 # component in both delivery modes and diffs the results, so behaviour cannot
 # drift silently - it merely loses a byte-level alarm, and gains a gate that
 # actually runs everywhere.
-fixture=extensions/conformance/fixtures/tool-world.wasm
-built="${CARGO_TARGET_DIR:-target}/$target/release/conformance.wasm"
-if [ -f "$fixture" ]; then
-    if [ ! -f "$built" ]; then
-        echo "wasm-check: the build produced no $built; the package shape changed" >&2
-        exit 1
-    fi
-    # `cargo install` puts the binary in $CARGO_HOME/bin (usually ~/.cargo/bin),
-    # which is NOT always on PATH: this script also runs from `bash --norc`
-    # shells and from CI steps that never sourced a profile. Looking there too
-    # is what keeps the interface check from silently degrading to the
-    # wasm-tools-unavailable branch on a machine that has it installed.
-    wasm_tools=$(command -v wasm-tools 2>/dev/null || true)
-    if [ -z "$wasm_tools" ]; then
-        for candidate in "${CARGO_HOME:-$HOME/.cargo}/bin/wasm-tools" "$HOME/.cargo/bin/wasm-tools"; do
-            if [ -x "$candidate" ]; then wasm_tools=$candidate; break; fi
-        done
-    fi
-    if [ -z "$wasm_tools" ]; then
-        echo "wasm-check: installing wasm-tools for the fixture interface check"
-        cargo install --quiet --locked wasm-tools >/dev/null 2>&1 || true
-        if [ -x "${CARGO_HOME:-$HOME/.cargo}/bin/wasm-tools" ]; then
-            wasm_tools="${CARGO_HOME:-$HOME/.cargo}/bin/wasm-tools"
-        fi
-    fi
-    if [ -n "$wasm_tools" ]; then
-        committed=$("$wasm_tools" component wit "$fixture" 2>/dev/null || true)
-        fresh=$("$wasm_tools" component wit "$built" 2>/dev/null || true)
-        if [ -z "$committed" ] || [ -z "$fresh" ]; then
-            echo "wasm-check: could not read a component interface from $fixture or $built" >&2
-            exit 1
-        fi
-        if [ "$committed" != "$fresh" ]; then
-            echo "wasm-check: $fixture no longer matches the conformance source (gh #427)" >&2
-            echo "  the committed component exports a different interface than a fresh build:" >&2
-            diff <(printf '%s\n' "$committed") <(printf '%s\n' "$fresh") | head -30 >&2
-            echo "  reinstall it: cp $built $fixture" >&2
-            exit 1
-        fi
-        echo "wasm-check: committed conformance fixture matches a fresh build"
-    else
-        echo "wasm-check: wasm-tools unavailable; the load guard in" >&2
-        echo "  crates/lca-ext-host/tests/fixture_current.rs is the check that runs" >&2
+#
+# The fixture list is DERIVED, never hard-coded (gh #591): every
+# `extensions/*/fixtures/*.wasm` whose own crate is built above is compared, and
+# each one is printed as it is checked so a failure names the artifact. A
+# directory with no fresh build is skipped *with its reason* - a silent pass is
+# the one outcome this must never produce.
+# `cargo install` puts the binary in $CARGO_HOME/bin (usually ~/.cargo/bin),
+# which is NOT always on PATH: this script also runs from `bash --norc`
+# shells and from CI steps that never sourced a profile. Looking there too
+# is what keeps the interface check from silently degrading to the
+# wasm-tools-unavailable branch on a machine that has it installed.
+wasm_tools=$(command -v wasm-tools 2>/dev/null || true)
+if [ -z "$wasm_tools" ]; then
+    for candidate in "${CARGO_HOME:-$HOME/.cargo}/bin/wasm-tools" "$HOME/.cargo/bin/wasm-tools"; do
+        if [ -x "$candidate" ]; then wasm_tools=$candidate; break; fi
+    done
+fi
+if [ -z "$wasm_tools" ]; then
+    echo "wasm-check: installing wasm-tools for the fixture interface check"
+    cargo install --quiet --locked wasm-tools >/dev/null 2>&1 || true
+    if [ -x "${CARGO_HOME:-$HOME/.cargo}/bin/wasm-tools" ]; then
+        wasm_tools="${CARGO_HOME:-$HOME/.cargo}/bin/wasm-tools"
     fi
 fi
-# A missing fixture is a different failure and is already owned: the load
-# guard in crates/lca-ext-host/tests/fixture_current.rs asserts the
+if [ -z "$wasm_tools" ]; then
+    # Skip, never pass silently: say which fixtures went unchecked and what
+    # would have checked them. The load guard is stronger where it applies, but
+    # it covers one directory (crates/lca-ext-host/tests/fixture_current.rs).
+    echoed=$(for f in extensions/*/fixtures/*.wasm; do [ -e "$f" ] && printf '%s ' "$f"; done)
+    echo "wasm-check: wasm-tools unavailable; these external fixtures went UNCHECKED:" >&2
+    echo "  $echoed" >&2
+    echo "  the load guard in crates/lca-ext-host/tests/fixture_current.rs still runs" >&2
+    exit 0
+fi
+
+checked=0
+unbuilt=0
+for fixture in extensions/*/fixtures/*.wasm; do
+    [ -e "$fixture" ] || continue
+    extension=$(basename "$(dirname "$(dirname "$fixture")")")
+    # The release artifact's name: cargo writes `my_ext.wasm` for package
+    # `my-ext`, so hyphens become underscores. A directory whose crate is not
+    # in this workspace (or not a cdylib) simply has no artifact to compare.
+    artifact="${CARGO_TARGET_DIR:-target}/$target/release/${extension//-/_}.wasm"
+    if [ ! -f "$artifact" ]; then
+        echo "wasm-check: skipping $extension/$(basename "$fixture") - no build at $artifact (not a workspace cdylib)"
+        unbuilt=$((unbuilt + 1))
+        continue
+    fi
+    committed=$("$wasm_tools" component wit "$fixture" 2>/dev/null || true)
+    fresh=$("$wasm_tools" component wit "$artifact" 2>/dev/null || true)
+    if [ -z "$committed" ] || [ -z "$fresh" ]; then
+        echo "wasm-check: could not read a component interface from $fixture or $artifact" >&2
+        exit 1
+    fi
+    if [ "$committed" != "$fresh" ]; then
+        echo "wasm-check: $fixture no longer matches its source (gh #427/#591)" >&2
+        echo "  the committed component's interface is not a fresh build's of $extension:" >&2
+        diff <(printf '%s\n' "$committed") <(printf '%s\n' "$fresh") | head -30 >&2
+        echo "  reinstall it: cp $artifact $fixture" >&2
+        exit 1
+    fi
+    echo "wasm-check: $extension fixture matches a fresh build"
+    checked=$((checked + 1))
+done
+
+if [ "$checked" -eq 0 ]; then
+    echo "wasm-check: no committed component could be compared; the fixture layout changed" >&2
+    exit 1
+fi
+echo "wasm-check: all $checked committed components match their sources ($unbuilt skipped)"
+# A *missing* fixture is a different failure and is already owned: the load
+# guard in crates/lca-ext-host/tests/fixture_current.rs asserts the conformance
 # directory still lists at least one component that links.

@@ -698,3 +698,14 @@ mod one_stream_failure;
 // terminal failure.
 #[path = "590-a-failed-turn-paints-one-line.rs"]
 mod a_failed_turn_paints_one_line;
+
+// Gh #591: `scripts/wasm-check.sh` verified ONE committed component (conformance) and
+// hard-coded its path, so every other committed `component.wasm` was guarded by nothing
+// - and two (`codex`, `grok`) had drifted against their own sources. The script now
+// derives the list from `extensions/*/fixtures/*.wasm` and compares each against a fresh
+// build of its crate, by interface (`wasm-tools component wit`), never by bytes. These
+// rows pin that coverage and the honest failure modes; the comparison itself runs in
+// the `extension components build` CI job. A load test cannot see this drift - measured:
+// the stale files load fine, because they are a SUBSET of the fresh interface.
+#[path = "591-every-committed-fixture-is-compared.rs"]
+mod every_committed_fixture_is_compared;
