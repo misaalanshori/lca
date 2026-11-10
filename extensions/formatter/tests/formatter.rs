@@ -177,6 +177,104 @@ fn a_hash_edit_result_is_formatted_end_to_end() {
     );
 }
 
+// Verifies: gh #284 - **the failing formatter's own words reach the warning, and
+// the tail is read before the wait.**
+//
+// The native `read_stderr` was a hardcoded `String::new()`, so every failing
+// formatter reported `"rustfmt exited 1 for src/x.rs: "` - a dangling colon, which
+// is exactly the copy `docs/testing-plan.md`'s error rule forbids ("tell the user
+// what to DO"). The fix is `lca-tools`' bounded read (gh #459's
+// `process_read_stderr_buffered`), and the subtlety is **ordering**: `process_wait`
+// removes the handle from the engine's table (`take_process`), so a tail read after
+// the wait can never see the child's words. This fake records the call order, so a
+// future reorder fails here rather than in a user's terminal.
+#[test]
+fn a_failing_formatters_stderr_reaches_the_warning_after_a_read_that_precedes_the_wait() {
+    let state = FormatterState::new();
+    let process = TestProcess::failing("error: unexpected token");
+    let outcome = state.handle_result(
+        &process,
+        &TestFs::empty(),
+        "write",
+        r#"{"path": "src/main.rs"}"#,
+        true,
+    );
+    match &outcome {
+        HookOutcome::Warning(note) => {
+            assert!(
+                note.contains("unexpected token"),
+                "the formatter's own words reach the warning: {note}"
+            );
+            assert!(
+                !note.trim_end().ends_with("src/main.rs:") && !note.ends_with(": "),
+                "and the warning does not end in a dangling colon: {note:?}"
+            );
+        }
+        other => panic!("a failing formatter warns, got {other:?}"),
+    }
+    let calls: Vec<&str> = process.calls.borrow().clone();
+    let read = calls
+        .iter()
+        .position(|call| *call == "read_stderr")
+        .expect("the tail was read at all");
+    let wait = calls
+        .iter()
+        .position(|call| *call == "wait")
+        .expect("the child was waited for");
+    assert!(
+        read < wait,
+        "the stderr read happens BEFORE the wait - `process_wait` drops the handle,          so a read after it can only answer `not found` (gh #284): {calls:?}"
+    );
+}
+
+// Verifies: gh #284 - the 300-char tail survives the move to a real read.
+//
+// The existing behaviour is kept deliberately: the warning carries the **last**
+// 300 characters of what the formatter said, because the line that explains a
+// failure is the last one (a rustfmt error prints the snippet before the reason).
+// Before the fix this could not be tested at all - the tail was taken from an
+// empty string - so "the tail is 300 chars" was a claim about a `take(300)` call
+// rather than about any bytes.
+#[test]
+fn a_chatty_failing_formatter_is_warned_with_its_last_three_hundred_characters() {
+    let state = FormatterState::new();
+    // 400 characters, with the distinguishable end.
+    let long = format!("{}{}", "x".repeat(390), "TAIL-END");
+    let process = TestProcess::failing(&long);
+    let outcome = state.handle_result(
+        &process,
+        &TestFs::empty(),
+        "write",
+        r#"{"path": "src/main.rs"}"#,
+        true,
+    );
+    match &outcome {
+        HookOutcome::Warning(note) => {
+            assert!(
+                note.contains("TAIL-END"),
+                "the tail keeps the end, which is the part that explains the failure: {note}"
+            );
+            // The warning is `prog exited N for path: <tail>`; the tail itself is
+            // capped at 300 chars, so the whole note is bounded.
+            let tail_len = note.rsplit(": ").next().unwrap_or("").chars().count();
+            assert!(
+                tail_len <= 300,
+                "the tail is capped at 300 characters, got {tail_len}: {note}"
+            );
+            // A tail, not the whole thing: the full 400 characters cannot fit.
+            assert!(
+                !note.contains(&long),
+                "the whole 400-character message does not fit in the tail: {note}"
+            );
+            assert!(
+                note.contains(&"x".repeat(290)),
+                "the tail is the LAST 300 characters, so it is 290 x's then TAIL-END: {note}"
+            );
+        }
+        other => panic!("a failing formatter warns, got {other:?}"),
+    }
+}
+
 // Verifies: the hook outcome matrix — only enabled + ok + known
 // file formats; everything else names its skip.
 #[test]
@@ -283,9 +381,16 @@ fn commands_toggle_and_run() {
 use std::cell::RefCell;
 
 // A canned process backend.
+//
+// Gh #284: it records the **call order** of the two result reads, because the
+// interesting half of the stderr fix is ordering rather than text - the engine's
+// `process_wait` removes the handle from its table, so a stderr read after the
+// wait can never see the failing child's words. A fake that answered
+// `read_stderr` happily in either order would pass a row the real engine fails.
 struct TestProcess {
     mode: RefCell<Mode>,
     spawned: RefCell<Vec<String>>,
+    calls: RefCell<Vec<&'static str>>,
 }
 
 #[derive(Clone)]
@@ -300,6 +405,7 @@ impl TestProcess {
         TestProcess {
             mode: RefCell::new(Mode::Ok),
             spawned: RefCell::new(Vec::new()),
+            calls: RefCell::new(Vec::new()),
         }
     }
 
@@ -307,6 +413,7 @@ impl TestProcess {
         TestProcess {
             mode: RefCell::new(Mode::Missing),
             spawned: RefCell::new(Vec::new()),
+            calls: RefCell::new(Vec::new()),
         }
     }
 
@@ -314,6 +421,7 @@ impl TestProcess {
         TestProcess {
             mode: RefCell::new(Mode::Failing(stderr.to_string())),
             spawned: RefCell::new(Vec::new()),
+            calls: RefCell::new(Vec::new()),
         }
     }
 }
@@ -328,6 +436,7 @@ impl formatter::ProcessView for TestProcess {
     }
 
     fn wait(&self, _handle: u32) -> Result<i32, String> {
+        self.calls.borrow_mut().push("wait");
         match &*self.mode.borrow() {
             Mode::Ok => Ok(0),
             Mode::Failing(_) => Ok(1),
@@ -335,7 +444,12 @@ impl formatter::ProcessView for TestProcess {
         }
     }
 
+    /// Gh #284: answers the shape the real engine answers through
+    /// `process_read_stderr_buffered` - what the child has **already** written, never
+    /// a wait, and nothing for a live child that wrote nothing. The call log is what
+    /// lets a row assert the ordering the engine imposes.
     fn read_stderr(&self, _handle: u32) -> String {
+        self.calls.borrow_mut().push("read_stderr");
         match &*self.mode.borrow() {
             Mode::Failing(text) => text.clone(),
             _ => String::new(),

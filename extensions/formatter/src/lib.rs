@@ -178,8 +178,31 @@ pub trait ProcessView {
     /// reason it never started.
     fn spawn(&self, program: &str, args: &[String]) -> Result<u32, String>;
     /// Wait for the handle; the exit code.
+    ///
+    /// **This removes the handle from the engine's table** (`take_process`), which
+    /// is why [`Self::read_stderr`] must be called *before* it: after the wait
+    /// there is nothing left to read, and a failing formatter's own words are
+    /// lost (gh #284).
     fn wait(&self, handle: u32) -> Result<i32, String>;
-    /// The handle's stderr (the failing formatter's own words).
+    /// What the handle has **already** written to stderr - the failing
+    /// formatter's own words - without waiting (gh #284).
+    ///
+    /// Returns the bytes the child wrote (empty when it wrote nothing, or when the
+    /// handle is unreadable), and **must not block**: it is called on a child that
+    /// has failed but may not have closed its pipe yet, so a formatter that hangs
+    /// must not turn a warning into a hang.
+    ///
+    /// **Why `String` and not `Result<String, String>`.** The defect was
+    /// indistinguishable from a legitimate answer - every failing formatter
+    /// reported `"rustfmt exited 1 for src/x.rs: "`, a dangling colon - so a
+    /// `Result` would let "the read failed" be reported differently from "the
+    /// child said nothing". It was written that way first and reverted: the trait
+    /// is implemented by fakes in `tests/regressions/357-formatter-skip-vcs-and-build-roots.rs`,
+    /// which is **outside this cycle's file boundary**, so a signature change would
+    /// have rippled into a guard this cycle has no mandate to touch. What is lost
+    /// is stated rather than hidden: an unreadable handle still reports an empty
+    /// tail, exactly as it did before (it just no longer reports it *because the
+    /// tail was hardcoded*), and the warning's copy is unchanged.
     fn read_stderr(&self, handle: u32) -> String;
 }
 
@@ -326,12 +349,18 @@ impl FormatterState {
                 ));
             }
         };
+        // Gh #284: **read the tail before waiting**, because `wait` removes the
+        // handle from the engine's table (`take_process`) and a closed handle can
+        // never be read again. The read is non-blocking
+        // (`process_read_stderr_buffered`), so it is safe against a child that is
+        // still alive: it answers what has already been written rather than waiting
+        // for a write that may never come.
+        let stderr = process.read_stderr(handle);
         match process.wait(handle) {
             Ok(0) => HookOutcome::Formatted {
                 program: command.program,
             },
             Ok(code) => {
-                let stderr = process.read_stderr(handle);
                 let tail: String = stderr
                     .trim()
                     .chars()
@@ -459,9 +488,62 @@ mod native {
             self.process_wait(handle).map_err(|err| err.to_string())
         }
 
-        fn read_stderr(&self, _handle: u32) -> String {
-            // Best effort: stderr already consumed or gone reads empty.
-            String::new()
+        /// Gh #284: the failing formatter's own words, through gh #459's bounded
+        /// read (`process_read_stderr_buffered`), which answers `Some(empty)` for a
+        /// live child with nothing written and drains a closed pipe.
+        ///
+        /// A child that has **exited** closes its pipe, so draining to EOF collects
+        /// everything it wrote - the shape `crates/lca-mcp/src/stdio_tail.rs` documents,
+        /// including "2 of 5 runs missed the last words through a purely-buffered
+        /// read". A live child may never close its pipe, so that case takes only
+        /// what is there.
+        ///
+        /// **The whole read is bounded** (`SETTLE`), and it has to be: a buffered
+        /// read alone collected *nothing* in practice, because rustfmt writes its
+        /// diagnostics after the spawn returns (measured: the warning still read
+        /// `rustfmt exited 1 for src/broken.rs: `). So it waits for the child to
+        /// exit - peeking through `process_has_exited`, which does **not** remove
+        /// the handle, unlike `process_wait` - for at most two seconds, then takes
+        /// whatever arrived. A formatter that wedges costs a bounded delay and a
+        /// warning; it never turns a warning into a hang.
+        fn read_stderr(&self, handle: u32) -> String {
+            const TAIL_BYTES: usize = 2000;
+            /// How long the read waits for the child's pipe to close. A formatter
+            /// that is genuinely wedged must not turn a warning into a hang, so the
+            /// wait is bounded and the tail is whatever arrived by then.
+            const SETTLE: std::time::Duration = std::time::Duration::from_secs(2);
+            let started = std::time::Instant::now();
+            // A live child may never close its pipe, and a buffered read of a live
+            // child answers "nothing yet" - measured here: rustfmt writes its
+            // diagnostics *after* the spawn returns, so a single pre-wait buffered
+            // read collected not one byte and the warning kept its dangling colon.
+            // So wait for the child to exit, bounded. `process_has_exited` peeks
+            // without removing the handle from the table (that is `process_wait`'s
+            // job, which is exactly why this runs before it).
+            while !self.process_has_exited(handle).unwrap_or(false) {
+                if started.elapsed() >= SETTLE {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            let mut collected: Vec<u8> = Vec::new();
+            loop {
+                // Once the child has exited its pipe is closed, so this read returns
+                // at EOF rather than blocking; before that, the read is bounded to
+                // what is buffered. Either way it returns (gh #459's contract).
+                let chunk = if self.process_has_exited(handle).unwrap_or(false) {
+                    self.process_read_stderr(handle, TAIL_BYTES)
+                } else {
+                    self.process_read_stderr_buffered(handle, TAIL_BYTES)
+                };
+                match chunk {
+                    Ok(Some(bytes)) if !bytes.is_empty() => collected.extend_from_slice(&bytes),
+                    // `None` is EOF and an `Err` is "the handle is gone": both end
+                    // the read with whatever was already collected.
+                    _ => break,
+                }
+            }
+            String::from_utf8_lossy(&collected).into_owned()
         }
     }
 

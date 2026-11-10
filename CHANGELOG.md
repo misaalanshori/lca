@@ -7,12 +7,19 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
-- **`hash_edit` results are auto-formatted** (gh #284). The result hook covered only `edit` and
-  `write`, so a session whose model used `hash_edit` never formatted its files: the hook returned
-  "no formattable file in this call" and nothing said so. The path list is now **every built-in
-  writing tool** (`write`, `edit`, `hash_edit`), and the module docs say so, so the next writing
-  tool gets considered here rather than silently skipped. (`apply_patch`, which the issue's title
-  also names, is not a tool this tree declares - checked by grep across `.rs`/`.md`/`.toml`.)
+- **`hash_edit` results are auto-formatted, and a failing formatter's own error text reaches the
+  warning** (gh #284). The result hook covered only `edit`/`write`, so a session whose model used
+  `hash_edit` never formatted its files - the hook returned "no formattable file in this call" and
+  nothing said so; the list is now every built-in writing tool (`write`, `edit`, `hash_edit`), and
+  the module docs name them so the next one is considered here. (`apply_patch`, which the issue's
+  title also names, is not a tool this tree declares - checked by grep across `.rs`/`.md`/`.toml`.)
+  And the native `read_stderr` was a hardcoded empty string, so every failing formatter reported
+  `"rustfmt exited 1 for src/x.rs: "` - a dangling colon with nothing after it. The tail now comes
+  from gh #459's bounded read (`process_read_stderr_buffered`, which answers "nothing yet" for a live
+  child instead of blocking), is read **before** `wait` (which removes the handle from the engine's
+  table), and the whole read is bounded at two seconds so a wedged formatter costs a delay and a
+  warning rather than a hang. The WASM half still cannot spawn (it needs `lca:host/process`/`fs` in
+  three hook worlds) - that remains the 0.7 item the issue labels `abi-breaking`.
 - **Test harness: the load-scaling allowance works on macOS and Windows, not only Linux** (gh #589).
   `load_factor()` read `/proc/loadavg` and defaulted the absent file to `0.0`, i.e. **1x** — so
   `docs/testing-plan.md` §14's promise held on the Linux developer's box and was a placebo on the two

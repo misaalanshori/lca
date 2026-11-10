@@ -179,6 +179,54 @@ fn an_explicit_generated_path_is_refused_by_the_real_engine() {
     assert!(matches!(outcome, HookOutcome::Refused(_)), "{outcome:?}");
 }
 
+// Verifies: gh #284 - **the real engine's stderr reaches the warning.**
+//
+// The unit row pins the shape against a fake; this one pins that the *engine* answers
+// it, because the fix's ordering constraint is the engine's: `process_wait` removes the
+// handle from its table (`take_process`), so the tail must be read first or there is
+// nothing left to read. A fake can be written to pass in either order; the real engine
+// cannot.
+//
+// The defect was a hardcoded `String::new()`, so the failing formatter's own words never
+// appeared: the report read `rustfmt exited 1 for src/main.rs: ` and nothing more. Here
+// the input is deliberately unparseable, so rustfmt really fails and really explains
+// itself - a warning without that text is the defect, and one with it is the fix.
+//
+// `rustfmt` is a real dependency here; the row skips (rather than fails) when it is
+// absent, the same degradation the extension itself has.
+#[test]
+fn a_real_failing_formatter_reports_its_own_stderr() {
+    if !rustfmt_present() {
+        eprintln!("skipping: rustfmt is not installed (the extension degrades the same way)");
+        return;
+    }
+    let workspace = Workspace::new("stderr-tail");
+    // Invalid Rust: rustfmt exits nonzero and says why on stderr.
+    std::fs::write(workspace.root.join("src/broken.rs"), "fn main( { }\n").expect("write");
+    let cap = workspace.capabilities();
+
+    let state = FormatterState::new();
+    let outcome = state.format_file(cap.as_ref(), cap.as_ref(), "src/broken.rs");
+    match &outcome {
+        HookOutcome::Warning(note) => {
+            eprintln!("warning: {note}");
+            assert!(
+                note.starts_with("rustfmt exited"),
+                "the failure is reported as a failure: {note}"
+            );
+            // The whole point: the tail is not empty. A specific line is not worth
+            // pinning (rustfmt's wording is its own), but *some* diagnostics text is.
+            let tail = note.rsplit(": ").next().unwrap_or("").trim();
+            assert!(
+                tail.chars().count() > 10,
+                "the failing formatter's own words are in the warning, not an empty \
+                 tail (gh #284: the tail used to be a hardcoded empty String): {note:?}"
+            );
+        }
+        other => panic!("a failing formatter warns, got {other:?}"),
+    }
+}
+
 // Verifies: gh #284 - **a hash_edit result formats through the real engine.**
 //
 // The unit row proves the hook spawns for a hash_edit call; this one proves the same
@@ -214,4 +262,42 @@ fn a_hash_edit_result_is_formatted_by_the_real_engine() {
         before,
         "and the file on disk really was reformatted (report: {outcome:?})"
     );
+}
+
+// Verifies: gh #284 - **the stderr read is bounded under a live child.**
+//
+// The brief's constraint, and the one the fix could most easily break in the
+// other direction: waiting for a failing formatter's words must not itself hang
+// when the child never exits. `read_stderr` peeks `process_has_exited` (bounded by
+// `SETTLE`) and then takes only what is buffered, so a live child costs a bounded
+// delay and a warning - never a wedged turn.
+//
+// Driven through the real capability engine and a real child (`sleep`), because
+// the bound lives in the engine-facing implementation rather than in a fake.
+#[test]
+#[cfg(unix)]
+fn the_stderr_read_returns_while_the_child_is_still_alive() {
+    use formatter::ProcessView as _;
+
+    let workspace = Workspace::new("live-child-stderr");
+    let cap = workspace.capabilities();
+    // A child that outlives the probe. `sleep` writes nothing, so the answer must
+    // be "nothing buffered" - and promptly, which is the property.
+    let handle = cap
+        .process_spawn("sleep", &["5".to_string()], "workspace")
+        .expect("spawn sleep");
+    let started = std::time::Instant::now();
+    let tail = cap.read_stderr(handle);
+    let elapsed = started.elapsed();
+    // Two seconds is the implementation's own bound; allow the read plus scheduling.
+    assert!(
+        elapsed < std::time::Duration::from_secs(4),
+        "the read is bounded under a live child, took {elapsed:?}"
+    );
+    assert!(
+        tail.trim().is_empty(),
+        "a child that wrote nothing answers an empty tail, not an error: {tail:?}"
+    );
+    // Clean up the child so no `sleep` outlives this test binary.
+    let _ = cap.process_kill(handle);
 }
