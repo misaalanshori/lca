@@ -34,7 +34,9 @@ fn chat_completions_decode(chunks: &[&[u8]]) -> (String, Vec<String>) {
 /// Drive the Responses driver's framing path. The driver owns a socket, so
 /// its pure framing half is exercised through the shared `FrameBuffer` it
 /// uses — the same bytewise split, the same complete-frame decode. The
-/// driver-level rows live in `tests/responses.rs`.
+/// driver-level rows live in `tests/responses.rs`.  (The kit's own
+/// `src/responses.rs` became `src/responses/` in gh #576's split; this note
+/// names the *test* file, which did not move.)
 fn responses_decode(chunks: &[&[u8]]) -> (String, Vec<String>) {
     let mut buffer = lca_wire_openai::sse::FrameBuffer::new();
     let mut frames = Vec::new();

@@ -5,6 +5,23 @@
 //! stay in the extensions. Builds for native targets and
 //! `wasm32-wasip2` alike (no host imports); `lca-core` never depends
 //! on it.
+//!
+//! # The shared failure type, and the RAII rule for a host handle
+//!
+//! `StreamFailure` lives in [`lca_protocol`], beside `CapabilityError`, and this kit
+//! re-exports it. One definition and one `From<CapabilityError>` is the point: the
+//! type used to exist twice (here and in the Anthropic kit) with two classification
+//! impls that happened to agree, which is luck rather than design (gh #576). The
+//! fields stay **public** because 45 struct-literal sites in this tree build one and
+//! a mechanical sweep is its own cycle; the constructors (`invalid`, `auth`,
+//! `transport`, `new`) are the shape new code uses.
+//!
+//! **A host handle acquired from a capability and followed by fallible calls gets a
+//! guard on the line after the call that produced it.** `ResponseStreamDriver::open`
+//! gets its handle from `net_request`, then `?`s on `net_response_status` and inside
+//! the non-2xx `net_read_body` loop *before* the driver exists - so the driver's own
+//! `Drop` cannot own it yet, and closing only on the success paths leaked the handle
+//! once per failed request (gh #577). `ResponseGuard` owns it from that line on.
 
 pub mod chat_completions;
 pub mod error;
