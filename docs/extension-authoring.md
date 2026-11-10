@@ -626,7 +626,15 @@ A provider extension lists models, streams completions, and handles authenticati
 
 Streaming is a pull resource. The host calls a next function repeatedly and gets one typed event each time.
 
-**A handle from a capability is a resource, and a driver built later does not own it.** When your guest calls `net.request`, the host hands back a handle that stays in its table until `net.close-response` (or the response's own end). Everything between the request and the object that will eventually "own" the handle is **fallible** — a status read, an error-body read — so a `?` there returns with the handle still open, once per failed request. Take ownership on the line after the request: a guard whose `Drop` closes it (the shared kits' `ResponseGuard`, gh #577), then pass the guard into the driver. Closing manually only on the success paths is how this leaks; the failure path is exactly where nobody is looking.
+**A handle from a capability is a resource, and a driver built later does not own it.** When your guest calls `net.request`, the host hands back a handle that stays in its table until `net.close-response` (or the response's own end). Everything between the request and the object that will eventually "own" the handle is **fallible** — a status read, an error-body read — so a `?` there returns with the handle still open, once per failed request. Take ownership on the line after the request with the shared guard, then pass it into the driver:
+
+```rust
+let handle = cap.net_request("POST", url, headers, Some(body))?;
+let guard = lca_protocol::ResponseGuard::new(cap, handle);   // ownership starts here
+let status = cap.net_response_status(guard.handle())?;        // `?` is now safe
+```
+
+`ResponseGuard` lives in `lca-protocol` beside `ProviderCap`, because every provider has this shape and not every kit (the Anthropic one has no transport) depends on a wire kit. It closes on `Drop`, and `guard.close()` closes early for the caller about to return a failure — which is what the non-2xx path does, **after** it reads the headers it needs (gh #278: the host drops a handle from its table on close, so a `retry-after` read after a close is `NotFound`). Closing manually only on the success paths is how this leaks; the failure path is exactly where nobody is looking.
 
 The events are text delta, reasoning delta, tool call start, tool call argument delta, tool call end, usage, error, and `vendor-event`.
 

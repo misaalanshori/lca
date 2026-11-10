@@ -14,9 +14,17 @@ Dates are UTC.
   the capability engine's table, once per failed request. A `ResponseGuard` now owns the handle
   from the line after `net_request` and closes it on every path, including the two early returns.
   No user-visible behaviour changes: the failure a caller sees is the same message and class it
-  was before. `StreamFailure` also moved to `lca-protocol` (gh #576) — one definition beside
-  `CapabilityError` instead of two that happened to agree, with constructors, `Display` and
-  `std::error::Error` — and both wire kits re-export it, so no path changed.
+  was before. The guard now lives in **`lca-protocol`** (`lca_protocol::ResponseGuard`,
+  beside `ProviderCap`) because every provider has this shape and the Anthropic kit has no
+  transport to borrow one from: the same early-return leak was present in **six more**
+  extensions — `anthropic`, `openai-compatible`, `openrouter`, `kimi-coding`, `llama`,
+  `meta`, `github-copilot` and `antigravity` (its 404 candidate walk too), all converted in
+  the cycle that lifted the guard. A failed request used to leave one handle in the
+  capability engine's table for the process's lifetime, invisible per request because the
+  error and its class were identical; `StreamFailure` also moved to `lca-protocol` (gh #576)
+  — one definition beside `CapabilityError` instead of two that happened to agree, with
+  constructors, `Display` and `std::error::Error` — and both wire kits re-export it, so no
+  path changed.
 - **The extension manifest schema now accepts the manifests this repo ships** (gh #340, schema
   only). Three facts in `schemas/extension-manifest.schema.json` contradicted the product: it had
   `additionalProperties: false` with no top-level `resources` property, so a **first-party** manifest
@@ -122,7 +130,6 @@ Dates are UTC.
   extension already owns — that loss is reported as a collision, exactly as at startup —
   and a settled set is never re-read, so the declared tools stay byte-identical between
   turns and the prompt cache is untouched.
-
 ### Added
 - **An overlay can now have a width ceiling and react to the terminal it is in** (gh #373 gap
   6). Two `OverlayOptions` fields were missing. `max_width` caps a resolved width, which is
