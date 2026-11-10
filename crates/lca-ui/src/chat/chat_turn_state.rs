@@ -102,6 +102,10 @@ impl Chat {
         }
         self.separator.working();
         self.current_steer = Some(steer);
+        // Gh #590: the per-turn paint flag starts clear, so `TurnState::reap`
+        // knows whether this turn's own `TurnEvent::Error` already painted its
+        // line (and the outcome's notice is therefore not needed).
+        self.turn_error_painted = false;
         self.turn_status = Some(TurnStatusLine {
             text: "running...".into(),
         });

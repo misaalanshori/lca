@@ -1013,8 +1013,30 @@ impl TurnState {
         // The prompt receiver stays: a host-side consent asked between
         // turns (the picker's endpoint consent) must still find it.
         self.cancel = None;
+        // Gh #590: **the outcome's notice is the fallback, not the paint.**
+        //
+        // A terminal failure reaches the interface as a `TurnEvent::Error`, which
+        // paints the transcript's error line (the turn's own channel - the one
+        // every listener sees, and the one `headless` turns into its JSON
+        // envelope). Printing `outcome.error` here as well painted the same text
+        // twice: once as the ✗ line, once as a notice. So the notice is kept for
+        // the case it exists for - a turn that failed *before* any sink event
+        // could be delivered (a worker that never started, a panicking join, a
+        // `fail()` before the sink is handed one) - and it is skipped when this
+        // turn's own event already painted. Both strings are the same
+        // `TurnOutcome::error`, so the flag is the only difference between them.
+        //
+        // Gh #462: the flag is read on the tab that owns the turn, beside the
+        // transcript that painted the line - a background turn's settle must not
+        // consult, or silence, the visible tab's.
+        let owner = chat.turn_tab.unwrap_or(chat.active_tab);
         if let Some(error) = &outcome.error {
-            chat.say(crate::state::sanitize_text(error));
+            let painted = chat.with_tab_state(owner, |chat| chat.turn_error_painted);
+            if !painted {
+                chat.with_tab_state(owner, |chat| {
+                    chat.say(crate::state::sanitize_text(error));
+                });
+            }
         }
         // Gh #42: a counted miss the flag asked to surface shows
         // once, as a toast — a diagnostic, not history — beside any
@@ -1036,8 +1058,11 @@ impl TurnState {
         // turn (gh #462). The session total is per session, so a background
         // turn's spend must land on its own tab, not on whatever the reader is
         // looking at when the worker happens to finish.
-        let owner = chat.turn_tab.unwrap_or(chat.active_tab);
         chat.with_tab_state(owner, |chat| chat.fold_turn_usage(&outcome.usage));
+        // Gh #590: the turn's paint flag is spent; the next `begin_turn` clears
+        // it again. Clearing here as well keeps a settled interface from reading
+        // a finished turn's flag as if it belonged to whatever runs next.
+        chat.with_tab_state(owner, |chat| chat.turn_error_painted = false);
         // Gh #213: the resting badge follows the outcome (read before
         // the aborted branch below overwrites it for cancels).
         self.last_ok = Some(outcome.error.is_none());
@@ -1163,3 +1188,9 @@ mod viewport_keys_tests;
 #[cfg(test)]
 #[path = "run_theme_query_tests.rs"]
 mod theme_query_tests;
+
+/// Gh #590's count rows (one failed turn, one error line), split out of
+/// `run_tests.rs` for gate 11's ceiling.
+#[cfg(test)]
+#[path = "run_590_tests.rs"]
+mod turn_error_paint;

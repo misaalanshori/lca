@@ -140,6 +140,12 @@ impl Chat {
                 self.say(format!("retry {attempt}/{max} after: {error}"));
             }
             TurnEvent::Error { message, .. } => {
+                // Gh #590: **this is the paint.** The turn's own event is what
+                // records a terminal failure in the transcript; `TurnState::reap`
+                // adds the outcome's notice only when no event reachable from the
+                // sink ever painted one (a turn that failed before a sink existed).
+                // The flag is what keeps the two from painting the same failure.
+                self.turn_error_painted = true;
                 self.transcript.push_error(message);
             }
             TurnEvent::AssistantText(_) => {}

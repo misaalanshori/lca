@@ -152,6 +152,16 @@ pub struct Chat {
     /// append a second row for one compaction. Cleared by `CompactionStarted`,
     /// which is what makes a genuine second compaction still get its own.
     pub(crate) compaction_marked: bool,
+    /// Gh #590: whether this turn's `TurnEvent::Error` already painted its
+    /// transcript line. `TurnState::reap` reads it to decide whether the
+    /// outcome's error still needs the fallback notice - a failed turn painted
+    /// its message twice until this flag existed.
+    ///
+    /// Per **turn**, not per interface: it is reset by [`Chat::begin_turn`] and
+    /// travels with its tab in the gh #462 swap set, so a background turn's
+    /// suppression lands on the tab that painted it and never on the tab the
+    /// reader happens to be looking at when the worker finishes.
+    pub(crate) turn_error_painted: bool,
     /// The separator row's state and spinner (chrome.md's
     /// spinner-in-the-border, R2).
     pub separator: Separator,
@@ -457,6 +467,7 @@ impl Chat {
             deferred_host_session: None,
             compacting: false,
             compaction_marked: false,
+            turn_error_painted: false,
             turn_status: None,
             separator: Separator::new(),
             world,

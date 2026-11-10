@@ -7,6 +7,14 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **A failed turn no longer prints its message twice** (gh #590, interface). The same
+  text arrived on two channels: the turn's own `TurnEvent::Error`, painted as the ✗ history
+  line, and `TurnOutcome::error`, painted by the run loop's settle as a notice. The event is
+  the paint (it is the turn's own channel, and the one `headless --json` turns into its
+  `error` envelope); the notice is now only the fallback for a turn that failed before any
+  event could be delivered (a panicking worker, a `fail()` before a sink exists). No user
+  action changes — one line where there were two.
+
 - **A provider stream request that fails while opening no longer leaks its host response handle**
   (gh #577, library code). `ResponseStreamDriver::open` acquired a `net` handle, then `?`ed on
   the status read and on the non-2xx body read *before* the driver existed — and the driver's

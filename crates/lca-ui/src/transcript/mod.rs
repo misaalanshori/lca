@@ -686,6 +686,11 @@ impl Transcript {
     }
 
     /// Append a notice.
+    ///
+    /// The channel every *command answer* uses (gh #590): a refusal, a
+    /// `/settings` reply, the retry countdown. A turn's terminal failure is an
+    /// [`Transcript::push_error`] instead - that is history-shaped, this is
+    /// chrome-shaped - and a notice that repeats one is a duplicate line.
     pub fn push_notice(&mut self, text: impl Into<String>) {
         self.entries.push(Entry::Notice(text.into()));
     }
@@ -703,6 +708,13 @@ impl Transcript {
     }
 
     /// Append an error.
+    ///
+    /// **This is the channel a terminal turn failure belongs on** (gh #590):
+    /// `Chat::apply_turn_event` paints `TurnEvent::Error` here, once, and the
+    /// run loop's settle only falls back to a notice when no such event reached
+    /// the sink. Both carry the same `TurnOutcome::error` text, so a second paint
+    /// on the notice channel reads as two failures. An ordinary command answer
+    /// (a refusal, `/settings`) is a [`Transcript::push_notice`] instead.
     pub fn push_error(&mut self, text: impl Into<String>) {
         self.entries.push(Entry::Error(text.into()));
     }

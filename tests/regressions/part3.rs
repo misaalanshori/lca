@@ -688,3 +688,13 @@ mod shipped_manifests_validate;
 // beside the driver (`crates/lca-wire-openai/tests/open_guard.rs`).
 #[path = "576-one-stream-failure.rs"]
 mod one_stream_failure;
+
+// Gh #590: a failed turn painted its message twice - the turn's own `TurnEvent::Error`
+// (`Entry::Error`) and the outcome's notice from `TurnState::reap`. The behavioural
+// count rows live beside the reap seam (`crates/lca-ui/src/run_590_tests.rs`); this
+// entry pins the structure a later simplification would undo (the gate, the setter,
+// the per-tab swap) and the premise the brief got wrong - there is no persisted error
+// record, so both paints are live-only and the decision rests on which channel owns a
+// terminal failure.
+#[path = "590-a-failed-turn-paints-one-line.rs"]
+mod a_failed_turn_paints_one_line;

@@ -90,6 +90,11 @@ pub struct TabStream {
     /// turn's spend must land on its own session rather than on whatever the
     /// reader happens to be looking at (gh #462).
     pub usage: lca_protocol::Usage,
+    /// Whether this turn already painted its error line (gh #590). It belongs
+    /// to the *turn*, so it travels with the tab exactly as the transcript does:
+    /// a background turn's `reap` reads the flag beside the transcript that
+    /// painted it, never the visible tab's.
+    pub turn_error_painted: bool,
 }
 
 impl std::fmt::Debug for TabStream {
@@ -112,6 +117,7 @@ impl Default for TabStream {
             meter: crate::footer::meter::StreamMeter::default(),
             turn_usage: lca_protocol::Usage::default(),
             usage: lca_protocol::Usage::default(),
+            turn_error_painted: false,
         }
     }
 }
@@ -242,6 +248,7 @@ impl Chat {
         std::mem::swap(&mut stream.meter, &mut self.meter);
         std::mem::swap(&mut stream.turn_usage, &mut self.turn_usage);
         std::mem::swap(&mut stream.usage, &mut self.usage);
+        std::mem::swap(&mut stream.turn_error_painted, &mut self.turn_error_painted);
         tab.stream = Some(stream);
     }
 
@@ -262,6 +269,7 @@ impl Chat {
             self.meter = Default::default();
             self.turn_usage = Default::default();
             self.usage = Default::default();
+            self.turn_error_painted = false;
             return;
         };
         std::mem::swap(&mut stream.transcript, &mut self.transcript);
@@ -272,6 +280,7 @@ impl Chat {
         std::mem::swap(&mut stream.meter, &mut self.meter);
         std::mem::swap(&mut stream.turn_usage, &mut self.turn_usage);
         std::mem::swap(&mut stream.usage, &mut self.usage);
+        std::mem::swap(&mut stream.turn_error_painted, &mut self.turn_error_painted);
         // What came back is the tab's previous live state; an exhausted one is
         // dropped rather than kept as a stale snapshot (its content is the
         // log's, and the next switch replays from there).
