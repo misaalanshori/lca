@@ -349,7 +349,7 @@ macro_rules! subscription_wasm_dispatcher {
         /// owns neither.
         fn open_stream(
             request: &lca_protocol::CompletionRequest,
-        ) -> Result<::lca_wire_openai::ResponseStreamDriver<'static>, ::lca_wire_openai::StreamFailure>
+        ) -> Result<::lca_wire_openai::ResponseStreamDriver<'static>, ::lca_protocol::StreamFailure>
         {
             // `IdentityFailure` -> `StreamFailure` is the kit's existing
             // bridge: class `invalid`, never retried (a missing login is a
@@ -357,7 +357,7 @@ macro_rules! subscription_wasm_dispatcher {
             let token = ::lca_subscription::access_token(&GUEST_CAP, &$spec)?;
             let account_id = $stored(&GUEST_CAP, "account_id");
             if account_id.is_empty() {
-                return Err(::lca_wire_openai::StreamFailure {
+                return Err(::lca_protocol::StreamFailure {
                     message: $account_error.to_string(),
                     class: "invalid",
                     retryable: false,
@@ -383,7 +383,7 @@ macro_rules! subscription_wasm_dispatcher {
                 effort,
             );
             let body_bytes = serde_json::to_vec(&body).map_err(|err| {
-                ::lca_wire_openai::StreamFailure {
+                ::lca_protocol::StreamFailure {
                     message: format!("cannot build request: {err}"),
                     class: "invalid",
                     retryable: false,

@@ -16,6 +16,7 @@ pub mod provider;
 pub mod record;
 pub mod skills;
 pub mod stream;
+pub mod stream_failure;
 pub mod tool;
 pub mod turn;
 pub mod ui;
@@ -42,6 +43,7 @@ pub use record::{
     session_info_record,
 };
 pub use stream::{StreamEvent, THINKING_SIGNATURE_KIND, TRUNCATED_KIND};
+pub use stream_failure::StreamFailure;
 pub use tool::{
     ImageContent, ToolAnnotations, ToolCall, ToolExposure, ToolNamespace, ToolResult,
     ToolResultStatus, ToolSpec,

@@ -1,38 +1,14 @@
-//! How a shared stream run failed, in the vocabulary the core's
-//! `ProviderError` speaks (`docs/headless.md`'s classes). One definition
-//! for every extension on this kit (gh #189); the host never names it.
+//! The OpenAI-family failure vocabulary: the status classification and the
+//! vendor-envelope message, beside a re-export of the **one**
+//! [`lca_protocol::StreamFailure`] every kit now shares.
+//!
+//! Gh #576 moved the type itself to `lca-protocol`, next to `CapabilityError`,
+//! because two kits defined it and `lca-subscription` depended on this kit only
+//! to name it. The re-export keeps every existing path
+//! (`lca_wire_openai::StreamFailure`, `lca_wire_openai::error::StreamFailure`)
+//! working; the fields and the one `From<CapabilityError>` live there now.
 
-use lca_protocol::CapabilityError;
-
-/// How a provider call failed.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StreamFailure {
-    /// Human-readable message.
-    pub message: String,
-    /// Class for the headless envelope (`docs/headless.md`).
-    pub class: &'static str,
-    /// Whether a retry could help (FR-CORE-6).
-    pub retryable: bool,
-}
-
-impl From<CapabilityError> for StreamFailure {
-    fn from(err: CapabilityError) -> Self {
-        use CapabilityError as E;
-        // A refusal is a configuration problem, not a flaky network:
-        // never retried, and its class keeps it out of "transport".
-        let (class, retryable) = match &err {
-            E::Permission(_) | E::NotGranted(_) | E::NotFound(_) | E::Invalid(_) => {
-                ("invalid", false)
-            }
-            E::Io(_) | E::Timeout(_) => ("transport", true),
-        };
-        StreamFailure {
-            message: err.to_string(),
-            class,
-            retryable,
-        }
-    }
-}
+pub use lca_protocol::StreamFailure;
 
 /// Whether an HTTP status is worth retrying (FR-CORE-6).
 pub fn classify_status(status: u16) -> bool {

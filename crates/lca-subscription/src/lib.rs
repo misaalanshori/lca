@@ -7,8 +7,7 @@
 
 pub mod wasm;
 
-use lca_protocol::{OauthCap, ProviderCap};
-use lca_wire_openai::StreamFailure;
+use lca_protocol::{OauthCap, ProviderCap, StreamFailure};
 
 /// Re-exported so extensions name the outcome in their signatures.
 pub use lca_protocol::IdentityOutcome;

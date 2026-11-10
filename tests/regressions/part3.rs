@@ -679,3 +679,12 @@ mod load_allowance_is_portable;
 // (`scripts/docs-consistency.sh`) runs the complete validation.
 #[path = "340-shipped-manifests-validate.rs"]
 mod shipped_manifests_validate;
+
+// Gh #576 + #577: `StreamFailure` was defined twice (two `From<CapabilityError>` impls that
+// agreed by luck), had no constructors/`Display`/`Error`, and `lca-subscription` depended on
+// `lca-wire-openai` only to name it. One definition now lives in `lca-protocol`; the rows here
+// pin the classification table (all six variants), the constructors, `Display` verbatim, the
+// `Error` bound, and that both kits re-export rather than redefine. #577's handle-leak rows live
+// beside the driver (`crates/lca-wire-openai/tests/open_guard.rs`).
+#[path = "576-one-stream-failure.rs"]
+mod one_stream_failure;
