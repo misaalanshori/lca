@@ -27,7 +27,7 @@
 //!    made concrete: `vim file.txt`, `vim -S script.vim`, `tar xf a.tar`,
 //!    `tar czf b.tgz dir`.
 //!
-//! Behaviour rows live in `crates/lca-permissions/src/shell_grammar.rs`
+//! Behaviour rows live in `crates/lca-permissions/src/shell/grammar.rs`
 //! (`program_valued_flag_tests`, `reviewable_alternative_tests`) and
 //! `crates/lca-permissions/tests/rules.rs`
 //! (`program_valued_flags_review_in_a_trusted_folder`, the wiring row that goes
@@ -42,8 +42,14 @@ fn read(path: &str) -> String {
     std::fs::read_to_string(root.join(path)).unwrap_or_else(|err| panic!("read {path}: {err}"))
 }
 
+// Gh #557 moved this file into `src/shell/` (`shell.rs` became `shell/mod.rs`,
+// `shell_grammar.rs` became `shell/grammar.rs`). The rows below are
+// *structural*: they assert a table or a call shape is written a certain way,
+// so they must read the **module** rather than one filename - a filename-keyed
+// guard turns green by reading nothing as soon as the code moves, and that is
+// the vacuous pass gh #574/#543 established the module walk for.
 fn grammar() -> String {
-    read("crates/lca-permissions/src/shell_grammar.rs")
+    crate::module_text("crates/lca-permissions/src/shell/mod.rs")
 }
 
 /// The `tar` flag table, as written.
@@ -174,7 +180,7 @@ fn the_plus_command_form_is_refused_and_the_advice_does_not_recommend_it() {
 // the structural one.
 #[test]
 fn the_analyzer_actually_consults_the_rule() {
-    let shell = read("crates/lca-permissions/src/shell.rs");
+    let shell = crate::module_text("crates/lca-permissions/src/shell/mod.rs");
     assert!(
         shell.contains("program_valued_flag(&name"),
         "segment_ok calls the rule with the basenamed program"
