@@ -15,7 +15,7 @@
 //! A deny rule that silently does nothing is worse than no deny rule: the user did
 //! the right thing, was told it worked, and stopped watching.
 //!
-//! The behaviour rows live in `crates/lca-permissions/src/rules_compile_tests.rs`
+//! The behaviour rows live in `crates/lca-permissions/src/rule_entry/tests.rs`
 //! (19 rows: the compile step, the issue's exact journey for read and write, the
 //! old workaround still matching, deny beating allow, a compiled allow actually
 //! allowing, a rule not capturing its neighbour, and each refusal) plus the
@@ -69,7 +69,7 @@ fn the_command_compiles_before_storing() {
 // exactly the split that let this bug exist: the two halves have to be one fact.
 #[test]
 fn the_compile_step_lives_with_the_matcher() {
-    let rules = read("crates/lca-permissions/src/rule_entry.rs");
+    let rules = crate::module_text("crates/lca-permissions/src/rule_entry/mod.rs");
     for fact in [
         "pub fn compile(",
         "pub const VERBS",
@@ -86,7 +86,7 @@ fn the_compile_step_lives_with_the_matcher() {
         "`match_value` is visible to the compile step's rows"
     );
     // The row that proves the compiled pattern matches a real action value.
-    let tests = read("crates/lca-permissions/src/rules_compile_tests.rs");
+    let tests = read("crates/lca-permissions/src/rule_entry/tests.rs");
     assert!(
         tests.contains("fn the_literal_read_command_stops_the_read"),
         "the issue's own journey is a row"
@@ -109,7 +109,7 @@ fn the_compile_step_lives_with_the_matcher() {
 // matches-everything path.
 #[test]
 fn dead_rules_are_refused_at_entry() {
-    let rules = read("crates/lca-permissions/src/rule_entry.rs");
+    let rules = crate::module_text("crates/lca-permissions/src/rule_entry/mod.rs");
     for fact in [
         "RuleRejection::UnknownVerb",
         "RuleRejection::EmptyPattern",
@@ -119,7 +119,7 @@ fn dead_rules_are_refused_at_entry() {
     ] {
         assert!(rules.contains(fact), "the refusal must include {fact}");
     }
-    let tests = read("crates/lca-permissions/src/rules_compile_tests.rs");
+    let tests = read("crates/lca-permissions/src/rule_entry/tests.rs");
     for row in [
         "fn an_unknown_verb_is_refused",
         "fn a_verb_without_a_path_is_refused",

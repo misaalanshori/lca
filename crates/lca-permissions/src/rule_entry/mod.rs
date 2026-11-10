@@ -55,6 +55,11 @@
 //! Deny still beats allow at any scope (ADR-0039). This module only decides what
 //! string lands in the rule set; `rules::decide` still evaluates deny
 //! first, so a compiled deny cannot lose to an allow it should beat.
+//!
+//! Its rows live in `tests.rs` beside this file (`mod tests;`), so every test
+//! path stays `rule_entry::tests::<row>`; the `#[path]` attribute the split
+//! removed was only there because the rows used to sit beside `lib.rs`
+//! (gh #557).
 
 use std::path::Path;
 
@@ -323,5 +328,4 @@ fn compile_path(path: &str, project_dir: &Path, verb: RuleVerb) -> Result<String
 }
 
 #[cfg(test)]
-#[path = "rules_compile_tests.rs"]
 mod tests;
