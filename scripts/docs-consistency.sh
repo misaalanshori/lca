@@ -251,7 +251,11 @@ fi
 # is the MCP streamable-HTTP transport, which is a different wire protocol
 # from the model-provider kits above, so the guard still means "no forked
 # provider engine" rather than "one SSE parser in the tree".
-leak=$(grep -rn --include='*.rs' -E 'struct SseDecoder|struct ResponsesStream|struct AnthropicStream|fn build_responses_body|fn build_messages_body|fn parse_sse|struct StreamFailure' crates/ extensions/ | grep -v -e '^crates/lca-wire-' -e '^crates/lca-mcp/' || true)
+# Gh #576: `StreamFailure` is deliberately excluded now - it is ONE shared type in
+# `lca-protocol`, not a forked wire engine, and excluding it is what lets the kits
+# re-export it instead of each defining one. The forked-engine needles below are the
+# ones that mean "a second SSE engine exists".
+leak=$(grep -rn --include='*.rs' -E 'struct SseDecoder|struct ResponsesStream|struct AnthropicStream|fn build_responses_body|fn build_messages_body|fn parse_sse' crates/ extensions/ | grep -v -e '^crates/lca-wire-' -e '^crates/lca-mcp/' || true)
 if [ -n "$leak" ]; then
   echo "docs-consistency: residual wire engine outside the kits:"
   echo "$leak"

@@ -7,6 +7,16 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **A provider stream request that fails while opening no longer leaks its host response handle**
+  (gh #577, library code). `ResponseStreamDriver::open` acquired a `net` handle, then `?`ed on
+  the status read and on the non-2xx body read *before* the driver existed — and the driver's
+  `Drop` is what closed the handle, so an error in either place returned with the entry still in
+  the capability engine's table, once per failed request. A `ResponseGuard` now owns the handle
+  from the line after `net_request` and closes it on every path, including the two early returns.
+  No user-visible behaviour changes: the failure a caller sees is the same message and class it
+  was before. `StreamFailure` also moved to `lca-protocol` (gh #576) — one definition beside
+  `CapabilityError` instead of two that happened to agree, with constructors, `Display` and
+  `std::error::Error` — and both wire kits re-export it, so no path changed.
 - **The extension manifest schema now accepts the manifests this repo ships** (gh #340, schema
   only). Three facts in `schemas/extension-manifest.schema.json` contradicted the product: it had
   `additionalProperties: false` with no top-level `resources` property, so a **first-party** manifest

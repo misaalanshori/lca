@@ -111,7 +111,10 @@ fn both_wire_kits_report_the_cut() {
         "the truncation is unconditional, not gated on a budget we set (that gate \
          is what made gh #169 quiet for ordinary turns)"
     );
-    let anthropic = read("crates/lca-wire-anthropic/src/messages.rs");
+    // Gh #576 split `messages.rs` by layer; the module walk reads both halves, so
+    // this guard keeps seeing the request builder's `max_tokens` AND the decoder's
+    // `Truncated` arm whichever file each lives in (gh #574/#543's rule).
+    let anthropic = crate::module_text("crates/lca-wire-anthropic/src/messages/mod.rs");
     assert!(
         anthropic.contains("\"max_tokens\"") && anthropic.contains("StreamEvent::Truncated"),
         "Anthropic's spelling maps to the same fact"

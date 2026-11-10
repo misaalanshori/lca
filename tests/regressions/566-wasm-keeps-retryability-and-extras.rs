@@ -479,8 +479,13 @@ fn open_stream_keeps_the_failure_type_and_delivers_it_as_an_event() {
         "the flattening line is gone: it threw away `class` and `retryable`"
     );
     let open = item(&source, "fn open_stream(");
+    // Gh #576 moved the type to `lca-protocol` (one definition beside
+    // `CapabilityError`); the guest now names the shared type directly, which is
+    // the stronger form of the same claim: the failure crossed the boundary with
+    // its class and retryability intact, and the kit re-export is no longer what
+    // the signature depends on.
     assert!(
-        open.contains("::lca_wire_openai::StreamFailure"),
+        open.contains("::lca_protocol::StreamFailure"),
         "`open_stream` is typed with the failure it actually has:\n{open}"
     );
     assert!(
