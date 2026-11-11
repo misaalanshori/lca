@@ -15,7 +15,7 @@
 //! - [`suspend`] is `Ctrl+Z`: restore the tty, stop the process group, restore
 //!   again - or, where there is no job control, say so and touch nothing.
 //!
-//! `run_terminal_cooked` was the fourth (gh #592): a terminal that refused raw
+//! `run_terminal_cooked` was the fourth (gh #593): a terminal that refused raw
 //! mode used to leave the app on cooked input in silence, because the reason
 //! `raw_mode_error` carries had no reader anywhere in the tree.
 

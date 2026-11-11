@@ -2,7 +2,7 @@
 //! running, what it last reported, and whether it was aborted (`R16`).
 //!
 //! Split out of `run.rs` for gate 11's 1,200-line ceiling (gh #575; `run.rs` was
-//! 1,196 lines before the gh #592 notice added four). **No name moved**: `run.rs`
+//! 1,196 lines before the gh #593 notice added four). **No name moved**: `run.rs`
 //! re-exports `TurnState`, Rust lets an inherent `impl` live in any module of the
 //! crate, and every row that drives `reap`/`settle`/`new` keeps its path because
 //! the definition never changed files at all.
@@ -244,5 +244,5 @@ impl TurnState {
 }
 
 #[cfg(test)]
-#[path = "run_592_tests.rs"]
+#[path = "run_593_tests.rs"]
 mod split_tests;

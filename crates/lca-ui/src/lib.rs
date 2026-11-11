@@ -78,7 +78,7 @@ pub mod resume_command;
 pub mod run;
 // Gh #575: `TurnState` and its transitions, split from `run.rs` at the ceiling.
 mod run_turns;
-// Gh #592: the cooked-input notice (a refused raw mode had no reader).
+// Gh #593: the cooked-input notice (a refused raw mode had no reader).
 pub mod run_early_input;
 mod run_keybindings;
 mod run_mouse;

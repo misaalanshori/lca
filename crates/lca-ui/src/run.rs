@@ -691,7 +691,7 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> i32 {
     // construction, and `startup_query` composes the cell query in front of it so a
     // call site cannot get that order backwards.
     terminal.write(&lca_tui::engine::colors::startup_query());
-    // Gh #592: say it once, at startup, if this terminal refused raw mode.
+    // Gh #593: say it once, at startup, if this terminal refused raw mode.
     //
     // The check runs **after** `start` has been called (the adopted terminal
     // started before the load), so the reason is final by here. It is a notice
@@ -967,7 +967,7 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> i32 {
     result
 }
 
-// Gh #575: the turn state and its transitions live in `run_turns.rs` (gh #592's
+// Gh #575: the turn state and its transitions live in `run_turns.rs` (gh #593's
 // notice pushed this file past the ceiling); re-exported so every path a row or
 // sibling names stays `crate::run::TurnState`.
 pub(crate) use crate::run_turns::TurnState;

@@ -1,4 +1,4 @@
-//! Rows for the cooked-input notice (gh #592).
+//! Rows for the cooked-input notice (gh #593).
 
 use lca_tui::engine::program_status::ProgramState;
 use lca_tui::engine::terminal::{FakeTerminal, InputHandler, ResizeHandler, Terminal};
@@ -36,7 +36,7 @@ impl Terminal for Cooked {
     fn set_program_status(&mut self, _state: ProgramState) {}
 }
 
-// Verifies: gh #592 - a refused raw mode is **said out loud**, naming what the
+// Verifies: gh #593 - a refused raw mode is **said out loud**, naming what the
 // user loses rather than what the console called it.
 //
 // Before this file the reason had no reader at all: the app ran on cooked input

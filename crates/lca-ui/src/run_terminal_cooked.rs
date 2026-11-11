@@ -1,4 +1,4 @@
-//! What the interface says about a terminal that refused raw mode (gh #592).
+//! What the interface says about a terminal that refused raw mode (gh #593).
 //!
 //! # The defect this closes
 //!
@@ -32,7 +32,7 @@
 use lca_tui::engine::terminal::Terminal;
 
 /// The notice for a terminal that could not enter raw mode, or `None` when it
-/// did (gh #592).
+/// did (gh #593).
 ///
 /// Named "warning: " like every other degraded-startup notice (the shell
 /// resolution failure, the tool-selection typo), and it says what a user loses

@@ -1,4 +1,4 @@
-//! Gh #592: the notice routing `raw_mode_error` into the interface, and the
+//! Gh #593: the notice routing `raw_mode_error` into the interface, and the
 //! `TurnState` split that gh #575's ceiling needed.
 //!
 //! The behavioural row for the notice itself lives in
@@ -31,7 +31,7 @@ fn turns_source() -> String {
     std::fs::read_to_string(&path).expect("run_turns.rs is readable")
 }
 
-// Verifies: gh #592 - **the loop asks.** A helper with no caller is the defect
+// Verifies: gh #593 - **the loop asks.** A helper with no caller is the defect
 // itself: `Terminal::raw_mode_error` existed, documented, and read by nobody
 // from gh #323 until this cycle.
 #[test]
