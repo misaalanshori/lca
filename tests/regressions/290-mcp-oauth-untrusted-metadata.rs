@@ -164,7 +164,10 @@ fn the_flow_host_bound_is_enforced_and_mirrored() {
         documented.contains("pub const MAX_FLOW_HOSTS: usize = 8;"),
         "the documented mirror states the number"
     );
-    let enforcing = source("crates/lca-tools/src/capabilities/mod.rs");
+    // The **module** (gh #570 moved the constant into
+    // `capabilities/model.rs`): a filename-keyed read of the barrel finds no
+    // const and would pass or fail for the wrong reason.
+    let enforcing = crate::module_text("crates/lca-tools/src/capabilities/mod.rs");
     assert!(
         enforcing.contains("pub const MAX_OAUTH_FLOW_HOSTS: usize = 8;"),
         "and so does the enforcing one"
