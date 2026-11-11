@@ -71,6 +71,12 @@ impl Ui {
             &self.temp_dir,
         );
         let fresh = std::sync::Arc::new(fresh);
+        // Gh #594: `/reload` rebuilds the backend, so it re-derives the budget
+        // for the model that is live now (the config it re-read may have moved
+        // the threshold or the reserve too).
+        if let Some(backend) = &backend {
+            super::apply_summarization_budget(backend, &config, window);
+        }
         let agent_config = match super::agent_config_for(
             &config,
             &live.name,

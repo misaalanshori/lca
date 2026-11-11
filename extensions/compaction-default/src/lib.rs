@@ -285,9 +285,25 @@ pub fn run_compact(excerpts: &[Excerpt], complete: Option<CompleteFn<'_>>) -> St
 
 /// The honest degradation (gh #169): the excerpt summary still carries
 /// the compaction, prefixed by why it was needed and how to retry.
+///
+/// Gh #594: when the reason is **our own** budget cutting the generation, the
+/// line says so. A provider's failure text reads `max_tokens N` as though the
+/// endpoint set the limit, and every endpoint LCA talks to would say the same
+/// thing - but the budget is the one this session asked for, derived from the
+/// model window (`docs/compaction.md`), so the same summary on a larger-window
+/// model would not be cut at all. Naming that (and the fix: a bigger window, a
+/// bigger budget) is what turns a confusing truncation into a diagnosis.
+/// The number stays in the provider's own message; this adds the rule, because
+/// the strategy component never sees the budget as a value of its own.
 fn degraded(excerpts: &[Excerpt], why: &str) -> String {
+    let budget_note = if why.contains("token cap") {
+        " (that max_tokens is this session's summarization budget, derived from the \
+         model window - not a provider limit; a larger model window gets a larger budget)"
+    } else {
+        ""
+    };
     format!(
-        "[summarization failed: {why}; excerpt summary follows - run /compact to retry]\n{}",
+        "[summarization failed: {why}{budget_note}; excerpt summary follows - run /compact to retry]\n{}",
         mechanical_summary(excerpts)
     )
 }

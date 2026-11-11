@@ -76,8 +76,14 @@ use crate::lock;
 // `pub(in crate::tui)`: the same reach a private item at this file used to have
 // for its descendants, so nothing is widened by the move.
 pub(in crate::tui) use cells::{
-    adopt_login_identity, agent_config_for, live_cells, model_context_window,
+    adopt_login_identity, agent_config_for, apply_summarization_budget, live_cells,
+    model_context_window,
 };
+// The regression suite's read of the interface's own application site (gh
+// #594): the wiring row drives the call the interface makes, then reads back
+// what the backend carries.
+#[doc(hidden)]
+pub use cells::summarization_budget_site_for_tests as apply_summarization_budget_for_tests;
 // Was `pub(super)` in this file, which is `pub(crate)`; see `cells.rs`.
 pub(crate) use cells::apply_models_scope;
 pub(in crate::tui) use open::{region_interactor, region_renderer, resolve_model_id};
@@ -665,6 +671,11 @@ impl Ui {
         let registry = Arc::new(registry);
 
         let context_window = model_context_window(provider.as_ref(), &model_id);
+        // Gh #594: the interactive backend carries the budget its model window
+        // earns, not the 4096-token stopgap the headless path already avoided.
+        if let Some(backend) = &provider_backend {
+            apply_summarization_budget(backend, &config, context_window);
+        }
         // #39: the resolved model's image behavior reaches the tools.
         let image_policy = crate::models::image_policy_for(&provider.list_models(), &model_id);
         let trusted = crate::lock(&grants).is_trusted(cwd);

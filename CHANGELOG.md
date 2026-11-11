@@ -7,6 +7,22 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **An interactive `/compact` no longer summarizes a large session with a 4096-token
+  budget** (gh #594, interface). The compaction backend starts with no budget and falls
+  back to the `SUMMARIZATION_MAX_TOKENS` stopgap (4096) — and only the headless path ever
+  set one, from the reserve the trigger uses (`floor(0.8 × reserve)`, so a 1M-window
+  model gets 160,000). So every interactive compaction asked a model for a 4096-token
+  summary of however many hundred thousand tokens of transcript it was replacing: on a
+  real 1M-window session at ~660k tokens the summarization was cut three times and the
+  session degraded to the mechanical excerpt summary, while `lca -p` on the same model
+  would have asked for 160,000. The rule now lives in one place
+  (`lca_core::ext_provider::summarization_budget`) and the interface applies it wherever
+  the model it summarizes with can change — startup, `/reload`, `/model` (same and cross
+  provider), and a login that resolves the session's first model — so the budget always
+  describes the model the session is running. When a summary *is* cut at that budget the
+  degradation line now says the `max_tokens` is this session's derived budget rather than
+  a provider limit, and names the fix. A new front end that forgets to derive one reddens
+  `tests/regressions/594-*`, which classifies every `ProviderBackend` site in the binary.
 - **A failed turn no longer prints its message twice** (gh #590, interface). The same
   text arrived on two channels: the turn's own `TurnEvent::Error`, painted as the ✗ history
   line, and `TurnOutcome::error`, painted by the run loop's settle as a notice. The event is

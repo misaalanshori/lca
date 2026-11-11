@@ -252,6 +252,17 @@ pub struct ProviderBackend {
 /// `CompletionRequest.extras["max-tokens"]`, the same non-structural
 /// channel `session-id` rides (ADR-0023); the openai-compatible
 /// provider maps it to the body's `max_tokens`.
+///
+/// **It is the stopgap for an unknown reserve, not the rule.** Both front
+/// ends set the budget they derived ([`summarization_max_tokens`] over
+/// [`crate::compaction_reserve`], through [`summarization_budget`]) at the site
+/// where they build the backend - `crates/lca-cli/src/headless.rs` and
+/// `crates/lca-cli/src/tui/cells.rs`'s `apply_summarization_budget` (called
+/// from the interface's assembly, `/reload`, and every path that lands a new
+/// model). Gh #594 was this constant reaching a 1M-window interactive session
+/// because the interface never set one; a new front end that forgets is the
+/// same defect again, which is why `tests/regressions/594-*` classifies every
+/// backend site in the binary.
 pub const SUMMARIZATION_MAX_TOKENS: u32 = 4096;
 
 /// The summarization budget derived from the compaction reserve (gh
@@ -263,6 +274,23 @@ pub fn summarization_max_tokens(reserve_tokens: u64) -> u32 {
         return SUMMARIZATION_MAX_TOKENS;
     }
     (reserve_tokens as f64 * 0.8).floor() as u64 as u32
+}
+
+/// The summarization budget for a resolved model window (gh #594): the rule a
+/// front end applies at the one place it builds the compaction backend, so no
+/// front end composes the two derivations differently.
+///
+/// Three inputs, the same three the trigger uses: the configured threshold,
+/// the configured absolute reserve (0 = derive it from the threshold), and the
+/// model's published context window (0 = unknown, so
+/// [`effective_context_window`](crate::effective_context_window)'s conservative
+/// estimate governs, exactly as the threshold check already does).
+pub fn summarization_budget(threshold: f64, reserve_tokens: u64, window: u32) -> u32 {
+    summarization_max_tokens(crate::compaction_reserve(
+        threshold,
+        reserve_tokens,
+        crate::effective_context_window(window),
+    ))
 }
 
 impl ProviderBackend {
@@ -289,6 +317,17 @@ impl ProviderBackend {
             .summarization_budget
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(max_tokens);
+    }
+
+    /// The budget this backend will ask for (gh #594): `None` means nobody
+    /// derived one, so `complete` falls back to [`SUMMARIZATION_MAX_TOKENS`].
+    /// A front end sets it at the one place it builds the backend; a row reads
+    /// back what the wiring actually landed instead of trusting the helper.
+    pub fn summarization_budget(&self) -> Option<u32> {
+        *self
+            .summarization_budget
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// Follow a session-scoped provider change (a `/model` pick from

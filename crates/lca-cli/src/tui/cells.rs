@@ -80,6 +80,53 @@ pub(super) fn model_context_window(provider: &dyn Provider, model_id: &str) -> u
         .unwrap_or(0)
 }
 
+/// Point the session's compaction backend at the summarization budget its
+/// **current** model window earns (gh #594).
+///
+/// **Where this belongs, and why here.** The budget is a property of the pair
+/// (reserve, model window), and the window moves at runtime (`/model`, a
+/// cross-provider switch, a login that resolves the first model, `/reload`).
+/// Gh #594 shipped because the interface never derived one at all, so every
+/// interactive compaction asked for the 4096-token stopgap
+/// ([`lca_core::ext_provider::SUMMARIZATION_MAX_TOKENS`]) no matter how large
+/// the transcript or the model. Deriving it inside the `/compact` handler was
+/// the alternative and is wrong on purpose: a per-command budget would be a
+/// second owner of a session-scoped fact and would drift from the model the
+/// session is actually running.
+///
+/// So there is one rule and it lives in `lca_core`
+/// (`ext_provider::summarization_budget`), and this is the interface's single
+/// application site. Every path that lands a new model calls it, so the
+/// backend the next compaction reaches was derived from the model that is
+/// live now; a model whose window the provider does not publish falls back to
+/// the same conservative estimate the trigger uses, never to a fabricated one.
+pub(super) fn apply_summarization_budget(
+    backend: &lca_core::ext_provider::ProviderBackend,
+    config: &Config,
+    context_window: u32,
+) {
+    backend.set_summarization_budget(lca_core::ext_provider::summarization_budget(
+        config.compaction_threshold(),
+        config.compaction_reserve_tokens(),
+        context_window,
+    ));
+}
+
+/// The same call, for the regression suite's read of the wiring (gh #594): the row
+/// has to drive what the interface drives and then inspect what the backend
+/// actually carries, rather than re-derive the arithmetic in the test and pin a
+/// copy of the rule. Re-exported from `tui` as
+/// `apply_summarization_budget_for_tests`; the module here is private, so nothing
+/// becomes reachable that was not.
+#[doc(hidden)]
+pub fn summarization_budget_site_for_tests(
+    backend: &lca_core::ext_provider::ProviderBackend,
+    config: &Config,
+    context_window: u32,
+) {
+    apply_summarization_budget(backend, config, context_window);
+}
+
 /// Swap the live configuration scope (gh #204): the `/scoped-models`
 /// checklist writes through this cell, so the model cycle reads the
 /// live scope without a restart. `/reload` swaps the whole cell.

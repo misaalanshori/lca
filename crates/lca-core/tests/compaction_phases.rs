@@ -180,6 +180,77 @@ fn the_summarization_budget_derives_from_the_reserve() {
     );
 }
 
+// Verifies: gh #594 - **the budget scales with the model window**, not just with an
+// explicit reserve. Three windows, the arithmetic written out, and the reserve the
+// derivation sees documented in the assertion: the default ladder is
+// `reserve = (1 − 0.8) × window`, `budget = floor(0.8 × reserve)`, so a 32k model
+// gets 5,242 tokens, a 200k model 32,000, and a 1M model 160,000 - none of them the
+// 4,096 stopgap a front end that forgot to derive was silently sending (the exact
+// defect this issue shipped).
+//
+// The row asserts through `ext_provider::summarization_budget`, the one rule the
+// front ends apply, so it pins the wiring's arithmetic rather than the leaf helper
+// the previous row already covered.
+#[test]
+fn the_summarization_budget_scales_with_the_model_window() {
+    use lca_core::ext_provider::{SUMMARIZATION_MAX_TOKENS, summarization_budget};
+    // (window, reserve = (1 - 0.8) * window, budget = floor(0.8 * reserve))
+    let cases = [
+        (32_000_u32, 6_400_u64, 5_120_u64),
+        (200_000, 40_000, 32_000),
+        (1_000_000, 200_000, 160_000),
+    ];
+    for (window, reserve, budget) in cases {
+        assert_eq!(
+            u64::from(summarization_budget(0.8, 0, window)),
+            budget,
+            "a {window}-token window reserves {reserve} and budgets {budget}"
+        );
+        assert_ne!(
+            summarization_budget(0.8, 0, window),
+            SUMMARIZATION_MAX_TOKENS,
+            "no window above the stopgap's own scale falls back to 4096"
+        );
+    }
+    // An absolute reserve wins over the fraction, exactly as the trigger's
+    // reserve does: 16,384 reserves a 13,107 budget whatever the window.
+    assert_eq!(summarization_budget(0.8, 16_384, 1_000_000), 13_107);
+    // A window nobody published falls back to the same conservative estimate
+    // the trigger uses (128,000), never to a fabricated one and never to 0.
+    assert_eq!(
+        summarization_budget(0.8, 0, 0),
+        summarization_budget(0.8, 0, lca_core::effective_context_window(0))
+    );
+}
+
+// Verifies: gh #594 - **the backend the interface builds carries the derived
+// budget, not `None`.** This is the wiring row the issue's first analysis was
+// missing: a row proving `summarization_max_tokens(16_384) == 13_107` says nothing
+// about whether any front end called it, which is exactly how the interactive path
+// kept the stopgap. The accessor exists so a test can read the fact back.
+#[test]
+fn a_backend_that_was_given_the_window_reports_its_derived_budget() {
+    let fake = Arc::new(
+        FakeProvider::builder()
+            .turn(|t| t.text("hi").usage(fake_usage(10, 2, 0, 0)))
+            .build(),
+    );
+    let backend = lca_core::ext_provider::ProviderBackend::new(fake, "m", "sess-1");
+    assert_eq!(
+        backend.summarization_budget(),
+        None,
+        "a fresh backend has no budget, so `complete` would fall back to the stopgap"
+    );
+    backend.set_summarization_budget(lca_core::ext_provider::summarization_budget(
+        0.8, 0, 1_000_000,
+    ));
+    assert_eq!(
+        backend.summarization_budget(),
+        Some(160_000),
+        "the derived budget is what the backend will ask with, readable from outside"
+    );
+}
+
 // Verifies: gh #36 phase 1 - an absolute reserve replaces the
 // fraction: usage far below `threshold × window` still compacts when
 // it clears `window − reserve`.

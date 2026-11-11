@@ -988,15 +988,15 @@ fn wire(
         .find(|model| model.id == model_id)
         .map(|model| model.context_window)
         .unwrap_or(0);
-    // gh #36 phase 1: the summarization budget derives from the same
-    // reserve the trigger uses, once the model window is known.
+    // gh #36 phase 1 / gh #594: the summarization budget derives from the same
+    // reserve the trigger uses, once the model window is known. One rule, in
+    // `lca_core`, so the interface's assembly site cannot compose it differently
+    // (which is exactly how the interactive path kept the stopgap for so long).
     if let Some(backend) = &summarization_backend {
-        backend.set_summarization_budget(lca_core::ext_provider::summarization_max_tokens(
-            lca_core::compaction_reserve(
-                config.compaction_threshold(),
-                config.compaction_reserve_tokens(),
-                lca_core::effective_context_window(model_context_window),
-            ),
+        backend.set_summarization_budget(lca_core::ext_provider::summarization_budget(
+            config.compaction_threshold(),
+            config.compaction_reserve_tokens(),
+            model_context_window,
         ));
     }
     #[cfg(feature = "bundled-compaction-default")]

@@ -724,3 +724,11 @@ mod shell_split_keeps_paths;
 // the file cannot silently grow back into the place code accumulates.
 #[path = "557-crate-root-is-an-index.rs"]
 mod crate_root_is_an_index;
+
+// Gh #594: the interactive `/compact` summarized on the 4096-token stopgap while the
+// headless path derived the budget from the model's window. The rows pin the wiring the
+// interface was missing, that every model-landing path re-derives it, that every
+// `ProviderBackend` site is classified, and that a cut at our budget is named as our
+// budget while the session keeps working.
+#[path = "594-tui-and-headless-derive-the-summarization-budget.rs"]
+mod tui_and_headless_derive_the_summarization_budget;

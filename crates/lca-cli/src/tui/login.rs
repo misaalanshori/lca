@@ -570,6 +570,16 @@ impl Ui {
                 .unwrap_or_else(|p| p.into_inner()) = u64::from(model.context_window);
             *self.label_cell.lock().unwrap_or_else(|p| p.into_inner()) =
                 format!("{identity}/{}", model.id);
+            // Gh #594: a login resolves this session's model, so the compaction
+            // backend follows it - the same rule every other model landing runs.
+            if let Some(backend) = self.provider_backend.as_ref() {
+                backend.set_model(model.id.clone());
+                super::apply_summarization_budget(
+                    backend,
+                    &crate::lock(&self.config),
+                    model.context_window,
+                );
+            }
         }
     }
 

@@ -28,8 +28,40 @@ has none — a documented divergence from pi's `compaction.modelOverrides`).
 ## Summarization budget
 
 The summary request carries `max-tokens = floor(0.8 × reserve)` (pi's
-derivation), falling back to the 4096 stopgap constant when the reserve
-is zero. It rides `CompletionRequest.extras["max-tokens"]`, as before.
+derivation), where `reserve` is the same one the trigger uses
+(`compaction.reserve_tokens` when set, else `(1 − threshold) × window` over the
+model's published window, with the 128k estimate standing in when the endpoint
+publishes none). So the budget **scales with the model**, and it is computed by
+one rule in `lca_core` (`ext_provider::summarization_budget`). It rides
+`CompletionRequest.extras["max-tokens"]`, as before.
+
+**The rule: derived from the reserve, never the stopgap once the window is
+known.** `SUMMARIZATION_MAX_TOKENS` (4096) is the stopgap for a reserve of zero —
+an unknown model, or `compaction.reserve_tokens = 0` with a window nobody
+resolved — and it is a number the failure text can name. It is not a default any
+front end may ship: a 4096-token summary of a long transcript is an excerpt
+pretending to be a checkpoint.
+
+**Parity requirement.** Every front end applies the derivation where it builds
+the compaction backend, not inside a command handler (a per-command budget would
+be a second owner of a session-scoped fact, and it would drift from the model the
+session is running). Today that is `crates/lca-cli/src/headless.rs` and the
+interface's `crates/lca-cli/src/tui/cells.rs` (`apply_summarization_budget`),
+which the interface calls at assembly, on `/reload`, and every time a new model
+lands (`/model`, a cross-provider switch, a login that resolves the first
+model). Gh #594 was the interface never deriving one at all: a 1M-window session
+with 660k tokens of transcript compacted on 4096 tokens and degraded to the
+excerpt summary while the headless path used the derived budget.
+`tests/regressions/594-tui-and-headless-derive-the-summarization-budget.rs`
+walks every assembly site for the call, so a new front end that forgets reddens
+that row instead of shipping the stopgap.
+
+When a summary *is* cut at that budget, the strategy's failure line says so: the
+provider's own message names the number, and the compaction layer adds that the
+`max_tokens` is this session's derived budget rather than a provider limit (so
+the same summary on a larger-window model would not be cut). The session keeps
+working either way — the strategy degrades to its mechanical excerpt summary and
+never fails a turn.
 
 ## Cut-point rules (phase 1)
 

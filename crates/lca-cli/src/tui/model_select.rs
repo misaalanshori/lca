@@ -191,6 +191,12 @@ impl Ui {
             .context_window_cell
             .lock()
             .unwrap_or_else(|p| p.into_inner()) = chosen.window as u64;
+        // Gh #594: the compaction backend's budget follows the model this pick
+        // landed on. A same-provider switch reaches here (the cross-provider one
+        // is re-derived in `apply_provider_switch`, which moves the provider too).
+        if resolves && let Some(backend) = self.provider_backend.as_ref() {
+            super::apply_summarization_budget(backend, &crate::lock(&self.config), chosen.window);
+        }
         // gh #8 phase 4: the session's thinking follows the model it runs
         // on. An explicit `:level` is the user's choice, clamped into what
         // the model accepts; a model *switch* applies the new model's
@@ -330,6 +336,10 @@ impl Ui {
         if let Some(backend) = self.provider_backend.as_ref() {
             backend.set_provider(provider.clone());
             backend.set_model(model_id.to_string());
+            // Gh #594: a pick from another provider moves the model window too,
+            // so the summarization budget is re-derived from the window this
+            // switch resolved (never inherited from the provider it left).
+            super::apply_summarization_budget(backend, &crate::lock(&self.config), window);
         }
         {
             let mut live = crate::lock(&self.live);
