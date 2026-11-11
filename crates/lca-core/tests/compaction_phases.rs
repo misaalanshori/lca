@@ -184,7 +184,7 @@ fn the_summarization_budget_derives_from_the_reserve() {
 // explicit reserve. Three windows, the arithmetic written out, and the reserve the
 // derivation sees documented in the assertion: the default ladder is
 // `reserve = (1 − 0.8) × window`, `budget = floor(0.8 × reserve)`, so a 32k model
-// gets 5,242 tokens, a 200k model 32,000, and a 1M model 160,000 - none of them the
+// gets 5,120 tokens, a 200k model 32,000, and a 1M model 160,000 - none of them the
 // 4,096 stopgap a front end that forgot to derive was silently sending (the exact
 // defect this issue shipped).
 //
