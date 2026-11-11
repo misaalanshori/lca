@@ -162,7 +162,7 @@ fn the_cursor_row_is_recorded_only_inside_the_viewport() {
 // delta-positioning optimisation there does not arrive without the same guard.
 #[test]
 fn alt_screen_has_no_recorded_cursor_row_to_desynchronise() {
-    let source = read("crates/lca-tui/src/engine/alt_screen.rs");
+    let source = crate::module_text("crates/lca-tui/src/engine/alt_screen.rs");
     assert!(
         !source.contains("hardware_cursor_row"),
         "alt_screen positions absolutely (CSI row;col H) and records no cursor row, \
@@ -198,7 +198,7 @@ fn the_painted_caret_is_still_the_visual_caret() {
         main.contains("if painted {"),
         "the main screen honours the `painted` flag from the marker"
     );
-    let alt = read("crates/lca-tui/src/engine/alt_screen.rs");
+    let alt = crate::module_text("crates/lca-tui/src/engine/alt_screen.rs");
     assert!(alt.contains("if painted {"), "and so does the alt screen");
 }
 

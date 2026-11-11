@@ -44,12 +44,25 @@ fn read(rel: &str) -> String {
 
 /// A source file without its test modules, so no row can be satisfied by a
 /// test's own spelling of the seam.
+///
+/// Reads the **module** (`crate::module_text` walks the `mod` declarations,
+/// honouring `#[path]`), because gh #572 split `alt_screen.rs` into
+/// `mouse`/`input`/`drag`/`exit` and `leave` now lives in `exit.rs`. A
+/// filename-keyed read of the barrel would find none of the code it guards.
 fn production_source(rel: &str) -> String {
-    let source = read(rel);
-    match source.find("\n#[cfg(test)]") {
-        Some(at) => source[..at].to_string(),
-        None => source,
-    }
+    // Per **file**, because `module_text` concatenates the barrel and its
+    // children: the barrel's own `#[cfg(test)] mod tests` sits before the
+    // children's text, so one cut over the whole string would drop every
+    // sibling. Cutting each file at its own first `#[cfg(test)]` keeps the
+    // production half of all of them.
+    crate::module_sources(rel)
+        .into_iter()
+        .map(|(_, text)| match text.find("\n#[cfg(test)]") {
+            Some(at) => text[..at].to_string(),
+            None => text,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// The body of one function, found by brace matching from its signature.

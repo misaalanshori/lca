@@ -132,7 +132,11 @@ fn the_engine_has_one_cache_eviction_policy() {
     );
 
     // And the shared type is actually reachable from the two caches that exist.
-    let text = read("crates/lca-tui/src/engine/text.rs");
+    //
+    // Gh #572 split `engine/text.rs` into its own seams, so the width cache now
+    // lives in `text/width.rs`. Reading the **module** keeps this row pointed at
+    // the code rather than at a filename that a ceiling split may move.
+    let text = crate::module_text("crates/lca-tui/src/engine/text.rs");
     assert!(
         text.contains("lru::LruCache"),
         "the width cache uses the shared policy"

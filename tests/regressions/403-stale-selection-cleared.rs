@@ -70,7 +70,7 @@ fn the_only_transcript_replacement_bumps_a_generation() {
 
 #[test]
 fn the_reset_clears_the_click_run_too() {
-    let alt = read("crates/lca-tui/src/engine/alt_screen.rs");
+    let alt = crate::module_text("crates/lca-tui/src/engine/alt_screen.rs");
     let start = alt
         .find("pub fn reset_text_selection(&mut self) {")
         .expect("AltScreenRenderer::reset_text_selection exists (gh #403 gap 1)");

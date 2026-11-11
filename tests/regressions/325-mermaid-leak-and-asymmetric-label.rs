@@ -19,13 +19,15 @@
 //!    shape being written differently from the rest; a shape with its own interior
 //!    loop is how the next one gets it wrong too.
 
-use std::path::PathBuf;
-
-/// The renderer's source.
+/// The renderer's source: the **module**, not the barrel.
+///
+/// Gh #572 split `widgets/mermaid.rs` into `syntax.rs` (the model, the canvas,
+/// the shape vocabulary) and `render.rs` (the two renderers), so the barrel
+/// alone holds neither `make_box` nor the shape table. `crate::module_text`
+/// walks the `mod` declarations, which is what keeps this guard pointed at the
+/// code and not at a filename a ceiling split moves (gh #574/#543).
 fn source() -> String {
-    let path =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("crates/lca-tui/src/widgets/mermaid.rs");
-    std::fs::read_to_string(&path).unwrap_or_else(|err| panic!("read {}: {err}", path.display()))
+    crate::module_text("crates/lca-tui/src/widgets/mermaid.rs")
 }
 
 /// The body of `fn <name>` in `src`, from its `{` to the matching `}`.

@@ -162,7 +162,10 @@ fn the_mermaid_parse_cache_uses_the_shared_policy() {
 // two caches that exist are on the one policy.
 #[test]
 fn both_caches_use_the_one_policy() {
-    let width = read("crates/lca-tui/src/engine/text.rs");
+    // Gh #572 moved the width cache into `engine/text/width.rs`; read the
+    // module, because the *cache* is the subject and the file is an detail a
+    // ceiling split may change.
+    let width = crate::module_text("crates/lca-tui/src/engine/text.rs");
     assert!(
         width.contains("lru::LruCache"),
         "the width cache uses the shared policy"
@@ -218,10 +221,16 @@ fn the_crates_thread_local_set_is_the_one_the_sweep_found() {
         }
     }
     sites.sort();
+    // Gh #572 split `engine/text.rs` into its seams: the width cache is in
+    // `text/width.rs` and the `cfg(test)` fast-path counter in `text/scan.rs`,
+    // which the sweep below reports because it scans by source. The three names
+    // are the set the tree actually has now - a *fourth* is still the thing this
+    // row exists to make someone look at.
     assert_eq!(
         sites,
         vec![
-            "crates/lca-tui/src/engine/text.rs".to_string(),
+            "crates/lca-tui/src/engine/text/scan.rs".to_string(),
+            "crates/lca-tui/src/engine/text/width.rs".to_string(),
             "crates/lca-tui/src/widgets/mermaid.rs".to_string(),
         ],
         "the crate's process-local caches are the width cache and the parse cache; a \

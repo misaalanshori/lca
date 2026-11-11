@@ -151,7 +151,9 @@ fn the_read_path_calls_the_screenshot_resolver() {
 // the helper without calling it from the render entry would leave the hole open.
 #[test]
 fn the_render_entry_sanitizes_before_parsing() {
-    let text = code_only(&read("crates/lca-tui/src/engine/text.rs"));
+    // The module (gh #572 moved `wrap_text_with_ansi` into `engine/text/wrap.rs`):
+    // a filename-keyed read of the barrel would find nothing and pass vacuously.
+    let text = code_only(&crate::module_text("crates/lca-tui/src/engine/text.rs"));
     let entry = text
         .find("pub fn wrap_text_with_ansi(")
         .expect("the render entry exists");

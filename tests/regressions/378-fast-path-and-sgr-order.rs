@@ -28,16 +28,22 @@ fn read(rel: &str) -> String {
     std::fs::read_to_string(&path).unwrap_or_else(|err| panic!("read {path:?}: {err}"))
 }
 
-/// The module's code, without its test module.
+/// The module's **production** code.
 ///
-/// `text.rs` has several `#[cfg(test)]` blocks (`the hit counter is one), so the cut is
-/// the **last** one that introduces the test module.
+/// Gh #572 split `engine/text.rs` into its own seams (`scan`, `width`, `wrap`,
+/// `truncate`, `slice`), so neither the width fast path nor the slice seam sits
+/// in the barrel any more. This reads the **module** (`crate::module_text`
+/// walks the `mod` declarations, honouring `#[path]`), which keeps the guard
+/// pointed at the code rather than at a filename a ceiling split moves (the
+/// gh #574/#543 rule).
+///
+/// No manual cut is needed: the walk **skips `#[cfg(test)]` children**, which is
+/// exactly the test rows (`text_tests.rs`, `text/stream_safety_tests.rs`), so
+/// the text it returns is production code plus the `cfg(test)` blocks that are
+/// *not* modules (the fast-path hit counter, which one row below asserts is
+/// gated).
 fn text_source() -> String {
-    let source = read("crates/lca-tui/src/engine/text.rs");
-    match source.rfind("\n#[cfg(test)]\n#[path") {
-        Some(at) => source[..at].to_string(),
-        None => source,
-    }
+    crate::module_text("crates/lca-tui/src/engine/text.rs")
 }
 
 fn function_body<'a>(source: &'a str, signature: &str) -> &'a str {

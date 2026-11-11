@@ -133,7 +133,7 @@ fn both_renderers_treat_an_image_reserve_as_one_block() {
         "and advances past the whole reserve, so a blank row inside one is \
          unreachable from the text path"
     );
-    let alt = read("crates/lca-tui/src/engine/alt_screen.rs");
+    let alt = crate::module_text("crates/lca-tui/src/engine/alt_screen.rs");
     assert!(
         alt.contains("expand_for_image_blocks(&lines, &touched)"),
         "the alt-screen render expands a touched row to its whole block"
@@ -184,7 +184,10 @@ fn the_transcript_holds_a_placement_cache() {
 // introduces unmeasurable.
 #[test]
 fn the_width_vocabulary_covers_the_cursor_movements_a_reserve_needs() {
-    let text = read("crates/lca-tui/src/engine/text.rs");
+    // The module, not the barrel: gh #572 moved both scanners into
+    // `engine/text/scan.rs`, and a filename-keyed read would go green on an
+    // empty barrel.
+    let text = crate::module_text("crates/lca-tui/src/engine/text.rs");
     let length = function_body(&text, "fn ansi_code_length(");
     for final_byte in ["b'A'", "b'B'", "b'C'", "b'D'"] {
         assert!(
