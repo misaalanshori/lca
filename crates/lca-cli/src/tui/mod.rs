@@ -373,9 +373,13 @@ pub fn run(
     let _temp_guard = crate::SessionTempGuard(ui.temp_dir().to_path_buf());
     let options = ui.options();
     let runner = ui.turn_runner();
-    let result = lca_ui::run(options, runner);
+    // Gh #575: `lca_ui::run` is infallible, so there is no error arm to write
+    // here. This seam still returns `Result` because the setup above can fail
+    // (a session that will not open, a temp dir that will not be made), and the
+    // binary is where `anyhow` is allowed.
+    let code = lca_ui::run(options, runner);
     ui.close();
-    result
+    Ok(code)
 }
 
 /// A stashed `/login` answer: the provider, the chosen option id, and the

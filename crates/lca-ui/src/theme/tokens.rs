@@ -41,6 +41,7 @@
 //! foreground / no background at all", and that is the honest answer for a theme
 //! that declined to say. The `system` theme depends on exactly that.
 
+use super::error::ThemeError;
 use super::{Color, Role};
 
 /// Which colour channel a role paints.
@@ -455,22 +456,22 @@ pub fn nearest_named(role: Role, have: &dyn Fn(Role) -> Option<Color>) -> Option
 ///
 /// The message names the offending role (and, for a cycle, the whole loop), so a
 /// caller can report it rather than guess.
-pub fn validate() -> Result<(), String> {
+pub fn validate() -> Result<(), ThemeError> {
     for role in Role::ALL {
         let entries = TOKENS.iter().filter(|token| token.role == *role).count();
         if entries != 1 {
-            return Err(format!(
+            return Err(ThemeError::TokenTable(format!(
                 "role `{}` has {entries} table entries, expected 1",
                 role.key()
-            ));
+            )));
         }
     }
     for entry in TOKENS {
         if !Role::ALL.contains(&entry.role) {
-            return Err(format!(
+            return Err(ThemeError::TokenTable(format!(
                 "the table names `{}`, which is not in the vocabulary",
                 entry.role.key()
-            ));
+            )));
         }
     }
     for slot in [Slot::Foreground, Slot::Background] {
@@ -478,7 +479,9 @@ pub fn validate() -> Result<(), String> {
             .iter()
             .any(|token| token.slot == slot && token.fallback.is_none())
         {
-            return Err(format!("slot {slot:?} has no root role"));
+            return Err(ThemeError::TokenTable(format!(
+                "slot {slot:?} has no root role"
+            )));
         }
     }
     for entry in TOKENS {
@@ -486,20 +489,20 @@ pub fn validate() -> Result<(), String> {
             continue;
         };
         let Some(parent_entry) = token(parent) else {
-            return Err(format!(
+            return Err(ThemeError::TokenTable(format!(
                 "role `{}` falls back to `{}`, which is not in the table",
                 entry.role.key(),
                 parent.key()
-            ));
+            )));
         };
         if parent_entry.slot != entry.slot {
-            return Err(format!(
+            return Err(ThemeError::TokenTable(format!(
                 "role `{}` falls back to `{}` in a different slot ({:?} vs {:?})",
                 entry.role.key(),
                 parent.key(),
                 entry.slot,
                 parent_entry.slot
-            ));
+            )));
         }
     }
     // Cycle detection: walk each chain, remembering where we have been.
@@ -515,7 +518,7 @@ pub fn validate() -> Result<(), String> {
                     .map(|role| role.key())
                     .collect::<Vec<_>>()
                     .join(" -> ");
-                return Err(format!("fallback cycle: {loop_}"));
+                return Err(ThemeError::TokenTable(format!("fallback cycle: {loop_}")));
             }
             seen.push(next);
             current = token(next).and_then(|token| token.fallback);

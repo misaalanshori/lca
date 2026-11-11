@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 
+use super::error::ThemeError;
 use super::{Color, Role};
 
 /// A resolved role table: every theme role maps to a color.
@@ -262,15 +263,15 @@ impl Palette {
     /// Overlay a theme file's roles onto this palette (S5): only the roles
     /// the file names change, and only when their value parses. Returns the
     /// number of roles applied, or an error naming the first bad value.
-    pub fn overlay(&self, text: &str) -> Result<(Palette, usize), String> {
-        let value: toml::Value = toml::from_str(text).map_err(|err| err.to_string())?;
+    pub fn overlay(&self, text: &str) -> Result<(Palette, usize), ThemeError> {
+        let value: toml::Value = toml::from_str(text)?;
         // A custom theme may nest its roles under `[colors]`, like pi's
         // JSON; a flat file is accepted too.
         let table = value
             .get("colors")
             .and_then(|v| v.as_table())
             .or_else(|| value.as_table())
-            .ok_or_else(|| "the theme file is not a table of roles".to_string())?;
+            .ok_or(ThemeError::NotATable)?;
         // `vars` is a named-color table a role may reference (pi's shape).
         let vars = value
             .get("vars")
@@ -296,11 +297,14 @@ impl Palette {
                 continue;
             };
             let Some(raw) = entry.as_str() else {
-                return Err(format!("role `{key}` is not a string"));
+                return Err(ThemeError::RoleNotAString { role });
             };
             let reference = vars.get(raw).and_then(|v| v.as_str()).unwrap_or(raw);
             let Some(color) = parse_color(reference) else {
-                return Err(format!("role `{key}` has an invalid color `{raw}`"));
+                return Err(ThemeError::InvalidColor {
+                    role,
+                    value: raw.to_string(),
+                });
             };
             named.insert(role, color);
         }

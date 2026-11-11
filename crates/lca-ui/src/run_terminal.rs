@@ -14,6 +14,10 @@
 //!   so a closed pty and a signal stop being two paths that could disagree.
 //! - [`suspend`] is `Ctrl+Z`: restore the tty, stop the process group, restore
 //!   again - or, where there is no job control, say so and touch nothing.
+//!
+//! `run_terminal_cooked` was the fourth (gh #592): a terminal that refused raw
+//! mode used to leave the app on cooked input in silence, because the reason
+//! `raw_mode_error` carries had no reader anywhere in the tree.
 
 use lca_tui::engine::terminal::{InputHandler, ResizeHandler, Terminal};
 use lca_tui::engine::{signals, signals::Suspended};

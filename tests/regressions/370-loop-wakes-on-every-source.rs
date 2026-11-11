@@ -44,11 +44,10 @@
 
 /// The loop, so its wait and its render decision can be read.
 fn run_source() -> String {
-    std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/crates/lca-ui/src/run.rs"
-    ))
-    .expect("run.rs is readable")
+    // Both roots: gh #575 moved `TurnState` (and its channels) into
+    // `run_turns.rs`, which `run.rs` declares with `pub(crate) use` (a re-export,
+    // not a `mod`), so the module walk cannot reach it from `run.rs` alone.
+    crate::text_of(&["crates/lca-ui/src/run.rs", "crates/lca-ui/src/run_turns.rs"])
 }
 
 /// The wait mechanism itself.

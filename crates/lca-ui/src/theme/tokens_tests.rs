@@ -62,7 +62,7 @@ fn no_orphan_roles() {
 fn the_table_validates() {
     // The four invariants (total, rooted per slot, same-slot, acyclic) hold for
     // the shipped table.
-    assert_eq!(tokens::validate(), Ok(()));
+    assert!(tokens::validate().is_ok(), "the shipped table is sound");
 }
 
 /// Each slot has exactly one root, and both roots are the ones a theme is
@@ -398,9 +398,22 @@ fn an_unknown_role_is_still_an_error() {
     let err = Palette::dark()
         .overlay("accent = \"not-a-color\"\n")
         .expect_err("an invalid colour is refused");
+    // Gh #575: the reason is a typed variant now, so the row asserts the
+    // *variant* and the copy it renders - which is what "names the role and
+    // the problem" always meant, and a string `contains` could not distinguish
+    // a file fault from a broken shipped table.
     assert!(
-        err.contains("accent") && err.contains("invalid color"),
-        "the message names the role and the problem: {err}"
+        matches!(
+            &err,
+            crate::theme::ThemeError::InvalidColor { role, value }
+                if *role == Role::Accent && value == "not-a-color"
+        ),
+        "the variant names the role and the value: {err:?}"
+    );
+    let copy = err.to_string();
+    assert!(
+        copy.contains("accent") && copy.contains("invalid color"),
+        "and its Display keeps the sentence callers already read: {copy}"
     );
     // A role name that is not in the vocabulary is skipped, not an error: a
     // theme written against a future vocabulary keeps loading (this is the
@@ -467,7 +480,7 @@ fn a_cycle_is_named() {
         "the message names the loop: {err}"
     );
     // The shipped table has none.
-    assert_eq!(tokens::validate(), Ok(()));
+    assert!(tokens::validate().is_ok(), "the shipped table is sound");
 }
 
 /// A hop bound keeps resolution finite even if the table were broken at runtime.
@@ -582,4 +595,105 @@ fn the_documented_fallbacks_match_the_table() {
             parent.key()
         );
     }
+}
+
+// ------------------------------------------------- gh #575: the typed reason
+
+/// A **user's** file fault and a **crate's** table fault are different
+/// audiences, and the type says which.
+///
+/// Before gh #575 both arrived as one `String` and `theme::parse` printed
+/// `theme <name> ignored (<reason>)` for both - so a defect in this crate's own
+/// fallback table was reported as the user's theme file being wrong. The row
+/// pins the distinction at its source, because the notice a reader sees is
+/// built from it and a notice is only as honest as the value behind it.
+#[test]
+fn a_programming_defect_is_told_apart_from_a_file_fault() {
+    // A file fault: the user's to fix.
+    let file_fault = Palette::dark()
+        .overlay("accent = \"nope\"\n")
+        .expect_err("a bad value is refused");
+    assert!(
+        !file_fault.is_programming_defect(),
+        "a bad colour in the user's file is not this crate's bug: {file_fault:?}"
+    );
+    assert!(
+        matches!(
+            crate::theme::tokens::validate(),
+            Ok(()) | Err(crate::theme::ThemeError::TokenTable(_))
+        ),
+        "and `validate`'s only fault class is the table's"
+    );
+
+    // The other side, built directly: the variant the notice branches on.
+    let table_fault = crate::theme::ThemeError::TokenTable("role `text` has 0 entries".into());
+    assert!(table_fault.is_programming_defect());
+    assert!(
+        table_fault.to_string().contains("role `text`"),
+        "and it renders the fault verbatim: {table_fault}"
+    );
+
+    // Both still satisfy the Error contract, so a caller can chain them.
+    let as_error: &dyn std::error::Error = &table_fault;
+    assert!(as_error.source().is_none(), "a table fault has no source");
+    use std::error::Error as _;
+    let toml_fault = crate::theme::ThemeError::Toml(
+        toml::from_str::<toml::Value>("[= broken").expect_err("invalid TOML"),
+    );
+    assert!(
+        as_error.source().is_none() && toml_fault.source().is_some(),
+        "a TOML fault keeps its parser error as a source, so a caller can walk it"
+    );
+}
+
+// Verifies: gh #575 - **the notice tells the two audiences apart.** The type can
+// distinguish a file fault from a broken shipped table; this pins that the
+// message a a user reads does too, which is what the type was written for.
+#[test]
+fn the_notice_says_whose_fault_it_is() {
+    use crate::theme::{ThemeError, load};
+    let dir = std::env::temp_dir().join(format!("lca-theme-575-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    std::fs::write(dir.join("bad.toml"), "accent = \"not-a-color\"\n").expect("write");
+    let (_, notice) = load("bad", None, &dir);
+    let notice = notice.expect("a broken file is reported");
+    assert!(
+        notice.contains("ignored") && notice.contains("accent"),
+        "a file fault is the user's, and names the role: {notice}"
+    );
+    assert!(
+        !notice.contains("bug in LCA"),
+        "and does not blame the crate for the user's theme: {notice}"
+    );
+
+    // The other audience, through the same formatting the notice uses: a table
+    // fault must say it is **not** the theme file, because no edit there can
+    // cause it and sending the reader hunting for one wastes their time.
+    let table = ThemeError::TokenTable("role `text` has 0 entries".into());
+    assert!(table.is_programming_defect(), "the type knows");
+    // The production sentence, read from the module rather than re-typed: a
+    // row that restated it could drift from the copy the user actually reads.
+    let parse = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/theme/parse.rs"),
+    )
+    .expect("parse.rs is readable");
+    let branch = &parse[parse
+        .find("is_programming_defect()")
+        .expect("the branch exists")..];
+    // The arm's whole body: the copy is a wrapped string literal, so the cut is
+    // the `} else {` that ends the `if`, not the first brace.
+    let end = branch.find("} else {").unwrap_or(branch.len());
+    let sentence: String = branch[..end]
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(
+        sentence.contains("bug in LCA") && sentence.contains("not in your theme"),
+        "the sentence a user sees for it names the crate, not the file: {sentence}"
+    );
+    assert!(
+        table.is_programming_defect(),
+        "and the type's fault class is what selects it"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }

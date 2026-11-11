@@ -11,6 +11,7 @@
 //! file keeps the last-good palette and reports why.
 
 pub mod accents;
+mod error;
 mod highlight;
 mod palette;
 // Gh #574: resolving a `ui.theme` setting into a palette.
@@ -22,6 +23,7 @@ pub mod tokens;
 pub use scheme::{detect_scheme, scheme_from_colorfgbg};
 pub(crate) mod panels;
 
+pub use error::ThemeError;
 pub use highlight::{SyntaxStyles, highlight};
 pub use palette::Palette;
 // Gh #574: the setting-to-palette resolution, split at the ceiling.

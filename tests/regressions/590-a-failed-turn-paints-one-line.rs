@@ -26,7 +26,9 @@
 
 /// The run loop's settle region: from the identity of the owner to the usage fold.
 fn reap_region() -> String {
-    let source = crate::module_text("crates/lca-ui/src/run.rs");
+    // Gh #575 moved `reap` into `run_turns.rs`; the module walk cannot reach it
+    // from `run.rs` (that file declares it with `use`, not `mod`), so both roots.
+    let source = crate::text_of(&["crates/lca-ui/src/run.rs", "crates/lca-ui/src/run_turns.rs"]);
     let start = source
         .find("fn reap(&mut self, chat: &mut Chat)")
         .expect("reap still exists under that name");

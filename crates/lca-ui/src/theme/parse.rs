@@ -69,12 +69,22 @@ pub fn load_all(
                 (theme, Some(notice))
             }
             // Invalid file: keep the last-good base and say why.
-            Err(reason) => (
-                base,
-                Some(format!(
-                    "theme `{setting}` ignored ({reason}); keeping the previous palette"
-                )),
-            ),
+            //
+            // Gh #575: the reason is typed, so the two audiences are told
+            // apart. A file fault is the user's to fix; a token-table fault is
+            // a bug in this crate, and calling it "your theme was ignored"
+            // would send the reader to the wrong file.
+            Err(reason) => {
+                let notice = if reason.is_programming_defect() {
+                    format!(
+                        "theme `{setting}`: the built-in role table is broken ({reason}); \
+                         this is a bug in LCA, not in your theme - keeping the previous palette"
+                    )
+                } else {
+                    format!("theme `{setting}` ignored ({reason}); keeping the previous palette")
+                };
+                (base, Some(notice))
+            }
         };
     }
     // A custom name with no file: say so rather than silently showing the
