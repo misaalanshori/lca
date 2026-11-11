@@ -8,6 +8,7 @@
 //! Split out of `alt_screen.rs` for the workspace's 1,200-line ceiling (gate 11).
 
 use super::*;
+use crate::engine::core::CURSOR_MARKER;
 use crate::engine::terminal::FakeTerminal;
 
 /// A terminal big enough that the frame is obviously smaller than the document.
