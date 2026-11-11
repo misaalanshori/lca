@@ -106,9 +106,16 @@ fn the_reexports_lib_rs_names_are_still_declared_by_the_module() {
         // const, fn, type) or a re-export. Matching on the item keyword keeps the
         // row from passing on a mention inside a doc comment.
         let declared = module.iter().any(|(_, text)| {
-            ["pub struct ", "pub enum ", "pub const ", "pub fn ", "pub type ", "pub use "]
-                .iter()
-                .any(|prefix| text.contains(&format!("{prefix}{name}")))
+            [
+                "pub struct ",
+                "pub enum ",
+                "pub const ",
+                "pub fn ",
+                "pub type ",
+                "pub use ",
+            ]
+            .iter()
+            .any(|prefix| text.contains(&format!("{prefix}{name}")))
         });
         assert!(
             declared,
