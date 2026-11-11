@@ -36,7 +36,12 @@ fn tabs_open_switch_isolated_and_close_in_a_real_terminal() {
     session.wait_for("answer one", std::time::Duration::from_secs(25));
     session.wait_for("done", std::time::Duration::from_secs(25));
     session.send(&["C-t"]);
-    let pane = session.wait_for("untitled", std::time::Duration::from_secs(15));
+    // Gh #447's family: `wait_for` returns the frame the needle was painted in,
+    // and the bar is a *second* glyph of the same paint. Reading that frame and
+    // asserting on the first tab's title is reading two moments as one - it cost
+    // this row a macOS red on a loaded runner (2026-11-11). Settle first, then
+    // assert against the frame that stopped changing.
+    let pane = session.wait_settled_for("untitled", std::time::Duration::from_secs(15));
     assert!(
         pane.contains("alpha question"),
         "the bar names both sessions:\n{pane}"
@@ -47,7 +52,9 @@ fn tabs_open_switch_isolated_and_close_in_a_real_terminal() {
     session.wait_for("draft text", std::time::Duration::from_secs(10));
     session.send(&["M-1"]);
     std::thread::sleep(std::time::Duration::from_millis(800));
-    let pane = session.capture();
+    // The switch has had its time; read a frame that stopped changing rather than
+    // whatever the repaint happened to show (gh #447's family).
+    let pane = session.wait_until_painted(std::time::Duration::from_secs(5));
     assert!(
         !pane.contains("draft text"),
         "tab one's composer is clean:\n{pane}"
