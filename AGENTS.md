@@ -149,6 +149,12 @@ references), then pi's source.
   child), so a `pub(super)` written in `tui/cells.rs` *narrows* a surface and
   must be `pub(crate)`; and a `mod tests` block left in the barrel keeps every
   test's path, so leave it there.
+  **The test siblings name the production seams** (gh #572): when a barrel already
+  declares `#[path = "x/foo_tests.rs"]` for five subjects, that list *is* the
+  partition - split production along the same subjects (`x/foo.rs` beside
+  `x/foo_tests.rs`), keep every declaration in the barrel so the declared-from file
+  never moves, and a reader finds the code beside its rows. Read the declarations
+  before inventing a seam; the tests were written against one already.
   A **non-standard `#[path]` sibling becomes a directory**, not a second file
   beside the barrel (gh #557): `shell.rs` that declares
   `#[path = "shell_grammar.rs"] mod grammar;` is a barrel in disguise, so the
