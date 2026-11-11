@@ -732,3 +732,11 @@ mod crate_root_is_an_index;
 // budget while the session keeps working.
 #[path = "594-tui-and-headless-derive-the-summarization-budget.rs"]
 mod tui_and_headless_derive_the_summarization_budget;
+
+// Gh #548 phase 1: `crates/lca-core/src/registry.rs` (1,159 lines, 41 from gate
+// 11's ceiling) became `crates/lca-core/src/registry/` (mod + tools + hooks +
+// plan + manage). Every method body moved byte-identically and `lib.rs` did not
+// change; these rows pin the module-directory shape and the re-export obligations
+// a later move could quietly break, and both fail on the pre-split tree.
+#[path = "548-registry-is-a-module-directory.rs"]
+mod registry_is_a_module_directory;

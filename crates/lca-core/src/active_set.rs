@@ -1,9 +1,9 @@
 //! The session's active tool set (gh #77's pi-active-tools,
 //! gh #67's run-scoped selection): which registered tools declare,
 //! which executor-table built-ins show, and whether `tool_search` is
-//! pinned. Split from `registry.rs` for the file ceiling; the state
-//! lives on `ExtensionRegistry`, so this is one `impl` block, not a
-//! second owner.
+//! pinned. Split from the registry module for the file ceiling - which is
+//! `registry/` since gh #548 - and the state lives on `ExtensionRegistry`, so
+//! this is one `impl` block, not a second owner.
 
 use super::registry::ExtensionRegistry;
 use lca_protocol::ToolExposure;

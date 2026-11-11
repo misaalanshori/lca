@@ -57,7 +57,25 @@ fn read(rel: &str) -> String {
 }
 
 const NATIVE: &str = "crates/lca-mcp/src/native.rs";
-const REGISTRY: &str = "crates/lca-core/src/registry.rs";
+/// Gh #548 split `crates/lca-core/src/registry.rs` into the module directory
+/// `crates/lca-core/src/registry/` (`mod.rs` + `tools` + `hooks` + `plan` +
+/// `manage`). Registration and the re-plan stayed in `mod.rs`, but a row that
+/// names one **filename** stops seeing the code the day it moves - so this reads
+/// the whole module through the shared walk (gh #574/#543) and only the planner
+/// sibling is excluded, because the assertion below is precisely that the
+/// reservation rules live there and nowhere else.
+const REGISTRY_MODULE: &str = "crates/lca-core/src/registry/mod.rs";
+const PLANNER: &str = "crates/lca-core/src/registry/plan.rs";
+
+/// Every file of the registry module **except** the planner.
+fn registry_without_plan() -> String {
+    crate::module_sources(REGISTRY_MODULE)
+        .into_iter()
+        .filter(|(path, _)| path != PLANNER)
+        .map(|(_, text)| text)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 
 /// The body of one method, sliced from its `fn` line to the closing `    }` that
 /// ends it at method indentation.
@@ -218,8 +236,8 @@ fn the_trait_default_is_none_and_only_the_bridge_overrides_it() {
 // must not grow a second copy of the rules.
 #[test]
 fn the_replan_reuses_the_registration_planner() {
-    let registry = read(REGISTRY);
-    let plan = read("crates/lca-core/src/registry/plan.rs");
+    let registry = registry_without_plan();
+    let plan = read(PLANNER);
     assert!(
         plan.contains("BUILTIN_TOOLS.contains(&spec.name.as_str())"),
         "the reserved built-in check lives in the one planner"
@@ -236,7 +254,8 @@ fn the_replan_reuses_the_registration_planner() {
     );
     assert!(
         !registry.contains("BUILTIN_TOOLS.contains(&spec.name.as_str())"),
-        "`registry.rs` must not keep a second copy of the reservation rules"
+        "the registry module outside the planner must not keep a second copy of \
+         the reservation rules"
     );
     // The withdrawal is what lets a shrinking set shrink; without it a server
     // that went away would stay declared forever, and a reconnect would collide

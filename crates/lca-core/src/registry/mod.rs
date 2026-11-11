@@ -2,22 +2,46 @@
 //! handles in registration order, name namespaces, and collision
 //! enforcement (FR-EXT-11). Handles are `Arc<dyn ExtensionDispatch>`, so
 //! nothing here branches on the delivery mode (FR-EXT-6).
+//!
+//! **This module is a partition, not a single file** (gh #548). Gate 11 caps a
+//! file at 1,200 lines and this one was 41 lines from it, so the parts that
+//! answer their own question moved beside it:
+//!
+//! - `mod.rs` (here): registration and collisions - `register`, the re-plan
+//!   (`refresh`), the entry list, enablement, and the command routes;
+//! - [`tools`]: tool exposure and the tools-import surface - which specs
+//!   declare, `tool_search`'s discovery, the namespace grouping, and the
+//!   `ToolsRegistryView` the `tools` import reaches through the host;
+//! - [`hooks`]: the hook chains - pre/post turn, the tool-call and tool-result
+//!   composition, settle, compaction, cache warming, trust, stream observation,
+//!   session close, and the context-transform chain. **A reader looking for
+//!   capability enforcement should follow the hook chain there**: every one of
+//!   them runs over `enabled()` and a failure disables or skips rather than ends
+//!   (FR-EXT-3);
+//! - [`plan`]: the name tables and the collision rules, so a late re-plan runs
+//!   exactly the checks `register` runs (gh #584);
+//! - [`manage`]: the compaction preference and the manager's rows (gh #3).
+//!
+//! The state stays here: one `entries` list, one `table`, one `active` set. The
+//! children are methods on this type, not a second registry, and every direction
+//! they reach (`super::ExtensionRegistry`) is a sibling's use of the same reach.
 
 use crate::active_set::ActiveSet;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use lca_ext_abi::{DeliveryMode, ExtensionDispatch, World};
-use lca_protocol::{
-    ChatMessage, CommandEffect, DispatchError, HookAction, IdentityOutcome, PostToolObservation,
-    ToolAnnotations, ToolCall, ToolExposure, ToolSpec,
-};
+use lca_protocol::{CommandEffect, IdentityOutcome};
 
 /// The name tables plus the planning rules (gh #584), split for the file
 /// ceiling. One `Table`, one set of rules, shared by registration and re-plan.
 mod plan;
 use plan::Route;
 
+/// The hook chains (gh #548).
+mod hooks;
+/// Tool exposure and the tools-import surface (gh #548).
+mod tools;
 /// A namespace and the tools grouped under it (gh #77's grouping:
 /// related tools list under one heading with the description).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -131,8 +155,10 @@ impl std::fmt::Debug for ExtensionRegistry {
 
 /// Manager support (gh #3): the compaction preference and the row
 /// listing live beside the table so this file stays under the
-/// ceiling.
-#[path = "registry_manage.rs"]
+/// ceiling. Since gh #548 it is an ordinary child of this module
+/// (`registry/manage.rs`): the `#[path]` attribute it used to carry was
+/// how a plain `registry.rs` reached a sibling file, and a
+/// `registry/mod.rs` declares children by `mod` like any other module.
 mod manage;
 
 impl ExtensionRegistry {
@@ -485,212 +511,6 @@ impl ExtensionRegistry {
             .any(|entry| entry.handle.name() == name && entry.is_enabled())
     }
 
-    /// The extension that registered a bare tool name, if any.
-    ///
-    /// Re-plans first (gh #584), so a bridged tool whose server landed after
-    /// registration resolves here - which is the half of the defect that
-    /// answered `unknown tool`.
-    pub fn tool_owner(&self, tool: &str) -> Option<&Arc<dyn ExtensionDispatch>> {
-        self.refresh();
-        let table = self.lock_table();
-        let index = *table.tools.get(tool)?;
-        // Borrowed out of the guard deliberately: the handle outlives the table,
-        // and the entry index it names is the same one `refresh` just wrote.
-        drop(table);
-        self.entries.get(index).map(|entry| &entry.handle)
-    }
-
-    /// Whether a tool name is registered right now (gh #584's active set reads
-    /// this instead of the table). Re-plans first, like every spec reader.
-    pub(crate) fn has_tool(&self, name: &str) -> bool {
-        self.refresh();
-        self.lock_table().tool_schemas.contains_key(name)
-    }
-
-    /// The schema of a registered tool, for validating its arguments before
-    /// dispatch (extension authoring guide: the host validates, then calls).
-    pub fn tool_schema(&self, name: &str) -> Option<ToolSpec> {
-        self.refresh();
-        self.lock_table().tool_schemas.get(name).cloned()
-    }
-
-    /// The annotations a registered tool declares (#78): structural
-    /// hints first (normalized from extras at registration), else
-    /// `None`. The permission prompt may show them; nothing decides
-    /// on them.
-    pub fn tool_annotations(&self, name: &str) -> Option<ToolAnnotations> {
-        self.refresh();
-        self.lock_table()
-            .tool_schemas
-            .get(name)
-            .and_then(|spec| spec.annotations.clone())
-    }
-
-    /// Whether the host may run a tool by name right now (gh #77's
-    /// callable set): direct tools while active, codemode and deferred
-    /// tools whenever registered; model-only and hidden tools never.
-    pub fn is_callable(&self, name: &str) -> bool {
-        self.refresh();
-        let enabled = {
-            let table = self.lock_table();
-            table
-                .tools
-                .get(name)
-                .map(|index| {
-                    self.entries[*index]
-                        .enabled
-                        .load(std::sync::atomic::Ordering::SeqCst)
-                })
-                .unwrap_or(false)
-        };
-        if !enabled {
-            return false;
-        }
-        let exposure = {
-            let table = self.lock_table();
-            table.tool_schemas.get(name).map(|spec| spec.exposure)
-        };
-        match exposure {
-            Some(exposure) => match exposure {
-                ToolExposure::Direct => self.is_active(name, exposure),
-                ToolExposure::Codemode | ToolExposure::Deferred => true,
-                ToolExposure::ModelOnly | ToolExposure::Hidden => false,
-            },
-            None => false,
-        }
-    }
-
-    /// The callable tools for orchestrators (the `tools` import's
-    /// `list-tools`, gh #77): name plus description, sorted.
-    pub fn callable_names(&self) -> Vec<(String, String)> {
-        self.refresh();
-        // The names are collected under the lock and the predicate is asked
-        // afterwards: `is_callable` takes the same lock, and `std::sync::Mutex`
-        // is not re-entrant (gh #584).
-        let specs: Vec<(String, String)> = self
-            .lock_table()
-            .tool_schemas
-            .values()
-            .map(|spec| (spec.name.clone(), spec.description.clone()))
-            .collect();
-        let mut names: Vec<(String, String)> = specs
-            .into_iter()
-            .filter(|(name, _)| self.is_callable(name))
-            .collect();
-        names.sort();
-        names
-    }
-
-    /// Deferred discovery (gh #77's `tool_search` shape, pi's
-    /// `deferred`): codemode and deferred tools whose name,
-    /// description, or namespace matches the query, sorted. Hidden
-    /// and model-only tools never match; direct tools are declared,
-    /// not discovered. Matching is case-insensitive substring; an
-    /// empty query lists every discoverable tool.
-    pub fn tool_search(&self, query: &str) -> Vec<ToolSpec> {
-        let needle = query.to_lowercase();
-        let mut matches: Vec<ToolSpec> = self
-            .tool_specs()
-            .into_iter()
-            .filter(|spec| {
-                matches!(
-                    spec.exposure,
-                    ToolExposure::Codemode | ToolExposure::Deferred
-                )
-            })
-            .filter(|spec| {
-                if needle.is_empty() {
-                    return true;
-                }
-                let haystack = match &spec.namespace {
-                    Some(namespace) => format!(
-                        "{} {} {} {}",
-                        spec.name, spec.description, namespace.name, namespace.description
-                    ),
-                    None => format!("{} {}", spec.name, spec.description),
-                };
-                haystack.to_lowercase().contains(&needle)
-            })
-            .collect();
-        matches.sort_by(|a, b| a.name.cmp(&b.name));
-        matches
-    }
-
-    /// Namespace grouping rows (gh #77): one row per namespace with
-    /// its enabled tools, both sorted. Tools without a namespace
-    /// group nowhere.
-    pub fn namespaces(&self) -> Vec<NamespaceView> {
-        let mut groups: HashMap<String, NamespaceView> = HashMap::new();
-        for spec in self.tool_specs() {
-            if let Some(namespace) = &spec.namespace {
-                groups
-                    .entry(namespace.name.clone())
-                    .or_insert_with(|| NamespaceView {
-                        name: namespace.name.clone(),
-                        description: namespace.description.clone(),
-                        tools: Vec::new(),
-                    })
-                    .tools
-                    .push(spec.name.clone());
-            }
-        }
-        let mut views: Vec<NamespaceView> = groups.into_values().collect();
-        for view in &mut views {
-            view.tools.sort();
-        }
-        views.sort_by(|a, b| a.name.cmp(&b.name));
-        views
-    }
-
-    /// What the next declaration request carries (gh #77): enabled,
-    /// active, `direct` tools, plus `deferred` tools the model already
-    /// discovered through `tool_search` (#55). Everything else reaches
-    /// the model through orchestration, or not at all.
-    pub fn declared_tool_specs(&self) -> Vec<ToolSpec> {
-        let discovered = self
-            .active
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .discovered
-            .clone();
-        let mut specs: Vec<ToolSpec> = self
-            .tool_specs()
-            .into_iter()
-            .filter(|spec| {
-                (spec.exposure == ToolExposure::Direct && self.is_active(&spec.name, spec.exposure))
-                    || (spec.exposure == ToolExposure::Deferred && discovered.contains(&spec.name))
-            })
-            .collect();
-        specs.sort_by(|a, b| a.name.cmp(&b.name));
-        specs
-    }
-
-    /// Every extension tool spec, for the provider's tool list. Sorted by
-    /// name: a provider's prompt cache and the request-assembly snapshot key
-    /// on stable bytes, and the registry's maps are unordered.
-    pub fn tool_specs(&self) -> Vec<ToolSpec> {
-        self.refresh();
-        let table = self.lock_table();
-        let mut specs: Vec<ToolSpec> = table
-            .tool_schemas
-            .iter()
-            .filter(|(name, _)| {
-                table
-                    .tools
-                    .get(*name)
-                    .map(|index| {
-                        self.entries[*index]
-                            .enabled
-                            .load(std::sync::atomic::Ordering::SeqCst)
-                    })
-                    .unwrap_or(false)
-            })
-            .map(|(_, spec)| spec.clone())
-            .collect();
-        specs.sort_by(|a, b| a.name.cmp(&b.name));
-        specs
-    }
-
     /// Full command names without the leading slash (the input editor
     /// adds it).
     pub fn command_names(&self) -> Vec<String> {
@@ -719,143 +539,6 @@ impl ExtensionRegistry {
         match route {
             Route::World { leaf, .. } => handle.invoke_command(&leaf, argument).ok(),
             Route::Identity { op, .. } => Some(self.identity_effect(&handle, op)),
-        }
-    }
-
-    /// Apply every enabled `context-transform` extension in
-    /// installation order (FR-CTX-2), each output feeding the next. The
-    /// first rejection - or host-level failure, which must not let
-    /// unreviewed messages through either - stops the chain
-    /// (FR-CTX-3).
-    ///
-    /// Gh #46 (pi's `restoreSystemMessages`): the `context` handlers
-    /// own the conversation, not the prompt. After every handler the
-    /// host re-attaches the leading system message when the handler
-    /// dropped it, so a filter/slice cannot lose the prompt or the
-    /// tool declarations and every later handler still sees the full
-    /// transcript (pi's `context_with_system` visibility). An edited
-    /// system head is honored - only a missing one is restored.
-    pub async fn transform(
-        &self,
-        mut messages: Vec<ChatMessage>,
-    ) -> Result<Vec<ChatMessage>, String> {
-        // The prompt head the handlers must not lose: the leading
-        // system run. Snapshotted once (pi replays the current head
-        // per handler; the head cannot change mid-chain except through
-        // a handler edit, which the per-output check below honors).
-        let head: Vec<ChatMessage> = messages
-            .iter()
-            .take_while(|message| message.role == lca_protocol::MessageRole::System)
-            .cloned()
-            .collect();
-        for handle in self
-            .enabled()
-            .filter(|handle| handle.worlds().contains(&World::ContextTransform))
-        {
-            // The clone keeps the input alive for a Disabled skip;
-            // every other arm replaces or returns it anyway.
-            match handle.transform_messages(messages.clone()).await {
-                Ok(Ok(list)) => {
-                    messages = list;
-                    if !head.is_empty()
-                        && !messages
-                            .first()
-                            .is_some_and(|first| first.role == lca_protocol::MessageRole::System)
-                    {
-                        tracing::warn!(
-                            extension = handle.name(),
-                            "context transform dropped the leading system message; the prompt was restored"
-                        );
-                        messages.splice(..0, head.iter().cloned());
-                    }
-                }
-                Ok(Err(reason)) => return Err(reason),
-                // A handle that just disabled itself (trapped, hit its
-                // limits) drops out of the chain the same way the hooks
-                // loops skip it: FR-EXT-5's host-continues rule outranks
-                // FR-CTX-2 for a dead extension. Every other failure
-                // stops the turn - messages that half-transformed must
-                // not reach the provider.
-                Err(DispatchError::Disabled) => continue,
-                Err(err) => {
-                    return Err(format!(
-                        "the context transform `{}` failed: {err}",
-                        handle.name()
-                    ));
-                }
-            }
-        }
-        Ok(messages)
-    }
-
-    /// Merge the `pre-turn` hook across every enabled extension
-    /// (`post-turn` and close hooks are the same loop with other
-    /// methods). Errors disable inside the host (FR-EXT-3) and are
-    /// skipped here so one broken extension cannot end a turn.
-    pub async fn on_pre_turn(&self) {
-        for handle in self
-            .enabled()
-            .filter(|h| h.worlds().contains(&World::Hooks))
-        {
-            let _ = handle.on_pre_turn().await;
-        }
-    }
-
-    /// Run the `pre-tool-use` hook across enabled extensions in
-    /// registration order: the first deny wins, a replace stops the
-    /// chain (the replacement is not re-hooked, SRDD hooks), and hook
-    /// errors are reported-and-skipped (FR-EXT-3).
-    pub async fn pre_tool_use(
-        &self,
-        call: &ToolCall,
-        on_error: &mut dyn FnMut(&Arc<dyn ExtensionDispatch>, &DispatchError),
-    ) -> HookAction {
-        for handle in self
-            .enabled()
-            .filter(|h| h.worlds().contains(&World::Hooks))
-        {
-            match handle.on_pre_tool_use(call).await {
-                Ok(HookAction::Allow) => {}
-                Ok(action) => return action,
-                Err(err) => on_error(handle, &err),
-            }
-        }
-        HookAction::Allow
-    }
-
-    /// `post-tool-use` across enabled hook extensions (FR-CORE-10's
-    /// observe side).
-    pub async fn on_post_tool_use(&self, call: &ToolCall, result: &lca_protocol::ToolResult) {
-        let observation = PostToolObservation {
-            call: call.clone(),
-            result: result.clone(),
-        };
-        for handle in self
-            .enabled()
-            .filter(|h| h.worlds().contains(&World::Hooks))
-        {
-            let _ = handle.on_post_tool_use(&observation).await;
-        }
-    }
-
-    /// `post-turn-end` with `ok` or `error`.
-    pub async fn on_post_turn_end(&self, status: &str) {
-        for handle in self
-            .enabled()
-            .filter(|h| h.worlds().contains(&World::Hooks))
-        {
-            let _ = handle.on_post_turn_end(status).await;
-        }
-    }
-
-    /// `attention-required`: the turn failed and the user should look. The
-    /// reason is the same text the interface surfaced.
-    pub async fn on_attention_required(&self, reason: &str) {
-        for handle in self
-            .enabled()
-            .filter(|h| h.worlds().contains(&World::Hooks))
-        {
-            let _ = handle.on_attention_required(reason).await;
         }
     }
 
@@ -898,232 +581,6 @@ impl ExtensionRegistry {
     pub fn interrupt_all(&self) {
         for handle in self.enabled() {
             handle.interrupt();
-        }
-    }
-
-    /// Composable `tool_call` mutation (gh #45): every enabled
-    /// `hooks-tool-call` extension runs in order, each seeing the
-    /// previous handler's arguments. A `block` veto ends the chain
-    /// with the reason; hook errors are reported-and-skipped
-    /// (FR-EXT-3), never silent vetoes.
-    pub async fn mutate_tool_call(&self, call: &ToolCall) -> Result<ToolCall, String> {
-        let mut current = call.clone();
-        for handle in self
-            .enabled()
-            .filter(|h| h.worlds().contains(&World::HooksToolCall))
-        {
-            match handle.on_tool_call(&current).await {
-                Ok(patch) => {
-                    if let Some(reason) = patch.block {
-                        return Err(reason);
-                    }
-                    if let Some(arguments) = patch.arguments {
-                        current.arguments = arguments;
-                    }
-                }
-                Err(err) => {
-                    tracing::warn!(extension = handle.name(), %err, "tool_call hook failed; skipped");
-                }
-            }
-        }
-        Ok(current)
-    }
-
-    /// Composable `tool_result` mutation (gh #45): every enabled
-    /// `hooks-tool-result` extension runs in order over the same
-    /// result; omitted fields stay. Errors skip (FR-EXT-3).
-    pub async fn compose_tool_result(
-        &self,
-        call: &ToolCall,
-        result: lca_protocol::ToolResult,
-    ) -> lca_protocol::ToolResult {
-        let mut current = result;
-        for handle in self
-            .enabled()
-            .filter(|h| h.worlds().contains(&World::HooksToolResult))
-        {
-            match handle.on_tool_result(call, &current).await {
-                Ok(patch) => {
-                    if let Some(content) = patch.content {
-                        current.content = content;
-                    }
-                    if let Some(is_error) = patch.is_error {
-                        current.status = if is_error {
-                            lca_protocol::ToolResultStatus::Error
-                        } else {
-                            lca_protocol::ToolResultStatus::Ok
-                        };
-                    }
-                }
-                Err(err) => {
-                    tracing::warn!(extension = handle.name(), %err, "tool_result hook failed; skipped");
-                }
-            }
-        }
-        current
-    }
-
-    /// `message_end` replacement text (gh #45): every enabled
-    /// `hooks-message` extension sees the current text; the last
-    /// replacement wins. `None` observes. Errors skip (FR-EXT-3).
-    pub async fn message_end_replacement(&self, role: &str, text: &str) -> Option<String> {
-        let mut current = text.to_string();
-        let mut replaced = false;
-        for handle in self
-            .enabled()
-            .filter(|h| h.worlds().contains(&World::HooksMessage))
-        {
-            match handle.on_message_end(role, &current).await {
-                Ok(Some(replacement)) => {
-                    current = replacement;
-                    replaced = true;
-                }
-                Ok(None) => {}
-                Err(err) => {
-                    tracing::warn!(extension = handle.name(), %err, "message_end hook failed; skipped");
-                }
-            }
-        }
-        replaced.then_some(current)
-    }
-
-    /// Fold one handler's append into the composed decision (gh #45):
-    /// non-empty appends concatenate with a blank line.
-    pub(crate) fn merge_append(
-        decision: &mut lca_protocol::SettleDecision,
-        append: Option<String>,
-    ) {
-        if let Some(append) = append.filter(|text| !text.is_empty()) {
-            match &mut decision.append {
-                Some(existing) => {
-                    existing.push_str("\n\n");
-                    existing.push_str(&append);
-                }
-                None => decision.append = Some(append),
-            }
-        }
-    }
-
-    /// Actionable settle (gh #45): consult one phase (`turn_end`,
-    /// then `agent_before_settle`). Appends concatenate; any
-    /// `continue-once` continues. Errors settle (FR-EXT-3).
-    pub async fn settle_phase(
-        &self,
-        before_settle: bool,
-        rounds: u32,
-        tool_calls: u32,
-        status: &str,
-    ) -> lca_protocol::SettleDecision {
-        let mut decision = lca_protocol::SettleDecision::default();
-        for handle in self
-            .enabled()
-            .filter(|h| h.worlds().contains(&World::HooksSettle))
-        {
-            let outcome = if before_settle {
-                handle
-                    .on_agent_before_settle(rounds, tool_calls, status)
-                    .await
-            } else {
-                handle.on_turn_end(rounds, tool_calls, status).await
-            };
-            match outcome {
-                Ok(patch) => {
-                    Self::merge_append(&mut decision, patch.append);
-                    decision.continue_once |= patch.continue_once;
-                }
-                Err(err) => {
-                    tracing::warn!(extension = handle.name(), %err, "settle hook failed; settling");
-                }
-            }
-        }
-        decision
-    }
-
-    /// `session_before_compact` veto (gh #45): the first deny
-    /// cancels the compaction with its reason. Errors allow
-    /// (FR-EXT-3: a broken watcher must not freeze the session).
-    pub async fn session_before_compact(&self, reason: &str) -> Result<(), String> {
-        for handle in self
-            .enabled()
-            .filter(|h| h.worlds().contains(&World::HooksCompaction))
-        {
-            match handle.on_session_before_compact(reason).await {
-                Ok(lca_protocol::CompactVerdict::Allow) => {}
-                Ok(lca_protocol::CompactVerdict::Deny(reason)) => return Err(reason),
-                Err(err) => {
-                    tracing::warn!(extension = handle.name(), %err, "before-compact hook failed; allowing");
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// `session_compact_failed` observation (gh #45).
-    pub async fn session_compact_failed(&self, reason: &str, error: Option<&str>) {
-        for handle in self
-            .enabled()
-            .filter(|h| h.worlds().contains(&World::HooksCompaction))
-        {
-            let _ = handle.on_session_compact_failed(reason, error).await;
-        }
-    }
-
-    /// `cache_warming_decision` votes (gh #45): every enabled
-    /// `hooks-cache` extension votes; any `false` skips warming.
-    /// Errors warm (FR-EXT-3).
-    pub async fn cache_warm(&self, provider: &str, model: &str) -> bool {
-        for handle in self
-            .enabled()
-            .filter(|h| h.worlds().contains(&World::HooksCache))
-        {
-            match handle.on_cache_warming_decision(provider, model).await {
-                Ok(true) => {}
-                Ok(false) => return false,
-                Err(err) => {
-                    tracing::warn!(extension = handle.name(), %err, "cache hook failed; warming");
-                }
-            }
-        }
-        true
-    }
-
-    /// `project_trust` votes (gh #45): the first yes/no decides;
-    /// undecided falls through. Returns the vote and whether to
-    /// remember it. Errors are undecided (FR-EXT-3).
-    pub async fn project_trust(&self, cwd: &str) -> (lca_protocol::TrustVote, bool) {
-        for handle in self
-            .enabled()
-            .filter(|h| h.worlds().contains(&World::HooksTrust))
-        {
-            match handle.on_project_trust(cwd).await {
-                Ok((lca_protocol::TrustVote::Undecided, _)) => {}
-                Ok((vote, remember)) => return (vote, remember),
-                Err(err) => {
-                    tracing::warn!(extension = handle.name(), %err, "trust hook failed; undecided");
-                }
-            }
-        }
-        (lca_protocol::TrustVote::Undecided, false)
-    }
-
-    /// `provider_stream_event` observation (gh #45): normalized
-    /// events, in order, after the stream closes. Errors skip.
-    pub async fn observe_stream_event(&self, provider: &str, model: &str, kind: &str, data: &str) {
-        for handle in self
-            .enabled()
-            .filter(|h| h.worlds().contains(&World::HooksStream))
-        {
-            let _ = handle.on_stream_event(provider, model, kind, data).await;
-        }
-    }
-
-    /// `session-close`, called when a session ends.
-    pub async fn on_session_close(&self) {
-        for handle in self
-            .enabled()
-            .filter(|h| h.worlds().contains(&World::Hooks))
-        {
-            let _ = handle.on_session_close().await;
         }
     }
 }
