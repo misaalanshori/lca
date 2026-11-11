@@ -77,8 +77,25 @@ fn an_interactive_compaction_carries_the_budget_derived_from_the_model_window() 
         std::time::Duration::from_secs(30),
     );
 
+    // Gh #444/#446: the model label painting does not prove the input thread is
+    // reading, and a prompt sent into that gap is lost invisibly - the row then
+    // waits 30 s for a reply to a turn that never started (measured: 2 of 5
+    // runs failed that way on an idle box). The echoed-probe primitive is the
+    // documented close for this gap.
+    session.wait_for_input_ready(std::time::Duration::from_secs(15));
+    // Gh #444: the model label painting does not prove the input thread is
+    // reading; a prompt sent into that gap is lost invisibly.
+    session.wait_for_input_ready(std::time::Duration::from_secs(15));
     session.send(&["say a thing", "Enter"]);
-    session.wait_for("first reply", std::time::Duration::from_secs(30));
+    // **45 s, not 30, and the reason is the product's own countdown.** The
+    // endpoint is unconsented, so the first turn raises the permission modal,
+    // whose auto-approve deadline is 30 s (`run_turns.rs`: `now() + 30 s`,
+    // FR-UI-18). Measured: the reply paints at **30.09-30.35 s** on every run -
+    // i.e. exactly when the countdown fires - so a 30 s wait raced the
+    // countdown's own timer and failed 4 of 6 runs. The budget has to sit
+    // outside the countdown it is waiting for; 45 s is the countdown plus the
+    // reply's own latency.
+    session.wait_for("first reply", std::time::Duration::from_secs(45));
     session.send(&["/compact", "Enter"]);
     session.wait_for("compacted:", std::time::Duration::from_secs(30));
 
