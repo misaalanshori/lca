@@ -285,12 +285,29 @@ pub fn summarization_max_tokens(reserve_tokens: u64) -> u32 {
 /// model's published context window (0 = unknown, so
 /// [`effective_context_window`](crate::effective_context_window)'s conservative
 /// estimate governs, exactly as the threshold check already does).
-pub fn summarization_budget(threshold: f64, reserve_tokens: u64, window: u32) -> u32 {
-    summarization_max_tokens(crate::compaction_reserve(
+///
+/// `max_output` is the model's own output ceiling, capped like pi's
+/// `Math.min(floor(0.8 × reserve), model.maxTokens)` (gh #594): a provider that
+/// publishes a ceiling **validates** `max_tokens` against it, so a 200k reserve
+/// on a model that can emit 8k would be a rejected request rather than a
+/// summary. `0` (the published-nothing case, which is what this repo's bundled
+/// provider reports) means no ceiling is known, so the derived number stands.
+pub fn summarization_budget(
+    threshold: f64,
+    reserve_tokens: u64,
+    window: u32,
+    max_output: u32,
+) -> u32 {
+    let derived = summarization_max_tokens(crate::compaction_reserve(
         threshold,
         reserve_tokens,
         crate::effective_context_window(window),
-    ))
+    ));
+    if max_output > 0 {
+        derived.min(max_output)
+    } else {
+        derived
+    }
 }
 
 impl ProviderBackend {

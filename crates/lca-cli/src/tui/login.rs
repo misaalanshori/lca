@@ -578,6 +578,7 @@ impl Ui {
                     backend,
                     &crate::lock(&self.config),
                     model.context_window,
+                    model.max_tokens,
                 );
             }
         }

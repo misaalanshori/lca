@@ -69,6 +69,17 @@ pub(super) fn adopt_login_identity(identity_cell: &Arc<Mutex<String>>, identity:
         .unwrap_or_else(|poisoned| poisoned.into_inner()) = identity.to_string();
 }
 
+/// The active model's published output ceiling, or 0 when the provider does not
+/// publish one (gh #594: the summarization budget is then uncapped by it).
+pub(super) fn model_max_output(provider: &dyn Provider, model_id: &str) -> u32 {
+    provider
+        .list_models()
+        .iter()
+        .find(|model| model.id == model_id)
+        .map(|model| model.max_tokens)
+        .unwrap_or(0)
+}
+
 /// The active model's context window, or 0 when the provider does not
 /// publish one (the threshold check then skips, FR-SESS-4).
 pub(super) fn model_context_window(provider: &dyn Provider, model_id: &str) -> u32 {
@@ -104,11 +115,13 @@ pub(super) fn apply_summarization_budget(
     backend: &lca_core::ext_provider::ProviderBackend,
     config: &Config,
     context_window: u32,
+    max_output: u32,
 ) {
     backend.set_summarization_budget(lca_core::ext_provider::summarization_budget(
         config.compaction_threshold(),
         config.compaction_reserve_tokens(),
         context_window,
+        max_output,
     ));
 }
 
@@ -123,8 +136,9 @@ pub fn summarization_budget_site_for_tests(
     backend: &lca_core::ext_provider::ProviderBackend,
     config: &Config,
     context_window: u32,
+    max_output: u32,
 ) {
-    apply_summarization_budget(backend, config, context_window);
+    apply_summarization_budget(backend, config, context_window, max_output);
 }
 
 /// Swap the live configuration scope (gh #204): the `/scoped-models`

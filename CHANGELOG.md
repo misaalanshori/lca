@@ -19,7 +19,11 @@ Dates are UTC.
   (`lca_core::ext_provider::summarization_budget`) and the interface applies it wherever
   the model it summarizes with can change — startup, `/reload`, `/model` (same and cross
   provider), and a login that resolves the session's first model — so the budget always
-  describes the model the session is running. When a summary *is* cut at that budget the
+  describes the model the session is running. The derivation also caps itself at the
+  model's published output ceiling (pi's `Math.min(floor(0.8 × reserve), model.maxTokens)`),
+  which matters because a provider validates `max_tokens` against it: a 1M window on an
+  8,192-output model now asks for 8,192 instead of a request the endpoint would reject.
+  When a summary *is* cut at that budget the
   degradation line now says the `max_tokens` is this session's derived budget rather than
   a provider limit, and names the fix. A new front end that forgets to derive one reddens
   `tests/regressions/594-*`, which classifies every `ProviderBackend` site in the binary.

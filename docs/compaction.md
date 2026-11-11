@@ -27,13 +27,20 @@ has none — a documented divergence from pi's `compaction.modelOverrides`).
 
 ## Summarization budget
 
-The summary request carries `max-tokens = floor(0.8 × reserve)` (pi's
-derivation), where `reserve` is the same one the trigger uses
+The summary request carries `max-tokens = min(floor(0.8 × reserve), model max
+output)` (pi's derivation), where `reserve` is the same one the trigger uses
 (`compaction.reserve_tokens` when set, else `(1 − threshold) × window` over the
 model's published window, with the 128k estimate standing in when the endpoint
 publishes none). So the budget **scales with the model**, and it is computed by
 one rule in `lca_core` (`ext_provider::summarization_budget`). It rides
 `CompletionRequest.extras["max-tokens"]`, as before.
+
+The **output-ceiling cap** is pi's `Math.min(…, model.maxTokens)` and it is not
+decorative: a provider validates `max_tokens` against the model's own ceiling, so
+a 200,000-token reserve on a model that can emit 8,192 would be a *rejected
+request*, not a summary. A model that publishes no ceiling (`0`, which is what
+the bundled `openai-compatible` provider reports) caps nothing, and the derived
+number stands.
 
 **The rule: derived from the reserve, never the stopgap once the window is
 known.** `SUMMARIZATION_MAX_TOKENS` (4096) is the stopgap for a reserve of zero —

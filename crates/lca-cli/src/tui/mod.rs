@@ -77,7 +77,7 @@ use crate::lock;
 // for its descendants, so nothing is widened by the move.
 pub(in crate::tui) use cells::{
     adopt_login_identity, agent_config_for, apply_summarization_budget, live_cells,
-    model_context_window,
+    model_context_window, model_max_output,
 };
 // The regression suite's read of the interface's own application site (gh
 // #594): the wiring row drives the call the interface makes, then reads back
@@ -671,10 +671,11 @@ impl Ui {
         let registry = Arc::new(registry);
 
         let context_window = model_context_window(provider.as_ref(), &model_id);
+        let max_output = model_max_output(provider.as_ref(), &model_id);
         // Gh #594: the interactive backend carries the budget its model window
         // earns, not the 4096-token stopgap the headless path already avoided.
         if let Some(backend) = &provider_backend {
-            apply_summarization_budget(backend, &config, context_window);
+            apply_summarization_budget(backend, &config, context_window, max_output);
         }
         // #39: the resolved model's image behavior reaches the tools.
         let image_policy = crate::models::image_policy_for(&provider.list_models(), &model_id);

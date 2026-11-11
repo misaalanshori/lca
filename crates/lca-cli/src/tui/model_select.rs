@@ -195,7 +195,16 @@ impl Ui {
         // landed on. A same-provider switch reaches here (the cross-provider one
         // is re-derived in `apply_provider_switch`, which moves the provider too).
         if resolves && let Some(backend) = self.provider_backend.as_ref() {
-            super::apply_summarization_budget(backend, &crate::lock(&self.config), chosen.window);
+            let max_output = models
+                .iter()
+                .find(|model| model.id == chosen.id)
+                .map_or(0, |model| model.max_tokens);
+            super::apply_summarization_budget(
+                backend,
+                &crate::lock(&self.config),
+                chosen.window,
+                max_output,
+            );
         }
         // gh #8 phase 4: the session's thinking follows the model it runs
         // on. An explicit `:level` is the user's choice, clamped into what
@@ -323,6 +332,12 @@ impl Ui {
         let identity =
             crate::stored_provider_preset(&self.data, target).unwrap_or_else(|| target.to_string());
         super::adopt_login_identity(&self.identity_cell, &identity);
+        // Gh #594: the output ceiling travels with the choice, so the budget
+        // derivation has it without re-listing.
+        let max_output = match cached {
+            Some(ref entry) => entry.max_tokens,
+            None => super::model_max_output(provider.as_ref(), model_id),
+        };
         *self.model_cell.lock().unwrap_or_else(|p| p.into_inner()) = super::ModelChoice {
             id: model_id.to_string(),
             window,
@@ -339,7 +354,12 @@ impl Ui {
             // Gh #594: a pick from another provider moves the model window too,
             // so the summarization budget is re-derived from the window this
             // switch resolved (never inherited from the provider it left).
-            super::apply_summarization_budget(backend, &crate::lock(&self.config), window);
+            super::apply_summarization_budget(
+                backend,
+                &crate::lock(&self.config),
+                window,
+                max_output,
+            );
         }
         {
             let mut live = crate::lock(&self.live);

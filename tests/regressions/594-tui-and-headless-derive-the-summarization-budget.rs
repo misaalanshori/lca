@@ -71,7 +71,9 @@ fn the_interface_backend_carries_a_budget_derived_from_its_model_window() {
     // The interface's application site, byte for byte: a `Config` at its defaults
     // (threshold 0.8, no absolute reserve) and a 1M-token model window.
     let config = lca_config::Config::defaults();
-    lca_cli::tui::apply_summarization_budget_for_tests(&backend, &config, 1_000_000);
+    // The fourth argument is the model's published output ceiling: the bundled
+    // provider reports none (0), so the window's derivation stands uncapped.
+    lca_cli::tui::apply_summarization_budget_for_tests(&backend, &config, 1_000_000, 0);
     assert_eq!(
         backend.summarization_budget(),
         Some(MILLION_WINDOW_BUDGET),
@@ -84,9 +86,32 @@ fn the_interface_backend_carries_a_budget_derived_from_its_model_window() {
         SUMMARIZATION_MAX_TOKENS
     );
     assert_eq!(
-        u64::from(summarization_budget(0.8, 0, 1_000_000)),
+        u64::from(summarization_budget(0.8, 0, 1_000_000, 0)),
         u64::from(MILLION_WINDOW_BUDGET),
         "the interface applies the one rule `lca_core` owns, not a private copy"
+    );
+}
+
+// Verifies: gh #594 - **the interface caps the budget at the model's published
+// output ceiling.** Pi's shape is `Math.min(floor(0.8 x reserve), model.maxTokens)`, and
+// the cap is not cosmetic: a provider validates `max_tokens` against that ceiling, so
+// deriving 160,000 for an 8,192-output model is a rejected request rather than a
+// summary. `0` (the bundled provider's published-nothing case) caps nothing.
+#[test]
+fn the_interface_caps_the_budget_at_the_models_output_ceiling() {
+    let backend = ProviderBackend::new(Arc::new(FakeProvider::builder().build()), "m", "sess-1");
+    let config = lca_config::Config::defaults();
+    lca_cli::tui::apply_summarization_budget_for_tests(&backend, &config, 1_000_000, 8_192);
+    assert_eq!(
+        backend.summarization_budget(),
+        Some(8_192),
+        "a 1M-window model that can emit 8,192 tokens budgets its ceiling"
+    );
+    lca_cli::tui::apply_summarization_budget_for_tests(&backend, &config, 1_000_000, 0);
+    assert_eq!(
+        backend.summarization_budget(),
+        Some(MILLION_WINDOW_BUDGET),
+        "and a model that publishes no ceiling keeps the window's derivation"
     );
 }
 
@@ -364,7 +389,7 @@ fn fixture(name: &str, provider: FakeProvider) -> Fixture {
         "gh594-session",
     ));
     // The interface's own rule, applied as the interface applies it: a 1M window.
-    backend.set_summarization_budget(summarization_budget(0.8, 0, 1_000_000));
+    backend.set_summarization_budget(summarization_budget(0.8, 0, 1_000_000, 0));
     let roots = ScopeRoots {
         workspace: project.clone(),
         private: root.join("private"),

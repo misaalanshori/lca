@@ -75,7 +75,8 @@ impl Ui {
         // for the model that is live now (the config it re-read may have moved
         // the threshold or the reserve too).
         if let Some(backend) = &backend {
-            super::apply_summarization_budget(backend, &config, window);
+            let max_output = super::model_max_output(live.provider.as_ref(), &model_id);
+            super::apply_summarization_budget(backend, &config, window, max_output);
         }
         let agent_config = match super::agent_config_for(
             &config,

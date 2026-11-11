@@ -202,24 +202,38 @@ fn the_summarization_budget_scales_with_the_model_window() {
     ];
     for (window, reserve, budget) in cases {
         assert_eq!(
-            u64::from(summarization_budget(0.8, 0, window)),
+            u64::from(summarization_budget(0.8, 0, window, 0)),
             budget,
             "a {window}-token window reserves {reserve} and budgets {budget}"
         );
         assert_ne!(
-            summarization_budget(0.8, 0, window),
+            summarization_budget(0.8, 0, window, 0),
             SUMMARIZATION_MAX_TOKENS,
             "no window above the stopgap's own scale falls back to 4096"
         );
     }
     // An absolute reserve wins over the fraction, exactly as the trigger's
     // reserve does: 16,384 reserves a 13,107 budget whatever the window.
-    assert_eq!(summarization_budget(0.8, 16_384, 1_000_000), 13_107);
+    assert_eq!(summarization_budget(0.8, 16_384, 1_000_000, 0), 13_107);
+    // A published output ceiling caps the budget (pi's `Math.min(floor(0.8 x
+    // reserve), model.maxTokens)`): the endpoint validates `max_tokens` against
+    // it, so asking for 160,000 on an 8,192-ceiling model is a rejected request,
+    // not a summary. `0` means no ceiling is known and the derived number stands.
+    assert_eq!(
+        summarization_budget(0.8, 0, 1_000_000, 8_192),
+        8_192,
+        "a 1M window on an 8,192-output model budgets its ceiling, not 160,000"
+    );
+    assert_eq!(
+        summarization_budget(0.8, 0, 1_000_000, 640_000),
+        160_000,
+        "a ceiling above the derivation does not raise the budget"
+    );
     // A window nobody published falls back to the same conservative estimate
     // the trigger uses (128,000), never to a fabricated one and never to 0.
     assert_eq!(
-        summarization_budget(0.8, 0, 0),
-        summarization_budget(0.8, 0, lca_core::effective_context_window(0))
+        summarization_budget(0.8, 0, 0, 0),
+        summarization_budget(0.8, 0, lca_core::effective_context_window(0), 0)
     );
 }
 
@@ -242,7 +256,7 @@ fn a_backend_that_was_given_the_window_reports_its_derived_budget() {
         "a fresh backend has no budget, so `complete` would fall back to the stopgap"
     );
     backend.set_summarization_budget(lca_core::ext_provider::summarization_budget(
-        0.8, 0, 1_000_000,
+        0.8, 0, 1_000_000, 0,
     ));
     assert_eq!(
         backend.summarization_budget(),

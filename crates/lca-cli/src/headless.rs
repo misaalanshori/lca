@@ -988,6 +988,14 @@ fn wire(
         .find(|model| model.id == model_id)
         .map(|model| model.context_window)
         .unwrap_or(0);
+    // Gh #594: the ceiling the endpoint validates `max_tokens` against, or 0
+    // when it publishes none.
+    let model_max_output = provider
+        .list_models()
+        .iter()
+        .find(|model| model.id == model_id)
+        .map(|model| model.max_tokens)
+        .unwrap_or(0);
     // gh #36 phase 1 / gh #594: the summarization budget derives from the same
     // reserve the trigger uses, once the model window is known. One rule, in
     // `lca_core`, so the interface's assembly site cannot compose it differently
@@ -997,6 +1005,7 @@ fn wire(
             config.compaction_threshold(),
             config.compaction_reserve_tokens(),
             model_context_window,
+            model_max_output,
         ));
     }
     #[cfg(feature = "bundled-compaction-default")]
