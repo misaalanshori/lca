@@ -7,16 +7,11 @@
 //! already crossed the ceiling once.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
+mod common;
+
+use common::{scratch, store};
 use lca_protocol::{FORMAT_VERSION, Record};
-use lca_session::{ExportOptions, ReadOutcome, SessionStore};
-
-fn scratch(name: &str) -> std::path::PathBuf {
-    lca_testkit::scratch_path(name)
-}
-
-fn store(name: &str) -> SessionStore {
-    SessionStore::new(scratch(name))
-}
+use lca_session::{ExportOptions, ReadOutcome};
 
 fn usage_record(id: &str) -> Record {
     Record::Usage {

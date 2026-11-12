@@ -2,13 +2,13 @@
 //! round-tripping any sequence of valid records, and truncation at any byte
 //! offset always producing the longest valid prefix rather than an error.
 
+mod common;
+
+use common::scratch;
 use lca_protocol::{ContentBlock, FORMAT_VERSION, Record};
 use lca_session::SessionStore;
-use proptest::prelude::*;
 
-fn scratch(name: &str) -> std::path::PathBuf {
-    lca_testkit::scratch_path(name)
-}
+use proptest::prelude::*;
 
 fn arb_text() -> impl Strategy<Value = String> {
     // Any UTF-8, including quotes, newlines, control characters, and

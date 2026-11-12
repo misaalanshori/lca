@@ -4,28 +4,11 @@
 //! Split from `log.rs`, which crossed the workspace's 1,200-line ceiling
 //! (gate 11) with these two rows in it.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
+mod common;
+
+use common::{scratch, store, user_record};
 use lca_protocol::{FORMAT_VERSION, Record};
-use lca_session::{ReadOutcome, SessionStore};
-
-fn scratch(name: &str) -> std::path::PathBuf {
-    lca_testkit::scratch_path(name)
-}
-
-fn store(name: &str) -> SessionStore {
-    SessionStore::new(scratch(name))
-}
-
-fn user_record(id: &str, content: &str) -> Record {
-    Record::User {
-        v: FORMAT_VERSION,
-        ts: 1,
-        id: id.to_string(),
-        parent: None,
-        content: content.to_string(),
-        attachments: vec![],
-        queue: None,
-    }
-}
+use lca_session::ReadOutcome;
 
 // Verifies: gh #8 / EFG-013 (the `model-change` record) - every model
 // change appends one, and the fields say which model left, which arrived,

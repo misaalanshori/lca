@@ -3,28 +3,11 @@
 //! the export.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
-use lca_protocol::{FORMAT_VERSION, Record};
-use lca_session::{ExportOptions, SessionStore};
+mod common;
 
-fn scratch(name: &str) -> std::path::PathBuf {
-    lca_testkit::scratch_path(name)
-}
-
-fn store(name: &str) -> SessionStore {
-    SessionStore::new(scratch(name))
-}
-
-fn user_record(id: &str, content: &str) -> Record {
-    Record::User {
-        v: FORMAT_VERSION,
-        ts: 1,
-        id: id.to_string(),
-        parent: None,
-        content: content.to_string(),
-        attachments: vec![],
-        queue: None,
-    }
-}
+use common::{scratch, store, user_record};
+use lca_protocol::Record;
+use lca_session::ExportOptions;
 
 // Verifies: FR-SESS-10 (naming a bookmark persists a `label` record)
 #[test]
