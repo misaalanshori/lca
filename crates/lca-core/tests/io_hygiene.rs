@@ -17,6 +17,23 @@ fn read_source(name: &str) -> String {
     std::fs::read_to_string(crate_src().join(name)).expect("read own source")
 }
 
+/// Every file of the `turn` module (#548 phase 2): the loop stays in `mod.rs`
+/// and the request/persist boundaries live beside it, so a guard that pinned
+/// one filename would stop seeing `assemble_request` the moment it moved
+/// (docs/testing-plan.md's module-walk rule, gh #574).
+fn turn_sources() -> Vec<String> {
+    [
+        "mod.rs",
+        "request.rs",
+        "persist.rs",
+        "execute.rs",
+        "stream.rs",
+    ]
+    .iter()
+    .map(|name| read_source(&format!("turn/{name}")))
+    .collect()
+}
+
 /// The body of the named `async fn`, skipping strings, chars, and
 /// comments so unbalanced braces in text cannot fool the balance.
 fn async_fn_body(source: &str, name: &str) -> Option<String> {
@@ -135,8 +152,11 @@ fn async_fn_body(source: &str, name: &str) -> Option<String> {
 // (blocking) fails the pin.
 #[test]
 fn no_blocking_fs_in_the_named_async_paths() {
-    let turn = read_source("turn/mod.rs");
-    let span = async_fn_body(&turn, "assemble_request").expect("assemble_request exists");
+    let turn = turn_sources();
+    let span = turn
+        .iter()
+        .find_map(|source| async_fn_body(source, "assemble_request"))
+        .expect("assemble_request exists");
     assert!(
         !span.contains("std::fs::"),
         "assemble_request blocks on the filesystem"

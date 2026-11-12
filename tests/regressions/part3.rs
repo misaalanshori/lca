@@ -740,3 +740,11 @@ mod tui_and_headless_derive_the_summarization_budget;
 // a later move could quietly break, and both fail on the pre-split tree.
 #[path = "548-registry-is-a-module-directory.rs"]
 mod registry_is_a_module_directory;
+
+// Gh #548 phase 2: `crates/lca-core/src/turn/mod.rs` (1,142 lines, 1,018 of them in
+// one function) gave its request/assembly and persist/compaction boundaries to
+// `turn/request.rs` and `turn/persist.rs`, and the loop stayed put as one function.
+// These rows pin the partition (which file owns what), that the module declares its
+// children by plain `mod`, and that the loop file keeps its headroom.
+#[path = "548b-turn-module-partition.rs"]
+mod turn_module_partition;

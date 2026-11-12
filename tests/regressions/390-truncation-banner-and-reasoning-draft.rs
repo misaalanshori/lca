@@ -127,7 +127,10 @@ fn both_wire_kits_report_the_cut() {
 // and without ending the turn, the loop re-attempts the same call.
 #[test]
 fn a_truncation_is_decided_before_a_tool_runs() {
-    let turn = read("crates/lca-core/src/turn/mod.rs");
+    // Gh #548 phase 2 split the request/persist boundaries out of `turn/mod.rs`;
+    // the walk reads the whole module, so this guard keeps seeing both the
+    // decision (in the loop) and the two filters it depends on (in `persist.rs`).
+    let turn = crate::module_text("crates/lca-core/src/turn/mod.rs");
     let check = turn
         .find("if response.truncated {")
         .expect("the turn checks the truncation");
