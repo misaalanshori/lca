@@ -748,3 +748,11 @@ mod registry_is_a_module_directory;
 // children by plain `mod`, and that the loop file keeps its headroom.
 #[path = "548b-turn-module-partition.rs"]
 mod turn_module_partition;
+
+// Gh #564 phase 1: `crates/lca-session/src/store.rs` (1,177 lines, 23 from gate 11)
+// became the `store/` module directory (mod + rows + lines + read + write + forks).
+// Every public path is re-exported from `store/mod.rs` unchanged; these rows pin
+// the partition, the `mod`-only declarations, the append path's write/flush order
+// (the one claim the behavioural suite cannot see), and the headroom.
+#[path = "564-store-module-partition.rs"]
+mod store_module_partition;
