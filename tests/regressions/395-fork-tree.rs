@@ -73,7 +73,9 @@ fn the_fork_linkage_is_the_stores_parent_session() {
     );
 
     // The store reads it into the summary the listing uses.
-    let store = code_lines(&read("crates/lca-session/src/store.rs"));
+    // Gh #564 split `store.rs` into a module directory; the walk reads every
+    // file of it, so this row keeps seeing `rebuild_index` wherever it lives.
+    let store = code_lines(&crate::module_text("crates/lca-session/src/store/mod.rs"));
     assert!(
         store.contains("parent_session: meta.parent_session"),
         "`rebuild_index` carries the parent into `SessionSummary`"

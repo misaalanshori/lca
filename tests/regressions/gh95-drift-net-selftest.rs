@@ -55,7 +55,11 @@ fn fixture_tree(name: &str) -> PathBuf {
     link("docs/providers/README.md");
     link("docs/session-log-format.md");
     link("docs/providers/openai-compatible.md");
-    link("crates/lca-session/src/store.rs");
+    // Gh #564: the drift net reads the reader's known types out of the store
+    // module, so the fixture must link the directory's files, not a dead path.
+    for part in ["mod", "rows", "lines", "read", "write", "forks"] {
+        link(&format!("crates/lca-session/src/store/{part}.rs"));
+    }
     link("crates/lca-permissions/src/scope.rs");
     // The README link-rot check resolves every `docs/*.md` link
     // against the tree, so the fixture tracks the README's link set

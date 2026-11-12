@@ -277,7 +277,13 @@ for tag in "${record_tags[@]}"; do
     echo "docs-consistency: record tag '$tag' is known to the reader but missing from docs/session-log-format.md"
     fail=1
   fi
-  if ! grep -qF "\"$tag\"" crates/lca-session/src/store.rs; then
+  # Gh #564 split `store.rs` into `store/`; the reader's known types live in one
+  # of its files. The *glob* rather than `grep -r` on purpose: this script is
+  # also run against a fixture tree of symlinks (tests/regressions/gh95-*), and
+  # `grep -r` silently skips a symlinked file (only `-R` follows one), which
+  # made the clean fixture look drifted. A shell glob hands grep the paths as
+  # arguments, so a symlink reads exactly like the file it points at.
+  if ! grep -qF "\"$tag\"" crates/lca-session/src/store/*.rs; then
     echo "docs-consistency: record tag '$tag' is documented but missing from the reader's known types"
     fail=1
   fi
