@@ -10,19 +10,42 @@
 //! digest, the manifest, an approved-grant hash), and the lockfile at
 //! the top records digest, source, and grant hash so `ext update` can
 //! prompt before a widened capability set applies (FR-DIST-6/7).
+//!
+//! ## The module map (gh #561)
+//!
+//! This file is the crate's surface and its four resolvers. Everything else has
+//! a module of its own, and the rule is that a new concern gets a module rather
+//! than being appended here:
+//!
+//! | module | owns |
+//! |---|---|
+//! | `lockfile` | the format version, `LockEntry`, `Lockfile::{load, save}` |
+//! | `consent` | the canonical grant hash, the consent lines, the update-widens comparison, the extension-name rule |
+//! | `store` | `InstallTree`: the on-disk extension tree and its only writer |
+//! | `http` | the shared hyper client and the plain GET (gh #355) |
+//! | `proxy` | gh #308's proxy rules and connector |
+//! | `oci` | the OCI token dance, the redirect fetch, the bounded collector, the archive fetch |
+//! | `archive`, `catalog`, `git`, `models` | the formats and sources they are named for |
+//!
+//! Modules stay private: their public names are re-exported here, so a caller
+//! still writes `lca_registry::Proxies` and never `lca_registry::proxy::Proxies`.
 
 #![forbid(unsafe_code)]
 
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
 mod archive;
 mod catalog;
+mod consent;
 mod git;
 mod http;
+mod lockfile;
 pub mod models;
+mod oci;
+mod proxy;
+mod store;
 
 pub(crate) use archive::manifest_declares_resources;
 pub use archive::{pack_archive, pack_archive_with_resources, read_archive};
@@ -31,92 +54,20 @@ pub use catalog::{
     cache_fresh, cache_path, fetch_catalog, is_valid_catalog_id, merge_catalogs, official_source,
     parse_catalog, read_cache, write_cache,
 };
+pub use consent::{consent_lines, grant_hash, update_widens_grants, validate_extension_name};
 pub use git::{parse_git_source, resolve_git};
+use http::http_client;
 pub use http::{
-    OCI_MAX_BYTES, OCI_MAX_REDIRECTS, OCI_TIMEOUT, PLAIN_GET_MAX_BYTES, PLAIN_GET_TIMEOUT, Proxies,
-    ProxyEndpoint, fetch_oci_public, fetch_oci_within, fetch_oci_within_capped,
-    parse_proxy_for_tests, plain_get, plain_get_within, plain_get_within_capped,
+    PLAIN_GET_MAX_BYTES, PLAIN_GET_TIMEOUT, plain_get, plain_get_within, plain_get_within_capped,
 };
-use http::{fetch_bytes, fetch_oci, http_client};
-
-/// The lockfile format version.
-pub const LOCKFILE_VERSION: u32 = 1;
-
-/// One installed extension's lockfile record (SRDD's extension-tree
-/// paragraph: digest, source reference, approved-capability hash).
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct LockEntry {
-    /// `sha256:<hex>` of the component bytes; every later load uses it
-    /// and never re-resolves a moving tag (FR-DIST-8).
-    pub digest: String,
-    /// What it was resolved from: an OCI reference, an HTTPS URL, a
-    /// local path, or a `git+...` source (ADR-0010: same machinery,
-    /// different string).
-    pub source: String,
-    /// The pinned commit for git sources (gh #59); empty otherwise.
-    /// Old lockfiles load with empty (never pinned by commit).
-    #[serde(default)]
-    pub commit: String,
-    /// Hash of the manifest-declared grant set the user approved
-    /// (FR-DIST-7's comparison basis; ad hoc grants live in the user
-    /// grant store, not here).
-    pub grant_hash: String,
-    /// The extension's manifest `version`, for `ext list`/`ext info`.
-    pub version: String,
-    /// The manifest's ABI line, for the same display.
-    pub abi: String,
-}
-
-/// The extension lockfile at the top of the install tree.
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct Lockfile {
-    /// Format version.
-    #[serde(default = "lock_version")]
-    pub version: u32,
-    /// Extension name -> record.
-    #[serde(default)]
-    pub extensions: BTreeMap<String, LockEntry>,
-}
-
-fn lock_version() -> u32 {
-    LOCKFILE_VERSION
-}
-
-impl Lockfile {
-    /// Read a lockfile, absent meaning none installed yet.
-    pub fn load(path: &Path) -> Result<Lockfile, Error> {
-        let text = match std::fs::read_to_string(path) {
-            Ok(text) => text,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Lockfile::default());
-            }
-            Err(err) => return Err(Error::Io(err.to_string())),
-        };
-        let lock: Lockfile = serde_json::from_str(&text)
-            .map_err(|err| Error::Corrupt(format!("{}: {err}", path.display())))?;
-        if lock.version > LOCKFILE_VERSION {
-            return Err(Error::Corrupt(format!(
-                "{}: lockfile version {} is newer than this host understands ({LOCKFILE_VERSION})",
-                path.display(),
-                lock.version
-            )));
-        }
-        Ok(lock)
-    }
-
-    /// Write atomically: temp file, then rename (session-log format's
-    /// durability rule, applied to this store too).
-    pub fn save(&self, path: &Path) -> Result<(), Error> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let text = serde_json::to_string_pretty(self).map_err(|err| Error::Io(err.to_string()))?;
-        let temp = path.with_extension("json.tmp");
-        std::fs::write(&temp, text)?;
-        std::fs::rename(&temp, path)?;
-        Ok(())
-    }
-}
+pub use lockfile::{LOCKFILE_VERSION, LockEntry, Lockfile};
+pub use oci::{
+    ARCHIVE_TIMEOUT, OCI_MAX_BYTES, OCI_MAX_REDIRECTS, OCI_TIMEOUT, fetch_oci_public,
+    fetch_oci_within, fetch_oci_within_capped,
+};
+use oci::{fetch_bytes, fetch_oci};
+pub use proxy::{Proxies, ProxyEndpoint, ProxyStream, ProxyTcp, parse_proxy_for_tests};
+pub use store::InstallTree;
 
 /// One resolved artifact, verified and ready to install: the two files
 /// ADR-0010 says the archive carries, plus where they came from.
@@ -247,455 +198,6 @@ impl From<std::io::Error> for Error {
     fn from(err: std::io::Error) -> Self {
         Error::Io(err.to_string())
     }
-}
-
-// ---------------------------------------------------------------------------
-// The approved-grant hash (FR-DIST-7's comparison basis)
-// ---------------------------------------------------------------------------
-
-/// Canonical text for a TOML value: tables sorted by key at every depth,
-/// so two manifests declaring the same grants in a different written
-/// order hash the same, and any changed value hashes differently.
-fn canonical(value: &toml::Value) -> String {
-    match value {
-        toml::Value::Table(table) => {
-            let mut keys: Vec<&String> = table.keys().collect();
-            keys.sort();
-            let inner: Vec<String> = keys
-                .into_iter()
-                .map(|key| format!("{key}={}", canonical(&table[key])))
-                .collect();
-            format!("{{{}}}", inner.join(","))
-        }
-        toml::Value::Array(array) => {
-            let inner: Vec<String> = array.iter().map(canonical).collect();
-            format!("[{}]", inner.join(","))
-        }
-        other => other.to_string(),
-    }
-}
-
-/// Hash of a manifest's declared grant set: exactly what the consent
-/// screen showed, nothing else (SRDD's extension-tree paragraph: ad hoc
-/// grants live in the user grant store and stay out of this hash).
-pub fn grant_hash(manifest: &str) -> Result<String, Error> {
-    let parsed: toml::Value = manifest
-        .parse()
-        .map_err(|err| Error::Invalid(format!("manifest does not parse: {err}")))?;
-    let capabilities = parsed
-        .get("capabilities")
-        .cloned()
-        .unwrap_or(toml::Value::Table(toml::map::Map::new()));
-    Ok(format!(
-        "sha256:{:x}",
-        Sha256::digest(canonical(&capabilities).as_bytes())
-    ))
-}
-
-// ---------------------------------------------------------------------------
-// Consent text (capabilities catalog: the manifest is the consent surface)
-// ---------------------------------------------------------------------------
-
-/// One consent line per declared capability, in the catalog's words.
-pub fn consent_lines(manifest: &str) -> Result<Vec<String>, Error> {
-    let parsed: toml::Value = manifest
-        .parse()
-        .map_err(|err| Error::Invalid(format!("manifest does not parse: {err}")))?;
-    // ADR-0030: the package's `resources/` bag, shown as kind counts. A
-    // data-only extension has no capabilities but still shows its bag.
-    let resource_line = resource_consent(&parsed);
-    let Some(table) = parsed.get("capabilities").and_then(|c| c.as_table()) else {
-        return Ok(resource_line.into_iter().collect());
-    };
-    let mut lines = Vec::new();
-    let reason = |table: &toml::Value, key: &str| {
-        table
-            .get(key)
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string()
-    };
-    for (name, value) in table {
-        match name.as_str() {
-            "fs" => {
-                let mut scopes = Vec::new();
-                let mut writable = false;
-                if let Some(table) = value.as_table() {
-                    let mut keys: Vec<&String> = table.keys().collect();
-                    keys.sort();
-                    for scope in keys {
-                        let mode = table[scope].as_str().unwrap_or("read");
-                        if mode == "read-write" {
-                            writable = true;
-                        }
-                        scopes.push(match mode {
-                            "read-write" => format!("{scope} (read and write)"),
-                            other => format!("{scope} ({other})"),
-                        });
-                    }
-                }
-                lines.push(format!(
-                    "Files: {}. {}",
-                    scopes.join(", "),
-                    if writable {
-                        "It can read and write those files."
-                    } else {
-                        "It can read those files."
-                    }
-                ));
-            }
-            "process" => lines.push(format!(
-                "{} Each command still asks for your approval.",
-                reason(value, "reason")
-            )),
-            "pty" => lines.push(format!(
-                "{} This gives it an interactive terminal session.",
-                reason(value, "reason")
-            )),
-            "net" => {
-                if let Some(hosts) = value.get("hosts").and_then(|h| h.as_array()) {
-                    let names: Vec<String> = hosts
-                        .iter()
-                        .filter_map(|h| h.as_str())
-                        .map(|h| h.replace("*.", "any subdomain of "))
-                        .collect();
-                    lines.push(format!("Connect to {}. HTTPS only.", names.join(", and ")));
-                }
-            }
-            "net-local" => lines.push(
-                "Connect to a device on your local network, your own machine, \
-                 or your private tailnet."
-                    .to_string(),
-            ),
-            "oauth" => lines.push(
-                "Open a browser sign-in and receive the response on a local port.".to_string(),
-            ),
-            "credentials" => lines.push("Store and read its own saved credentials.".to_string()),
-            // Gh #170: an environment variable is often a secret, so the line
-            // names every key. "Read some variables" would be a consent screen
-            // that says nothing - the same reasoning that refuses a wildcard
-            // grant.
-            "env" => {
-                let mut keys: Vec<String> = value
-                    .get("keys")
-                    .and_then(|keys| keys.as_array())
-                    .map(|keys| {
-                        keys.iter()
-                            .filter_map(|key| key.as_str().map(str::to_string))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                keys.sort();
-                if keys.is_empty() {
-                    lines.push(
-                        "Read named environment variables, none of which are granted yet."
-                            .to_string(),
-                    );
-                } else {
-                    lines.push(format!(
-                        "Read {} from your environment.",
-                        keys.iter()
-                            .map(|key| format!("`{key}`"))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ));
-                }
-            }
-            "completion" => lines.push(format!(
-                "{} This lets it ask the current model for a response.",
-                reason(value, "reason")
-            )),
-            // ABI 0.6 (gh #77): nested tool calling through the host. The arm
-            // was missing while the WIT, the host manifest parser, and
-            // `docs/capabilities.md` all knew it, so installing any package
-            // that declared it failed at this match (gh #307). The
-            // schema-vocabulary guard test now fails at the growth point
-            // instead: a capability added to the schema without an arm here
-            // turns `every_schema_capability_has_a_consent_line` red.
-            "tools" => lines.push(format!(
-                "{} This lets it list, activate, and call other tools in the session.",
-                reason(value, "reason")
-            )),
-            "ui" => lines.push(
-                "Show a segment in the status line and content in the side panel.".to_string(),
-            ),
-            // Gh #363 / ADR-0049: the inbound HTTP grant. The reach is stated
-            // plainly - "on this machine" is not "private to LCA", and a user
-            // approving a local port should know that any program on it can
-            // connect, not just this agent. The port is not named here because
-            // it is not known until the session starts (the fallback may land
-            // elsewhere); the session's own notice names the one bound.
-            "serve-http" => lines.push(format!(
-                "{} Serve a web interface on this machine, reachable by any program on it.",
-                reason(value, "reason")
-            )),
-            other => {
-                return Err(Error::Invalid(format!(
-                    "unknown capability `{other}` in the manifest"
-                )));
-            }
-        }
-    }
-    if let Some(line) = resource_line {
-        lines.push(line);
-    }
-    Ok(lines)
-}
-
-/// The consent line for a manifest's declared resource kinds, when any.
-fn resource_consent(parsed: &toml::Value) -> Option<String> {
-    let kinds: Vec<String> = parsed
-        .get("resources")
-        .and_then(|v| v.as_array())?
-        .iter()
-        .filter_map(|item| item.as_str().map(str::to_string))
-        .collect();
-    if kinds.is_empty() {
-        return None;
-    }
-    Some(format!(
-        "Ship data files ({}). These are read by the extension, not code it runs.",
-        kinds.join(", ")
-    ))
-}
-
-// ---------------------------------------------------------------------------
-// The install tree (SRDD's extension-tree paragraph)
-// ---------------------------------------------------------------------------
-
-/// Where extensions install: `<root>` is the user data directory's
-/// `extensions` tree; the lockfile sits at its top (FR-DIST-6).
-pub struct InstallTree {
-    root: PathBuf,
-}
-
-/// The extension identifier rules the loader's manifest parser enforces
-/// (`lca_ext_host::Manifest::parse`), mirrored at the install tree so the
-/// name - taken from an attacker-influenced manifest and then joined onto
-/// the filesystem - can never escape the tree. See [`InstallTree::install`].
-pub fn validate_extension_name(name: &str) -> Result<(), Error> {
-    let ok = name.starts_with(|c: char| c.is_ascii_lowercase())
-        && (2..=64).contains(&name.len())
-        && name
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-        && !name.contains("--")
-        && !name.ends_with('-');
-    if ok {
-        Ok(())
-    } else {
-        Err(Error::Invalid(format!(
-            "`{name}` is not a valid extension name (lowercase letters, digits, and single hyphens; 2-64 chars)"
-        )))
-    }
-}
-
-impl InstallTree {
-    /// The tree under a root directory.
-    pub fn new(root: impl Into<PathBuf>) -> InstallTree {
-        InstallTree { root: root.into() }
-    }
-
-    /// The tree's root directory.
-    pub fn root(&self) -> &Path {
-        &self.root
-    }
-
-    /// Where the lockfile lives.
-    pub fn lockfile_path(&self) -> PathBuf {
-        self.root.join("lockfile.json")
-    }
-
-    /// The installed component's path, named by its content digest
-    /// (digest-as-filename is what makes load-by-digest structural,
-    /// FR-DIST-8).
-    pub fn component_path(&self, name: &str, digest: &str) -> PathBuf {
-        let file = digest.replace(':', "-");
-        self.root.join(name).join(format!("{file}.wasm"))
-    }
-
-    /// The installed manifest's path.
-    pub fn manifest_path(&self, name: &str) -> PathBuf {
-        self.root.join(name).join("extension.toml")
-    }
-
-    /// The denial journal `ext info` counts (FR-EXT-9).
-    pub fn denials_path(&self, name: &str) -> PathBuf {
-        self.root.join(name).join("denials.jsonl")
-    }
-
-    /// Write one verified artifact into the tree and record it.
-    pub fn install(&self, resolved: Resolved) -> Result<LockEntry, Error> {
-        let manifest = resolved.manifest.clone();
-        let value: toml::Value = manifest
-            .parse()
-            .map_err(|err| Error::Invalid(format!("manifest does not parse: {err}")))?;
-        let name = value
-            .get("name")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| Error::Invalid("manifest has no name".to_string()))?
-            .to_string();
-        // The name is joined onto the install tree, so it must satisfy the
-        // loader's identifier rules here, before any write: a manifest is
-        // attacker-influenced and `name = ".."` would otherwise escape the
-        // tree (the loader's `Manifest::parse` is the authority; this is the
-        // same rule, enforced at the write boundary too).
-        validate_extension_name(&name)?;
-        let entry = LockEntry {
-            digest: resolved.digest.clone(),
-            source: resolved.source.clone(),
-            commit: resolved.commit.clone(),
-            grant_hash: grant_hash(&manifest)?,
-            version: value
-                .get("version")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string(),
-            abi: value
-                .get("abi")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string(),
-        };
-        // ADR-0030: the package's `resources/` bag. Declared-vs-shipped
-        // strictness like `worlds`: every resource's top-level kind must be
-        // in the manifest's `resources`, checked before anything is written
-        // so a refused install leaves no partial tree.
-        let declared: Vec<String> = value
-            .get("resources")
-            .and_then(|v| v.as_array())
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(|item| item.as_str().map(str::to_string))
-                    .collect()
-            })
-            .unwrap_or_default();
-        for (rel, _) in &resolved.resources {
-            let kind = rel.split('/').next().unwrap_or_default();
-            if !declared.iter().any(|declared| declared == kind) {
-                return Err(Error::Invalid(format!(
-                    "resource `{rel}` has kind `{kind}`, which the manifest does not declare (add it to `resources = [...]`)"
-                )));
-            }
-        }
-        let dir = self.root.join(&name);
-        std::fs::create_dir_all(&dir)?;
-        std::fs::write(self.manifest_path(&name), &manifest)?;
-        if !resolved.component.is_empty() {
-            std::fs::write(
-                self.component_path(&name, &resolved.digest),
-                &resolved.component,
-            )?;
-        }
-        // A reinstall replaces the bag wholesale, so a file the new
-        // version dropped does not linger from the previous one.
-        let resources_dir = dir.join("resources");
-        let _ = std::fs::remove_dir_all(&resources_dir);
-        for (rel, bytes) in &resolved.resources {
-            let target = resources_dir.join(rel);
-            if let Some(parent) = target.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::write(&target, bytes)?;
-        }
-        let mut lock = Lockfile::load(&self.lockfile_path())?;
-        lock.extensions.insert(name, entry.clone());
-        lock.save(&self.lockfile_path())?;
-        Ok(entry)
-    }
-
-    /// Read an installed component by its recorded digest
-    /// (FR-DIST-8: the lockfile decides, no network is consulted).
-    pub fn component(&self, name: &str, digest: &str) -> Result<Vec<u8>, Error> {
-        std::fs::read(self.component_path(name, digest)).map_err(|err| {
-            Error::Io(format!(
-                "{}: {err}",
-                self.component_path(name, digest).display()
-            ))
-        })
-    }
-
-    /// Read an installed manifest.
-    pub fn manifest(&self, name: &str) -> Result<String, Error> {
-        std::fs::read_to_string(self.manifest_path(name))
-            .map_err(|err| Error::Io(format!("{}: {err}", self.manifest_path(name).display())))
-    }
-
-    /// Forget one extension: tree and lockfile record.
-    pub fn remove(&self, name: &str) -> Result<bool, Error> {
-        let mut lock = Lockfile::load(&self.lockfile_path())?;
-        let removed = lock.extensions.remove(name).is_some();
-        if removed {
-            lock.save(&self.lockfile_path())?;
-            let _ = std::fs::remove_dir_all(self.root.join(name));
-        }
-        Ok(removed)
-    }
-
-    /// Every installed record (name, entry), sorted by name.
-    pub fn list(&self) -> Result<Vec<(String, LockEntry)>, Error> {
-        Ok(Lockfile::load(&self.lockfile_path())?
-            .extensions
-            .into_iter()
-            .collect())
-    }
-
-    /// One record, when installed.
-    pub fn entry(&self, name: &str) -> Result<Option<LockEntry>, Error> {
-        Ok(Lockfile::load(&self.lockfile_path())?
-            .extensions
-            .get(name)
-            .cloned())
-    }
-
-    /// How many denials `ext info` should show (FR-EXT-9): lines in the
-    /// extension's journal; absent means none.
-    pub fn denial_count(&self, name: &str) -> usize {
-        std::fs::read_to_string(self.denials_path(name))
-            .map(|text| text.lines().filter(|line| !line.trim().is_empty()).count())
-            .unwrap_or(0)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Resolvers (FR-DIST-1/5/9): OCI, HTTPS archive, local path
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Capability comparison for the update prompt (FR-DIST-7)
-// ---------------------------------------------------------------------------
-
-fn capability_map(manifest: &toml::Value) -> BTreeMap<String, String> {
-    manifest
-        .get("capabilities")
-        .and_then(|c| c.as_table())
-        .map(|table| {
-            table
-                .iter()
-                .map(|(name, value)| (name.clone(), canonical(value)))
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// Whether updating to `new_manifest` would apply a capability the
-/// approved set does not already cover exactly: every new declaration
-/// must already be there, byte for byte (FR-DIST-7's prompt rule).
-/// Narrowing or removing a grant never prompts; the consent shown at
-/// install time stays what governs.
-pub fn update_widens_grants(approved_manifest: &str, new_manifest: &str) -> Result<bool, Error> {
-    let approved: toml::Value = approved_manifest
-        .parse()
-        .map_err(|err| Error::Invalid(format!("approved manifest does not parse: {err}")))?;
-    let new: toml::Value = new_manifest
-        .parse()
-        .map_err(|err| Error::Invalid(format!("new manifest does not parse: {err}")))?;
-    let old = capability_map(&approved);
-    let incoming = capability_map(&new);
-    Ok(incoming
-        .iter()
-        .any(|(name, value)| old.get(name) != Some(value)))
 }
 
 /// Check a claimed digest against the bytes (FR-DIST-3/4).
