@@ -708,11 +708,17 @@ mod image_crop_tests;
 #[path = "chat_meter_tests.rs"]
 mod meter_tests;
 #[cfg(test)]
+#[path = "chat_paste_tests.rs"]
+mod paste_tests;
+#[cfg(test)]
 #[path = "startup_header_wired_tests.rs"]
 mod startup_header_wired_tests;
 #[cfg(test)]
 #[path = "chat_tests.rs"]
 pub(crate) mod tests;
+#[cfg(test)]
+#[path = "chat_tests_support.rs"]
+mod tests_support;
 #[cfg(test)]
 #[path = "usage_tests.rs"]
 mod usage_tests;
