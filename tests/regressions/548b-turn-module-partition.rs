@@ -8,7 +8,8 @@
 //! two boundaries: request assembly (FR-CTX-2/3/4, FR-CACHE-5/6, FR-SESS-4) and
 //! persistence/compaction (FR-SESS-4, `docs/session-log-format.md`). This cycle
 //! moved those two boundaries to `turn/request.rs` and `turn/persist.rs` and left
-//! the loop alone; `mod.rs` is 511 lines.
+//! the loop alone; `mod.rs` is 525 lines (511 before the module-docs table that
+//! names the partition, which is the documentation this cycle owes).
 //!
 //! ## Why this needs a guard rather than a compiler
 //!
@@ -135,7 +136,7 @@ fn the_loop_stays_in_mod_rs_and_the_boundaries_stay_out_of_it() {
 }
 
 // Verifies: gh #548 phase 2 - the file keeps the headroom the split bought. 1,142
-// lines before, 511 after: this row fails long before a reviewer notices the
+// lines before, 525 after: this row fails long before a reviewer notices the
 // ceiling approaching again.
 #[test]
 fn the_loop_file_keeps_the_headroom_the_split_bought() {
@@ -143,7 +144,7 @@ fn the_loop_file_keeps_the_headroom_the_split_bought() {
     let mod_rs = lines_of(&module, "turn/mod.rs");
     assert!(
         mod_rs < 700,
-        "turn/mod.rs is {mod_rs} lines: the split left it at 511, and growth past ~700 \
+        "turn/mod.rs is {mod_rs} lines: the split left it at 525, and growth past ~700 \
          means a boundary has crept back in or the loop grew - either way it needs its \
          own cycle before gate 11 does"
     );
