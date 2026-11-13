@@ -2,8 +2,11 @@
 //!
 //! `KNOWN_KEYS` (what a `LCA_` environment variable can set), `Config::resolved()`
 //! (what `lca config` / `/settings` reports, FR-CFG-2), and the TOML
-//! application loop in `apply_toml_layer` are all hand-maintained mirrors of
-//! the same vocabulary. Two drifts were filed:
+//! application list are hand-maintained mirrors of the same vocabulary. (The
+//! third mirror was the apply loop inside `apply_toml_layer`; since gh #545
+//! phase 2 that list is the per-family `KEYS` in `src/toml_layer/`, and
+//! `tests/keys_agree.rs` pins all three against each other.) Two drifts were
+//! filed:
 //!
 //! 1. `skills.inject_matched` was missing from `KNOWN_KEYS`, so
 //!    `LCA_SKILLS_INJECT_MATCHED=true` silently did nothing (the environment
