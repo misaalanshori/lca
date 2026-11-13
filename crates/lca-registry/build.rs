@@ -103,7 +103,13 @@ fn main() {
         println!("cargo:warning=cannot use LCA_MODELS_CATALOG; falling through to the next source");
     }
 
-    let origin = choose(pinned, offline, ci, refresh, within_ceiling(&cache));
+    let origin = choose(ChooseInput {
+        pinned,
+        offline,
+        ci,
+        refresh,
+        cache_ok: within_ceiling(&cache),
+    });
     println!("cargo:warning={}", warning(origin, ci));
 
     let embed_from = match origin {

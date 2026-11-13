@@ -43,6 +43,7 @@ pub enum Origin {
 /// Unset, empty, `0`, `false` and `no` are off; anything else is on. Used for
 /// every switch here, so `CI=1`, `CI=true` and `GITHUB_ACTIONS=true` all mean
 /// the same thing and `CI=false` means what it says.
+#[must_use]
 pub fn flag(value: Option<&OsStr>) -> bool {
     value.is_some_and(|value| {
         let value = value.to_string_lossy().to_ascii_lowercase();
@@ -59,6 +60,7 @@ pub fn flag(value: Option<&OsStr>) -> bool {
 /// any upstream or CDN difference between the two fetches would change a
 /// compressed blob inside a 24 MB binary and fail the gate for a reason that
 /// has nothing to do with the commit.
+#[must_use]
 pub fn in_ci(ci: Option<&OsStr>, github_actions: Option<&OsStr>) -> bool {
     flag(ci) || flag(github_actions)
 }
@@ -74,6 +76,7 @@ pub fn in_ci(ci: Option<&OsStr>, github_actions: Option<&OsStr>) -> bool {
 /// because a build that sets `CARGO_TARGET_DIR` puts all of its state
 /// somewhere else: a cache left behind in `target/` would be invisible to the
 /// very invocation that set it, so every such build would refetch.
+#[must_use]
 pub fn cache_path(target_dir: Option<&OsStr>, workspace: &Path) -> PathBuf {
     let base = match target_dir {
         Some(dir) if !dir.is_empty() => {
@@ -87,6 +90,30 @@ pub fn cache_path(target_dir: Option<&OsStr>, workspace: &Path) -> PathBuf {
         _ => workspace.join("target"),
     };
     base.join(CACHE_FILE)
+}
+
+/// The five axes that decide which catalog source a build embeds (gh #562).
+///
+/// Five adjacent `bool`s were the old signature, and a call site read
+/// `choose(false, false, true, true, true)`: a transposition there silently
+/// changes which source a release embeds, and no reviewer can see it. Named
+/// fields make each axis say what it is.
+///
+/// Every field defaults to `false`, which is a **development build with no
+/// cache**: [`Self::default`] plus the axes you mean is the intended way to
+/// build one, and [`choose`] reads them by name.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ChooseInput {
+    /// The `LCA_MODELS_CATALOG` variable named a file, and it stripped.
+    pub pinned: bool,
+    /// `LCA_OFFLINE` (or the equivalent) says do not reach the network.
+    pub offline: bool,
+    /// This build is running in CI (NFR-17: the stub, deterministically).
+    pub ci: bool,
+    /// The caller asked to refetch rather than trust a warm cache.
+    pub refresh: bool,
+    /// A cached artifact exists and is inside the size ceiling.
+    pub cache_ok: bool,
 }
 
 /// Pick the source, in precedence order.
@@ -105,20 +132,22 @@ pub fn cache_path(target_dir: Option<&OsStr>, workspace: &Path) -> PathBuf {
 ///   halves of the double build identical.
 /// * `refresh` never reaches the network in CI, because the CI arm returns
 ///   before `refresh` is read.
-pub fn choose(pinned: bool, offline: bool, ci: bool, refresh: bool, cache_ok: bool) -> Origin {
-    if pinned {
+#[must_use]
+pub fn choose(input: ChooseInput) -> Origin {
+    if input.pinned {
         return Origin::Pinned;
     }
-    if offline || ci {
+    if input.offline || input.ci {
         return Origin::Stub;
     }
-    if cache_ok && !refresh {
+    if input.cache_ok && !input.refresh {
         return Origin::Cache;
     }
     Origin::Network
 }
 
 /// The one `cargo:warning` line naming what a build embedded.
+#[must_use]
 pub fn warning(origin: Origin, ci: bool) -> String {
     match origin {
         Origin::Pinned => "model catalog embedded from LCA_MODELS_CATALOG".to_string(),

@@ -172,7 +172,6 @@ impl LocalPattern {
 
 /// Parse a `net-local` manifest entry, refusing anything outside the
 /// canonical local ranges (FR-PERM-14).
-#[allow(clippy::expect_used)] // a /32 (v4) or /128 (v6) prefix is always valid; the constructor only rejects out-of-range prefixes.
 pub fn parse_local_pattern(value: &str) -> Result<LocalPattern, PatternError> {
     let invalid = |reason: &str| PatternError::Invalid {
         value: value.to_string(),
@@ -184,11 +183,11 @@ pub fn parse_local_pattern(value: &str) -> Result<LocalPattern, PatternError> {
     if value == "*.local" {
         return Ok(LocalPattern::Mdns);
     }
+    // A bare address is the single-host network: `IpNet` implements
+    // `From<IpAddr>` as `/32` for v4 and `/128` for v6, so there is no fallible
+    // prefix constructor here to `expect` on (gh #558).
     let net = match IpAddr::from_str(value) {
-        Ok(IpAddr::V4(v4)) => IpNet::from(ipnet::Ipv4Net::new(v4, 32).expect("prefix 32 is valid")),
-        Ok(IpAddr::V6(v6)) => {
-            IpNet::from(ipnet::Ipv6Net::new(v6, 128).expect("prefix 128 is valid"))
-        }
+        Ok(addr) => IpNet::from(addr),
         Err(_) => IpNet::from_str(value).map_err(|err| invalid(&err.to_string()))?,
     };
 

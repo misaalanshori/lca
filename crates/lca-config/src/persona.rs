@@ -35,7 +35,13 @@
 use std::collections::BTreeMap;
 
 /// One persona: a named bundle.
+///
+/// **`#[non_exhaustive]` (gh #546).** The four fields are one bundle - the whole
+/// point of #412 is that a persona is applied atomically or not at all - so a
+/// caller outside this crate builds one through [`Persona::new`] rather than a
+/// literal, and a field added later does not break the crates that read one.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub struct Persona {
     /// The model id this persona selects. Empty means "leave the model alone" -
     /// a persona may be thinking-only or loadout-only.
@@ -53,6 +59,26 @@ pub struct Persona {
 }
 
 impl Persona {
+    /// A persona with every field named.
+    ///
+    /// `model: ""` means "leave the model alone", `thinking: None` means "leave
+    /// the level alone", `tools: None` means "leave the loadout alone", and
+    /// `instructions: None` means "no prologue" - a persona may carry any subset.
+    #[must_use]
+    pub fn new(
+        model: impl Into<String>,
+        thinking: Option<Option<String>>,
+        tools: Option<Vec<String>>,
+        instructions: Option<String>,
+    ) -> Self {
+        Persona {
+            model: model.into(),
+            thinking,
+            tools,
+            instructions,
+        }
+    }
+
     /// One line naming everything this persona carries, for `/persona`'s listing.
     ///
     /// A bundle whose contents you cannot see is a bundle you cannot trust, so the
@@ -190,6 +216,31 @@ impl Personas {
     }
 }
 
+/// Why a `[personas]` table was refused (gh #546).
+///
+/// The rendered text is the message this parser has always produced, character
+/// for character: `lca config` prints it, so a typed error that reworded it
+/// would be a behaviour change wearing hygiene clothes. The type exists so
+/// callers can tell a refusal apart from any other `String` without parsing
+/// prose.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
+pub struct PersonaError(String);
+
+impl PersonaError {
+    /// The refusal message, exactly as a user reads it.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for PersonaError {
+    fn from(message: String) -> Self {
+        PersonaError(message)
+    }
+}
+
 /// Parse the `[personas]` table from one config layer.
 ///
 /// Shape only: each entry must be a table with a known field set, and a
@@ -197,14 +248,19 @@ impl Personas {
 /// provider default). A misspelled field is an **error**, not a silent ignore -
 /// `[personas.plan] modle = "x"` would otherwise apply a persona with no model and
 /// look like the model switch failed.
-pub fn parse_personas(value: &toml::Value) -> Result<BTreeMap<String, Persona>, String> {
+///
+/// # Errors
+///
+/// [`PersonaError`] naming the persona and the problem; the text is the copy
+/// this function has always produced.
+pub fn parse_personas(value: &toml::Value) -> Result<BTreeMap<String, Persona>, PersonaError> {
     let table = value
         .as_table()
         .ok_or_else(|| format!("expected a table of personas, got {}", type_name(value)))?;
     let mut persona_by_name = BTreeMap::new();
     for (name, entry) in table {
         if name.trim().is_empty() {
-            return Err("a persona needs a name".to_string());
+            return Err("a persona needs a name".to_string().into());
         }
         let fields = entry.as_table().ok_or_else(|| {
             format!(
@@ -255,7 +311,7 @@ pub fn parse_personas(value: &toml::Value) -> Result<BTreeMap<String, Persona>, 
                             format!("persona `{name}`: every `tools` entry must be a string")
                         })?;
                         if tool.trim().is_empty() {
-                            return Err(format!("persona `{name}`: an empty tool name"));
+                            return Err(format!("persona `{name}`: an empty tool name").into());
                         }
                         tools.push(tool.trim().to_string());
                     }
@@ -275,7 +331,8 @@ pub fn parse_personas(value: &toml::Value) -> Result<BTreeMap<String, Persona>, 
                     return Err(format!(
                         "persona `{name}`: unknown field `{other}`; accepted: model, thinking, \
                          tools, instructions"
-                    ));
+                    )
+                    .into());
                 }
             }
         }
@@ -283,7 +340,8 @@ pub fn parse_personas(value: &toml::Value) -> Result<BTreeMap<String, Persona>, 
             return Err(format!(
                 "persona `{name}` sets nothing; it needs at least one of model, thinking, \
                  tools, instructions"
-            ));
+            )
+            .into());
         }
         persona_by_name.insert(name.clone(), persona);
     }

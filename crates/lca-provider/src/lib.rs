@@ -61,22 +61,32 @@ impl Provider for NoProvider {
     ) -> BoxFuture<Result<(), ProviderError>> {
         let name = self.name.clone();
         Box::pin(async move {
-            Err(ProviderError {
-                message: format!(
+            Err(ProviderError::new(
+                format!(
                     "No model is available: no enabled provider answers `{name}`. \
                      Use /login to sign in to one, or `lca ext enable <name>`."
                 ),
-                class: "no-model",
-                retryable: false,
-            })
+                "no-model",
+                false,
+            ))
         })
     }
 }
 
 /// How a provider call failed. `retryable` decides whether the core retries
 /// (FR-CORE-6) and feeds the headless `error` envelope's class.
+///
+/// **`#[non_exhaustive]` (gh #560).** A struct literal outside this crate could
+/// pair `class: "auth"` with `retryable: true` - a failure that says "permanent,
+/// do not retry" and "retry me" at once - and every consumer downstream
+/// (`StopReason`, the headless envelope, the retry loop) would believe both.
+/// The three fields are one classification, so the only way to build one from
+/// outside is [`ProviderError::new`], which keeps the class vocabulary open
+/// (`&'static str` is a documented contract, `docs/headless.md`) while making
+/// the inconsistent combination unrepresentable.
 #[derive(Debug, Clone, thiserror::Error)]
 #[error("{message}")]
+#[non_exhaustive]
 pub struct ProviderError {
     /// What went wrong, human-readable.
     pub message: String,
@@ -87,31 +97,35 @@ pub struct ProviderError {
 }
 
 impl ProviderError {
-    /// A retryable transport failure.
-    pub fn transport(message: impl Into<String>) -> Self {
+    /// A failure, classified.
+    ///
+    /// The class is a **string, not an enum**, because `docs/headless.md` pins
+    /// its values as the headless envelope's contract: a kit may report a class
+    /// the core has not enumerated (`no-model`, a wire kit's own `rate-limit`)
+    /// and the envelope must still carry it. `retryable` is the caller's
+    /// judgement of that same fact.
+    #[must_use]
+    pub fn new(message: impl Into<String>, class: &'static str, retryable: bool) -> Self {
         ProviderError {
             message: message.into(),
-            class: "transport",
-            retryable: true,
+            class,
+            retryable,
         }
+    }
+
+    /// A retryable transport failure.
+    pub fn transport(message: impl Into<String>) -> Self {
+        ProviderError::new(message, "transport", true)
     }
 
     /// A permanent authentication failure.
     pub fn auth(message: impl Into<String>) -> Self {
-        ProviderError {
-            message: message.into(),
-            class: "auth",
-            retryable: false,
-        }
+        ProviderError::new(message, "auth", false)
     }
 
     /// A permanent invalid-request failure.
     pub fn invalid(message: impl Into<String>) -> Self {
-        ProviderError {
-            message: message.into(),
-            class: "invalid",
-            retryable: false,
-        }
+        ProviderError::new(message, "invalid", false)
     }
 }
 

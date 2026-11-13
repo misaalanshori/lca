@@ -30,7 +30,7 @@ pub use keys::{
 mod keybindings;
 
 pub use keybindings::load_keybindings_file;
-pub use persona::{Persona, PersonaSource, Personas, parse_personas};
+pub use persona::{Persona, PersonaError, PersonaSource, Personas, parse_personas};
 
 /// Where a resolved configuration value came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

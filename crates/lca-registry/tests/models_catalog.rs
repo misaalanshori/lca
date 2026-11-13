@@ -263,7 +263,7 @@ fn os(value: &str) -> &OsStr {
 // the pipeline than on a developer's machine.
 #[test]
 fn a_ci_build_chooses_the_stub_and_never_the_network() {
-    use build_support::{Origin, choose, in_ci};
+    use build_support::{ChooseInput, Origin, choose, in_ci};
 
     assert!(in_ci(Some(os("1")), None), "CI alone is enough");
     assert!(
@@ -283,29 +283,64 @@ fn a_ci_build_chooses_the_stub_and_never_the_network() {
         // and with or without a refresh request.
         for (refresh, cache_ok) in [(false, true), (false, false), (true, true), (true, false)] {
             assert_eq!(
-                choose(false, false, ci, refresh, cache_ok),
+                choose(ChooseInput {
+                    ci,
+                    refresh,
+                    cache_ok,
+                    ..ChooseInput::default()
+                }),
                 Origin::Stub,
                 "a CI build resolves to the stub (refresh={refresh}, cache_ok={cache_ok})"
             );
         }
         // And `refresh` in CI still cannot reach the network.
-        assert_ne!(choose(false, false, ci, true, false), Origin::Network);
+        assert_ne!(
+            choose(ChooseInput {
+                ci,
+                refresh: true,
+                ..ChooseInput::default()
+            }),
+            Origin::Network
+        );
     }
 
     // The development path is unchanged: cache, then network.
-    assert_eq!(choose(false, false, false, false, true), Origin::Cache);
-    assert_eq!(choose(false, false, false, false, false), Origin::Network);
     assert_eq!(
-        choose(false, false, false, true, true),
+        choose(ChooseInput {
+            cache_ok: true,
+            ..ChooseInput::default()
+        }),
+        Origin::Cache
+    );
+    assert_eq!(choose(ChooseInput::default()), Origin::Network);
+    assert_eq!(
+        choose(ChooseInput {
+            refresh: true,
+            cache_ok: true,
+            ..ChooseInput::default()
+        }),
         Origin::Network,
         "refresh ignores a warm cache"
     );
     // An explicit offline switch wins over the cache outside CI too.
-    assert_eq!(choose(false, true, false, false, true), Origin::Stub);
+    assert_eq!(
+        choose(ChooseInput {
+            offline: true,
+            cache_ok: true,
+            ..ChooseInput::default()
+        }),
+        Origin::Stub
+    );
     // A usable pinned input beats everything.
     for (offline, ci) in [(false, false), (true, false), (false, true), (true, true)] {
         assert_eq!(
-            choose(true, offline, ci, false, true),
+            choose(ChooseInput {
+                pinned: true,
+                offline,
+                ci,
+                cache_ok: true,
+                ..ChooseInput::default()
+            }),
             Origin::Pinned,
             "a pinned input is used even offline and in CI (offline={offline}, ci={ci})"
         );

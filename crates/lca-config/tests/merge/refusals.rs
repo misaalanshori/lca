@@ -147,11 +147,11 @@ fn custom_extension_catalogs_parse_and_refuse_junk() {
     .expect("load");
     assert_eq!(
         config.extensions_catalogs(),
-        &[lca_config::CustomCatalog {
-            id: "acme".to_string(),
-            name: "Acme Corp".to_string(),
-            url: "https://example.invalid/catalog.toml".to_string(),
-        }],
+        &[lca_config::CustomCatalog::new(
+            "acme",
+            "Acme Corp",
+            "https://example.invalid/catalog.toml",
+        )],
         "the catalog reads back with all three fields"
     );
     write(

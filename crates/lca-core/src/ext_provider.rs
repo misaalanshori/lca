@@ -203,19 +203,15 @@ impl Provider for ExtensionProvider {
                     message,
                     class,
                     retryable,
-                } => ProviderError {
-                    message: format!("extension call failed: {extension}: {message}"),
+                } => ProviderError::new(
+                    format!("extension call failed: {extension}: {message}"),
                     class,
                     retryable,
-                },
+                ),
                 other => {
                     let message = other.to_string();
                     let (class, retryable) = classify_message(&message);
-                    ProviderError {
-                        message,
-                        class,
-                        retryable,
-                    }
+                    ProviderError::new(message, class, retryable)
                 }
             })
         })

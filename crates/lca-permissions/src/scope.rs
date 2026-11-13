@@ -57,6 +57,7 @@ pub struct OAuthSettings {
 /// asked it to. A manifest that could name a routable address would be a
 /// different capability with a different consent.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ServeHttpSettings {
     /// The path prefix the extension answered for, as declared. Phase A
     /// gives every granted extension the whole of its own namespace, so
@@ -70,6 +71,31 @@ pub struct ServeHttpSettings {
     pub websocket: bool,
 }
 
+/// Why a `[capabilities.serve-http]` declaration was refused (gh #558).
+///
+/// A mount point has two rules, and both are checked by
+/// [`ServeHttpSettings::parse`]: a prefix is concatenated onto the extension's
+/// namespace, so it must start with `/` and must not walk (`..`). The rules
+/// live in `parse` and nowhere else, so the error is the type that says which
+/// one an author broke - and it is a type rather than a `String` because this
+/// is a library API (coding standards).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum ServeHttpError {
+    /// The prefix does not start with `/`.
+    #[error("`{prefix}` must start with `/`")]
+    MissingLeadingSlash {
+        /// The prefix as declared.
+        prefix: String,
+    },
+    /// The prefix contains `..`, so it is a path rather than a mount point.
+    #[error("`{prefix}` may not contain `..`; a prefix is a mount point, not a path")]
+    ParentTraversal {
+        /// The prefix as declared.
+        prefix: String,
+    },
+}
+
 impl ServeHttpSettings {
     /// Parse the manifest's `[capabilities.serve-http]` table.
     ///
@@ -77,14 +103,23 @@ impl ServeHttpSettings {
     /// concatenated onto the namespace, and an empty one would make
     /// `/<session>/<ext>` and `/<session>/<ext>/` two different routes for
     /// the same thing.
-    pub fn parse(path_prefix: &str, websocket: bool) -> Result<ServeHttpSettings, String> {
+    ///
+    /// # Errors
+    ///
+    /// [`ServeHttpError::MissingLeadingSlash`] or
+    /// [`ServeHttpError::ParentTraversal`], naming the prefix as declared. The
+    /// rendered text is the message this function has always produced - a user
+    /// reads it through `LoadError::InvalidManifest`.
+    pub fn parse(path_prefix: &str, websocket: bool) -> Result<ServeHttpSettings, ServeHttpError> {
         if !path_prefix.starts_with('/') {
-            return Err(format!("`{path_prefix}` must start with `/`"));
+            return Err(ServeHttpError::MissingLeadingSlash {
+                prefix: path_prefix.to_string(),
+            });
         }
         if path_prefix.contains("..") {
-            return Err(format!(
-                "`{path_prefix}` may not contain `..`; a prefix is a mount point, not a path"
-            ));
+            return Err(ServeHttpError::ParentTraversal {
+                prefix: path_prefix.to_string(),
+            });
         }
         Ok(ServeHttpSettings {
             path_prefix: path_prefix.to_string(),

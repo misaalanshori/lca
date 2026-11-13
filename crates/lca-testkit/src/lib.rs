@@ -338,29 +338,70 @@ impl FakeBuilder {
         self
     }
 
-    /// Build the provider; panics when a turn lacks its usage record.
-    pub fn build(self) -> FakeProvider {
-        let turns = self
-            .turns
-            .into_iter()
-            .enumerate()
-            .map(|(index, (mut events, usage))| {
-                let usage = usage
-                    .unwrap_or_else(|| panic!("turn {index} is missing a mandatory usage record"));
-                events.push(Step::Event(StreamEvent::Usage { usage }));
-                events
-            })
-            .collect::<Vec<_>>();
-        FakeProvider {
+    /// Build the provider, reporting a turn without its usage record.
+    ///
+    /// The per-turn `Usage` is mandatory (`docs/testing-plan.md` §3), so this is
+    /// the fallible boundary a harness or a property generator can call without
+    /// catching an unwind - the case where the *absence* of usage is what the
+    /// caller is asserting about.
+    ///
+    /// # Errors
+    ///
+    /// [`FakeBuildError`] naming the turn index that has no usage record.
+    pub fn try_build(self) -> Result<FakeProvider, FakeBuildError> {
+        let mut turns = Vec::with_capacity(self.turns.len());
+        for (index, (mut events, usage)) in self.turns.into_iter().enumerate() {
+            let Some(usage) = usage else {
+                return Err(FakeBuildError { turn: index });
+            };
+            events.push(Step::Event(StreamEvent::Usage { usage }));
+            turns.push(events);
+        }
+        Ok(FakeProvider {
             turns: Mutex::new(VecDeque::from(turns)),
             call_count: std::sync::atomic::AtomicUsize::new(0),
             last_request: Mutex::new(None),
             requests: Mutex::new(Vec::new()),
+        })
+    }
+
+    /// Build the provider; panics when a turn lacks its usage record.
+    ///
+    /// # Panics
+    ///
+    /// When a scripted turn carries no [`TurnBuilder::usage`] record. The
+    /// message names the turn's index. Callers that want to assert on the
+    /// absence use [`Self::try_build`] instead.
+    ///
+    /// **`#[track_caller]` (gh #568)** so the panic location is the test's own
+    /// `.build()` line rather than this file: the whole point of the panic is
+    /// to point at the test that forgot the usage.
+    #[track_caller]
+    pub fn build(self) -> FakeProvider {
+        match self.try_build() {
+            Ok(provider) => provider,
+            Err(err) => panic!("{err}"),
         }
     }
 }
 
+/// A scripted turn that cannot be built into a provider (gh #568).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FakeBuildError {
+    /// The zero-based index of the turn with no usage record.
+    pub turn: usize,
+}
+
+impl std::fmt::Display for FakeBuildError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "turn {} is missing a mandatory usage record", self.turn)
+    }
+}
+
+impl std::error::Error for FakeBuildError {}
+
 /// A deterministic provider: scripted turns, no network, no credentials.
+#[derive(Debug)]
 pub struct FakeProvider {
     turns: Mutex<VecDeque<Vec<Step>>>,
     call_count: std::sync::atomic::AtomicUsize,

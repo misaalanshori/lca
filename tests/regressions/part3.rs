@@ -756,3 +756,23 @@ mod turn_module_partition;
 // (the one claim the behavioural suite cannot see), and the headroom.
 #[path = "564-store-module-partition.rs"]
 mod store_module_partition;
+
+// Gh #560 / #558 / #546 / #562 / #568 - one class: a public API a caller can
+// construct in a state its own validator would have refused, a `String` error
+// escaping a library crate, and a panic where a `Result` belongs. Each of the
+// five rows asserts the new *contract*, not the new shape, and each fails on the
+// pre-cycle tree.
+#[path = "560-provider-error-cannot-lie.rs"]
+mod provider_error_cannot_lie;
+
+#[path = "558-serve-http-settings-enforce-mount-rule.rs"]
+mod serve_http_settings_enforce_mount_rule;
+
+#[path = "546-parse-personas-typed-error.rs"]
+mod parse_personas_typed_error;
+
+#[path = "562-choose-reads-as-named-axes.rs"]
+mod choose_reads_as_named_axes;
+
+#[path = "568-try-build-names-the-turn.rs"]
+mod try_build_names_the_turn;

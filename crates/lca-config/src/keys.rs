@@ -44,7 +44,12 @@ pub fn is_valid_catalog_id(id: &str) -> bool {
 /// display name, and the catalog document URL. Parsed from the
 /// `extensions.catalogs` array; the hub merges these behind the
 /// official catalog with their own provenance.
+///
+/// **`#[non_exhaustive]` (gh #546)**: callers build one through
+/// [`CustomCatalog::new`], so a field added later (a TTL, a signature) does not
+/// break exhaustive construction outside this crate.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct CustomCatalog {
     /// Stable id (`acme`); names the TTL cache file.
     pub id: String,
@@ -52,6 +57,18 @@ pub struct CustomCatalog {
     pub name: String,
     /// The catalog document URL.
     pub url: String,
+}
+
+impl CustomCatalog {
+    /// A custom catalog declaration.
+    #[must_use]
+    pub fn new(id: impl Into<String>, name: impl Into<String>, url: impl Into<String>) -> Self {
+        CustomCatalog {
+            id: id.into(),
+            name: name.into(),
+            url: url.into(),
+        }
+    }
 }
 
 /// The shapes `markdown.codeblock_border` accepts (gh #32).

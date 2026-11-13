@@ -32,7 +32,11 @@ pub(super) fn parse(
             // session fact (the model, the level for that model, the tool
             // registry) and an untrusted project's personas never apply at
             // all - both belong to the caller, not the loader.
-            let personas = crate::persona::parse_personas(value).map_err(&invalid)?;
+            // Gh #546: `parse_personas` now reports a typed `PersonaError`; its
+            // rendered text is the same refusal, so the layer's error is unchanged
+            // (`ConfigError::InvalidValue` naming the key and the layer).
+            let personas =
+                crate::persona::parse_personas(value).map_err(|err| invalid(err.to_string()))?;
             Ok(TypedValue::Personas(personas))
         }
         "extensions.catalogs" => {

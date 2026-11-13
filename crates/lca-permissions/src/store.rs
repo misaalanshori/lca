@@ -626,7 +626,12 @@ impl GrantStore {
     }
 
     /// Persist an extension's project-specific enablement change.
-    #[allow(clippy::expect_used)] // serializing a `serde_json::Value` into JSON is infallible.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Io`] naming the path when the directory, the temp file, or the
+    /// rename fails, or when the store cannot be serialized (a `serde_json::Value`
+    /// serializes infallibly in practice, but reporting it beats a panic).
     pub fn save(&mut self) -> Result<(), Error> {
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent).map_err(|source| Error::Io {
@@ -634,7 +639,10 @@ impl GrantStore {
                 source,
             })?;
         }
-        let bytes = serde_json::to_vec_pretty(&self.data).expect("store serializes");
+        let bytes = serde_json::to_vec_pretty(&self.data).map_err(|err| Error::Io {
+            path: self.path.clone(),
+            source: std::io::Error::other(err),
+        })?;
         let temp = self.path.with_extension("json.tmp");
         {
             let mut file = std::fs::File::create(&temp).map_err(|source| Error::Io {

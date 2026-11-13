@@ -35,7 +35,7 @@ pub use rules::{RuleDecision, RuleScope, RuleSet, RuleView, wildcard_match};
 // file so this one stays under the workspace's 1,200-line ceiling.
 pub use scope::{
     FsMode, OAuthSettings, ScopeGrant, ScopeRoots, ScopeViolation, ScopeViolationKind,
-    ServeHttpSettings,
+    ServeHttpError, ServeHttpSettings,
 };
 
 // The store and its prompt seam (ADR-0006, ADR-0042): re-exported so the
