@@ -118,6 +118,24 @@ fn smoke_outcome(exit: i32, output: &str) -> SmokeOutcome {
                 .to_string(),
         );
     }
+    // Gh #595: entitlement is the *other* environment state, and the live run
+    // of 2026-11-13 failed on it - `HTTP 403: An active OpenCode Go subscription
+    // is required to use OpenCode Go` - while the same key answered 200 on
+    // `/zen/go/v1/models`. Keyed on the API's **wording**, never the status
+    // alone: a bare 403 is a refused key and must keep failing below, or
+    // widening this skip would hide a real auth defect.
+    let not_entitled = (lower.contains("403") || lower.contains("http 403"))
+        && (lower.contains("subscription")
+            || lower.contains("entitlement")
+            || lower.contains("not entitled"));
+    if not_entitled {
+        return SmokeOutcome::Skipped(
+            "the provider reports a required subscription (HTTP 403): the key is \
+             valid but the account is not entitled to this model, which is \
+             account state, not a regression"
+                .to_string(),
+        );
+    }
     let detail = output
         .lines()
         .rev()
@@ -164,4 +182,53 @@ fn a_usage_limit_response_decides_a_named_skip_and_real_errors_still_fail() {
         "a rate limit that does not name the quota still fails"
     );
     assert_eq!(smoke_outcome(0, ""), SmokeOutcome::Passed);
+
+    // ---- gh #595: the entitlement 403 ------------------------------------
+    //
+    // The exact envelope the live workflow hit on 2026-11-13, quoted from its
+    // log: the key is valid (it answers 200 on `/zen/go/v1/models`) and the
+    // account simply lacks the subscription, which NFR-23 says must skip.
+    let entitled = r#"{"class":"auth","message":"extension call failed: openai-compatible: provider returned HTTP 403: An active OpenCode Go subscription is required to use OpenCode Go","retryable":false,"type":"error"}"#;
+    let SmokeOutcome::Skipped(reason) = smoke_outcome(3, entitled) else {
+        panic!("an entitlement 403 must decide a skip");
+    };
+    assert!(
+        reason.contains("subscription") && reason.contains("not entitled"),
+        "the skip says WHICH state it was (entitlement, not quota): {reason}"
+    );
+    assert!(
+        !reason.contains("quota"),
+        "and does not confuse it with the quota state: {reason}"
+    );
+
+    // **The negative case this whole change exists to keep**: a bare 403 with
+    // no entitlement wording is a refused key, not an account state, and it
+    // must still fail - otherwise widening the skip would swallow a real auth
+    // defect. This is the row that stops the widening becoming a lie.
+    let bare =
+        r#"{"class":"auth","message":"provider returned HTTP 403: forbidden","retryable":false}"#;
+    let SmokeOutcome::Failed(reason) = smoke_outcome(3, bare) else {
+        panic!("a bare 403 with no entitlement wording must still fail");
+    };
+    assert!(
+        reason.contains("exit 3") && reason.contains("403"),
+        "and the failure names itself: {reason}"
+    );
+    // A 401 (bad key) is unaffected by the new arm.
+    assert!(
+        matches!(
+            smoke_outcome(3, r#"{"message":"HTTP 401: invalid api key"}"#),
+            SmokeOutcome::Failed(_)
+        ),
+        "a rejected key still fails"
+    );
+    // And a bare 403 whose wording is unrelated to entitlement stays a failure,
+    // so the arm keys on the API's words rather than on `403` alone.
+    assert!(
+        matches!(
+            smoke_outcome(3, "HTTP 403: request forbidden by policy"),
+            SmokeOutcome::Failed(_)
+        ),
+        "403 alone never skips"
+    );
 }
