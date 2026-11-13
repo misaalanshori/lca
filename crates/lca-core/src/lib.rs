@@ -2,11 +2,14 @@
 //! execution, retry with backoff, and cancellation that keeps every record
 //! already written (ADR-0014, `docs/flows.md`).
 //!
-//! The turn loop's cohesive sections live in sibling modules (S2):
-//! `assemble` (message assembly and attachments), `compact` (the strategy
-//! invocation), and `turn` (the loop, provider call, and tool dispatch).
-//! This module holds the configuration, the sink trait, and the `Agent`
-//! boundary.
+//! The turn loop's cohesive sections live in sibling modules (S2). Three are
+//! module directories, partitioned by the concern each file owns (gh #548):
+//! `assemble/` (message assembly in `mod.rs`, attachment staging in
+//! `attachments.rs`), `compact/` (the trigger and strategy call in `mod.rs`,
+//! the cut point in `cut.rs`, the iterative summary in `summary.rs`, file
+//! tracking in `files.rs`), and `turn/` (the loop in `mod.rs`, request
+//! assembly, persistence, tool execution, and streaming). This module holds
+//! the configuration, the sink trait, and the `Agent` boundary.
 //!
 //! The pre-tool hook seam (FR-CORE-10) runs before the permission layer;
 //! compaction invocation (`FR-SESS-4`) arrives in Phase 4.

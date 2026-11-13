@@ -248,7 +248,8 @@ fn the_flag_runs_its_listeners_inside_cancel() {
 // twin can quietly lose its `AlreadyExists` arm again.
 #[test]
 fn both_attachment_writers_treat_a_create_race_as_success() {
-    let source = read("crates/lca-core/src/assemble.rs");
+    // Gh #548 phase 3: the two writers live in `assemble/attachments.rs`.
+    let source = read("crates/lca-core/src/assemble/attachments.rs");
     let sync_start = source
         .find("fn write_attachment(")
         .expect("the sync writer exists");

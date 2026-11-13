@@ -1,9 +1,10 @@
 //! IO hygiene (gh #153): the named async paths never block on the
 //! filesystem. A source-text pin: `std::fs::` must not appear inside
 //! `assemble_request` (the turn's per-round assembly) or any `async
-//! fn` in `assemble.rs` (attachment staging and tool-image
-//! persistence). Attachment bytes arrive via `tokio::fs` prefetch and
-//! skill scans through the cached path instead.
+//! fn` in `assemble.rs`'s attachment staging (gh #548 phase 3 moved it
+//! to `assemble/attachments.rs`; the rows now read that file). Attachment
+//! bytes arrive via `tokio::fs` prefetch and skill scans through the cached
+//! path instead.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 
@@ -161,7 +162,8 @@ fn no_blocking_fs_in_the_named_async_paths() {
         !span.contains("std::fs::"),
         "assemble_request blocks on the filesystem"
     );
-    let assemble = read_source("assemble.rs");
+    // Gh #548 phase 3: attachment staging is its own file under `assemble/`.
+    let assemble = read_source("assemble/attachments.rs");
     for name in ["store_image_bytes_async", "read_attachment_async"] {
         let span = async_fn_body(&assemble, name).expect("async fn exists");
         assert!(

@@ -4,7 +4,7 @@
 //! Iterative re-compaction carries the previous summary forward as a
 //! `custom` record whose `custom_type` is `lca_protocol::PREVIOUS_SUMMARY_TYPE`
 //! (`"previous-summary"`), with the summary text under `data.text` - the shape
-//! `crates/lca-core/src/compact.rs::previous_summary_marker` builds.
+//! `crates/lca-core/src/compact/summary.rs::previous_summary_marker` builds.
 //!
 //! `mechanical_summary` selected those records correctly and then decoded each
 //! one with `record_text("compaction", body)` - a hardcoded kind. The
