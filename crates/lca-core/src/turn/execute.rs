@@ -6,10 +6,11 @@ use std::sync::Arc;
 
 use lca_protocol::{
     DispatchError, FORMAT_VERSION, HookAction, Record, StopReason, ToolCall, ToolResult,
-    ToolResultStatus, TurnEvent, TurnOutcome, Usage,
+    ToolResultStatus, TurnEvent, Usage,
 };
 use lca_tools::{CancelFlag, ToolExecutor};
 
+use super::{TurnStep, step};
 use crate::{Agent, TurnSink};
 
 /// Deferred discovery, served by the turn (gh #77, pi's deferred):
@@ -106,9 +107,6 @@ impl Agent<'_> {
     /// draining (gh #77), then result composition (gh #45). The
     /// result record, the sink event, and the `post-tool-use` hook
     /// all belong here so no caller can forget one.
-    // TurnOutcome grew with Usage's cost buckets past clippy's preferred
-    // Err size; boxing it would ripple through every caller for a lint.
-    #[allow(clippy::result_large_err)]
     pub(super) async fn run_tool_call(
         &mut self,
         call: &ToolCall,
@@ -116,12 +114,12 @@ impl Agent<'_> {
         cancel: &CancelFlag,
         server: &mut NestedServer,
         turn_usage: &mut Usage,
-    ) -> Result<(), TurnOutcome> {
+    ) -> TurnStep<()> {
         // The full path without the transcript tail: mutation,
         // verdict, execution, composition (gh #45 + #77). Nested
         // calls serve through this; the transcript tail (persist,
         // finish event, observe) stays the caller's.
-        let (effective, result) = self.run_call_full(call, 0, sink, cancel, server).await?;
+        let (effective, result) = step!(self.run_call_full(call, 0, sink, cancel, server).await);
         self.finish_tool_call(&effective, result, sink, server, turn_usage)
             .await
     }
@@ -130,7 +128,6 @@ impl Agent<'_> {
     /// FR-CORE-10 path). Emits `ToolStarted` once the call is final,
     /// so denied and hook-refused calls stay visible; the finish
     /// event and the record belong to the caller.
-    #[allow(clippy::result_large_err)]
     async fn run_call_full(
         &mut self,
         call: &ToolCall,
@@ -138,7 +135,7 @@ impl Agent<'_> {
         sink: &mut dyn TurnSink,
         cancel: &CancelFlag,
         server: &mut NestedServer,
-    ) -> Result<(ToolCall, ToolResult), TurnOutcome> {
+    ) -> TurnStep<(ToolCall, ToolResult)> {
         let registry = self.config.extensions.clone();
         // Gh #45's mutation chain runs before the verdict: every
         // handler sees the previous handler's arguments.
@@ -149,7 +146,7 @@ impl Agent<'_> {
                 sink.on_event(TurnEvent::ToolStarted(effective.clone()));
                 let denied = ToolResult::denied(call.call_id.clone(), reason);
                 let composed = registry.compose_tool_result(&effective, denied).await;
-                return Ok((effective, composed));
+                return TurnStep::Continue((effective, composed));
             }
         };
         let mut hook_errors: Vec<(String, String)> = Vec::new();
@@ -163,7 +160,7 @@ impl Agent<'_> {
         };
         for (extension, detail) in hook_errors {
             if let Err(err) = self.record_extension_event(&extension, "error", &detail, sink) {
-                return Err(self.fail(StopReason::Error, err));
+                return TurnStep::End(self.fail(StopReason::Error, err));
             }
         }
 
@@ -199,12 +196,20 @@ impl Agent<'_> {
             }
             HookAction::Replace(replacement) => {
                 effective = replacement;
-                self.execute_after_permission(&effective, &registry, sink, cancel, server, depth)
-                    .await?
+                step!(
+                    self.execute_after_permission(
+                        &effective, &registry, sink, cancel, server, depth
+                    )
+                    .await
+                )
             }
             HookAction::Allow => {
-                self.execute_after_permission(&effective, &registry, sink, cancel, server, depth)
-                    .await?
+                step!(
+                    self.execute_after_permission(
+                        &effective, &registry, sink, cancel, server, depth
+                    )
+                    .await
+                )
             }
         };
         // Gh #45's composition runs over the executed result: the
@@ -220,7 +225,7 @@ impl Agent<'_> {
                 result.status
             ),
         );
-        Ok((effective, result))
+        TurnStep::Continue((effective, result))
     }
 
     /// Serve one nested request (gh #77): assign `<parent>/<n>`, run
@@ -272,8 +277,8 @@ impl Agent<'_> {
             parent_call_id: Some(parent_call_id.clone()),
         };
         let result = match Box::pin(self.run_call_full(&call, depth, sink, cancel, server)).await {
-            Ok((_, result)) => result,
-            Err(_) => {
+            TurnStep::Continue((_, result)) => result,
+            TurnStep::End(_) => {
                 // The turn itself failed (the store, not the tool):
                 // answer the error and let the top-level path surface it.
                 refused("the turn failed while serving the nested call".to_string());
@@ -334,7 +339,6 @@ impl Agent<'_> {
     /// `post-tool-use` still sees every call, composed or not).
     /// Shared by top-level calls and the mutation-blocked path so a
     /// denied-before-permission call records exactly like one.
-    #[allow(clippy::result_large_err)]
     async fn finish_tool_call(
         &mut self,
         effective: &ToolCall,
@@ -342,7 +346,7 @@ impl Agent<'_> {
         sink: &mut dyn TurnSink,
         server: &mut NestedServer,
         turn_usage: &mut Usage,
-    ) -> Result<(), TurnOutcome> {
+    ) -> TurnStep<()> {
         let registry = self.config.extensions.clone();
         // #49: this call's nested-completion usage attributes here
         // (programmatic callers read `extras`) and joins the turn
@@ -374,7 +378,7 @@ impl Agent<'_> {
             match crate::assemble::store_image_bytes_async(self.session, &image.bytes).await {
                 Ok(hash) => image_hashes.push(hash),
                 Err(err) => {
-                    return Err(self.fail(
+                    return TurnStep::End(self.fail(
                         StopReason::Error,
                         format!("cannot store the tool image: {err}"),
                     ));
@@ -400,7 +404,7 @@ impl Agent<'_> {
                 images: image_hashes,
             },
         ) {
-            return Err(self.fail(
+            return TurnStep::End(self.fail(
                 StopReason::Error,
                 format!("cannot write to the session log: {err}"),
             ));
@@ -426,12 +430,11 @@ impl Agent<'_> {
             );
         }
         registry.on_post_tool_use(effective, &result).await;
-        Ok(())
+        TurnStep::Continue(())
     }
 
     /// The permission layer plus execution (FR-TOOL-3's path), shared by
     /// allow and replace, top-level and nested alike.
-    #[allow(clippy::result_large_err)]
     async fn execute_after_permission(
         &mut self,
         call: &ToolCall,
@@ -440,7 +443,7 @@ impl Agent<'_> {
         cancel: &CancelFlag,
         server: &mut NestedServer,
         depth: u32,
-    ) -> Result<ToolResult, TurnOutcome> {
+    ) -> TurnStep<ToolResult> {
         // Phase 2 seam note: hooks have already run by the time this is
         // called (FR-CORE-10: hook before permission).
         //
@@ -464,16 +467,16 @@ impl Agent<'_> {
         if let Some(schema) = schema
             && let Err(reason) = lca_provider::validate_against_schema(&schema, &call.arguments)
         {
-            return Ok(ToolResult::error(
+            return TurnStep::Continue(ToolResult::error(
                 call.call_id.clone(),
                 format!("invalid arguments for `{}`: {reason}", call.name),
             ));
         }
         if let Some(action) = self.tools.required_permission(call) {
             match self.authorize(call, &action) {
-                Ok(None) => {}
-                Ok(Some(denied)) => return Ok(denied),
-                Err(outcome) => return Err(outcome),
+                TurnStep::Continue(None) => {}
+                TurnStep::Continue(Some(denied)) => return TurnStep::Continue(denied),
+                TurnStep::End(outcome) => return TurnStep::End(outcome),
             }
         }
 
@@ -481,8 +484,10 @@ impl Agent<'_> {
         // report them. The next request declares the newly active.
         if call.name == crate::registry::TOOL_SEARCH_NAME {
             let started = std::time::Instant::now();
-            let result = Ok(self.run_tool_search(call, registry));
-            return result.map(|result| stamp_duration(result, started));
+            return TurnStep::Continue(stamp_duration(
+                self.run_tool_search(call, registry),
+                started,
+            ));
         }
 
         // Extension tool or built-in: one dispatch table, no mode
@@ -498,7 +503,7 @@ impl Agent<'_> {
             let executed = self
                 .execute_with_nested(handle.execute_tool(call), depth, sink, cancel, server)
                 .await;
-            return Ok(match executed {
+            return TurnStep::Continue(match executed {
                 Ok(result) => stamp_duration(result, started),
                 Err(err) => {
                     let event = match err {
@@ -508,7 +513,7 @@ impl Agent<'_> {
                     if let Err(write_err) =
                         self.record_extension_event(handle.name(), event, &err.to_string(), sink)
                     {
-                        return Err(self.fail(StopReason::Error, write_err));
+                        return TurnStep::End(self.fail(StopReason::Error, write_err));
                     }
                     ToolResult::error(call.call_id.clone(), err.to_string())
                 }
@@ -549,7 +554,7 @@ impl Agent<'_> {
                 chunk: tail,
             });
         }
-        Ok(result)
+        TurnStep::Continue(result)
     }
 
     /// Deferred discovery served (gh #77): match, activate the hits,
@@ -610,12 +615,11 @@ impl Agent<'_> {
     /// authorize call only, record the decision, and report a denial as a
     /// denied result. `Ok(None)` means proceed; `Ok(Some(result))` is the
     /// denial to return.
-    #[allow(clippy::result_large_err)]
     fn authorize(
         &mut self,
         call: &ToolCall,
         action: &lca_permissions::Action,
-    ) -> Result<Option<ToolResult>, TurnOutcome> {
+    ) -> TurnStep<Option<ToolResult>> {
         // The grant store is shared with every capability engine and the
         // login flow, so it is locked for the authorize call only, never
         // for the whole turn: an extension's own permission check during
@@ -624,7 +628,7 @@ impl Agent<'_> {
         let mut guard = match grants.lock() {
             Ok(guard) => guard,
             Err(_) => {
-                return Err(self.fail(
+                return TurnStep::End(self.fail(
                     StopReason::Error,
                     "permission store lock is poisoned".to_string(),
                 ));
@@ -649,7 +653,9 @@ impl Agent<'_> {
                 // later reader has when the turn itself only says it
                 // failed.
                 tracing::warn!(%err, "permission store error; failing the turn");
-                return Err(self.fail(StopReason::Error, format!("permission store error: {err}")));
+                return TurnStep::End(
+                    self.fail(StopReason::Error, format!("permission store error: {err}")),
+                );
             }
         };
         // A prompted answer and a yolo answer both belong in the log; a
@@ -682,8 +688,8 @@ impl Agent<'_> {
             } else {
                 format!("The user denied this action: {}", action.display())
             };
-            return Ok(Some(ToolResult::denied(call.call_id.clone(), reason)));
+            return TurnStep::Continue(Some(ToolResult::denied(call.call_id.clone(), reason)));
         }
-        Ok(None)
+        TurnStep::Continue(None)
     }
 }

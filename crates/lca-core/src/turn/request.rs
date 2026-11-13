@@ -27,6 +27,7 @@ use lca_provider::{CompletionRequest, ProtocolError};
 use lca_session::ViewMode;
 use lca_tools::ToolExecutor;
 
+use super::TurnStep;
 use crate::assemble::{COMPACTION_SUMMARY_PREFIX, assemble_with, message_text, stable_fingerprint};
 use crate::{Agent, TurnSink};
 
@@ -38,7 +39,6 @@ impl Agent<'_> {
     /// first round (FR-SESS-4), build the message list, run the transform
     /// chain and the skills merge, narrow the stable prefix (FR-CACHE-6),
     /// and collect the tool specs and extras.
-    #[allow(clippy::result_large_err)]
     pub(super) async fn assemble_request(
         &self,
         input: &str,
@@ -46,7 +46,7 @@ impl Agent<'_> {
         first_round: bool,
         sink: &mut dyn TurnSink,
         active_seen: &mut u64,
-    ) -> Result<CompletionRequest, TurnOutcome> {
+    ) -> TurnStep<CompletionRequest> {
         // Gh #77's transcript entry: a mid-turn active-set change
         // records before the next model request (pi appends tool and
         // prompt changes at the same boundary), so the log shows
@@ -67,7 +67,7 @@ impl Agent<'_> {
                     data: serde_json::json!({ "active": active, "discovered": discovered }),
                 },
             ) {
-                return Err(self.fail(
+                return TurnStep::End(self.fail(
                     StopReason::Error,
                     format!("cannot record the tool change: {err}"),
                 ));
@@ -76,7 +76,9 @@ impl Agent<'_> {
         let mut records = match self.store.read_with(self.session, ViewMode::Display) {
             Ok(outcome) => outcome.records,
             Err(err) => {
-                return Err(self.fail(StopReason::Error, format!("cannot read the session: {err}")));
+                return TurnStep::End(
+                    self.fail(StopReason::Error, format!("cannot read the session: {err}")),
+                );
             }
         };
         // FR-SESS-4: one threshold check per turn, before the first
@@ -86,8 +88,8 @@ impl Agent<'_> {
             records = match self.store.read_with(self.session, ViewMode::Display) {
                 Ok(outcome) => outcome.records,
                 Err(err) => {
-                    return Err(
-                        self.fail(StopReason::Error, format!("cannot re-read the log: {err}"))
+                    return TurnStep::End(
+                        self.fail(StopReason::Error, format!("cannot re-read the log: {err}")),
                     );
                 }
             };
@@ -124,7 +126,7 @@ impl Agent<'_> {
                     status: TurnStatus::Error,
                     stop_reason: StopReason::Error,
                 });
-                return Err(TurnOutcome {
+                return TurnStep::End(TurnOutcome {
                     status: TurnStatus::Error,
                     stop_reason: StopReason::Error,
                     usage: Usage::default(),
@@ -162,7 +164,7 @@ impl Agent<'_> {
         // narrow the boundary for no reason.
         let durable_end = self.durable_end(&messages, stable_cap);
         let stable_prefix = self.narrow_stable_prefix(&messages[..durable_end], stable_cap, sink);
-        Ok(self.build_request(messages, stable_prefix))
+        TurnStep::Continue(self.build_request(messages, stable_prefix))
     }
 
     /// Gh #217's turn-boundary instruction check: re-scan the
@@ -342,15 +344,14 @@ impl Agent<'_> {
 
     /// A response that ended with an open tool call and no completed call is
     /// a protocol failure, not an empty turn.
-    #[allow(clippy::result_large_err)]
     pub(super) fn reject_incomplete(
         &self,
         response: &CallResponse,
         sink: &mut dyn TurnSink,
         usage: &Usage,
-    ) -> Result<(), TurnOutcome> {
+    ) -> TurnStep<()> {
         if response.protocol_errors.is_empty() {
-            return Ok(());
+            return TurnStep::Continue(());
         }
         for error in &response.protocol_errors {
             tracing::warn!(%error, "provider protocol error");
@@ -373,13 +374,13 @@ impl Agent<'_> {
                 status: TurnStatus::Error,
                 stop_reason: StopReason::Error,
             });
-            return Err(TurnOutcome {
+            return TurnStep::End(TurnOutcome {
                 status: TurnStatus::Error,
                 stop_reason: StopReason::Error,
                 usage: usage.clone(),
                 error: Some(message),
             });
         }
-        Ok(())
+        TurnStep::Continue(())
     }
 }

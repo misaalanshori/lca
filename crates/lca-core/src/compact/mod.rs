@@ -47,19 +47,43 @@ mod cut_tests;
 /// comes from the compaction world's strategy (FR-SESS-5 - there is no
 /// built-in summarizing path), the durable record is the host's, and
 /// the candidate range is the caller's to choose.
-// Seven inputs: the five context handles plus candidate, the phase-3
-// meta bundle, and reason - one struct for what the caller chose.
-#[allow(clippy::too_many_arguments)]
-pub(super) async fn compact_candidate(
-    store: &SessionStore,
-    session: &Session,
-    extensions: &ExtensionRegistry,
-    completion_backend: Option<&Arc<dyn lca_tools::CompletionBackend>>,
-    candidate: Vec<Record>,
-    meta: CompactMeta,
-    sink: &mut dyn TurnSink,
-    reason: &str,
-) -> Result<String, String> {
+/// What one compaction call carries (gh #549): the five context handles the
+/// strategy needs, the candidate range, the phase-3 meta bundle, and the reason.
+///
+/// Eight positional arguments under a `too_many_arguments` allowance was the
+/// same review hazard `#562` fixed for `choose`: three of these are handles to
+/// different stores and two are `&str`, so a transposition compiles and
+/// compacts the wrong range. Named fields say which is which.
+pub(super) struct CompactRequest<'a> {
+    /// The session store the summary record is written through.
+    pub(super) store: &'a SessionStore,
+    /// The session being compacted.
+    pub(super) session: &'a Session,
+    /// The registry the strategy comes from (FR-SESS-5).
+    pub(super) extensions: &'a ExtensionRegistry,
+    /// The turn's nested-completion backend, when one is installed (#49).
+    pub(super) completion_backend: Option<&'a Arc<dyn lca_tools::CompletionBackend>>,
+    /// The records the caller chose to replace.
+    pub(super) candidate: Vec<Record>,
+    /// The range and its accounting (phase 3's meta bundle).
+    pub(super) meta: CompactMeta,
+    /// Where the compaction events are surfaced.
+    pub(super) sink: &'a mut dyn TurnSink,
+    /// Why this compaction is running (`threshold`, `overflow`, `manual`).
+    pub(super) reason: &'a str,
+}
+
+pub(super) async fn compact_candidate(request: CompactRequest<'_>) -> Result<String, String> {
+    let CompactRequest {
+        store,
+        session,
+        extensions,
+        completion_backend,
+        candidate,
+        meta,
+        sink,
+        reason,
+    } = request;
     let Some(strategy) = extensions.compaction_strategy().cloned() else {
         return Err(
             "no compaction extension is enabled: compaction runs through a compaction-world extension (FR-SESS-5)"
@@ -258,21 +282,21 @@ pub fn compact_now(
             // blocks the compaction the user asked for.
             let _ = store.append(&session, change);
         }
-        compact_candidate(
-            &store,
-            &session,
-            &extensions,
-            completion_backend.as_ref(),
+        compact_candidate(CompactRequest {
+            store: &store,
+            session: &session,
+            extensions: &extensions,
+            completion_backend: completion_backend.as_ref(),
             candidate,
-            CompactMeta {
+            meta: CompactMeta {
                 first_kept_id: None,
                 read_files,
                 modified_files,
                 system_prompt,
             },
-            &mut NullSink,
-            "manual",
-        )
+            sink: &mut NullSink,
+            reason: "manual",
+        })
         .await
     })
 }

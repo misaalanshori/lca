@@ -8,7 +8,7 @@
 
 use lca_protocol::{ChatMessage, ContentBlock, MessageRole, Record, Usage};
 
-pub use self::attachments::{Attachment, StagedAttachment};
+pub use self::attachments::{Attachment, AttachmentError, StagedAttachment};
 pub use self::attachments::{
     attachment_hashes, read_attachment_async, stage_image, store_image_bytes,
     store_image_bytes_async,
@@ -25,6 +25,7 @@ mod vocabulary_tests;
 
 /// The resolved message list plus the stable-prefix boundary (FR-CACHE-5).
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct Assembled {
     /// Messages, oldest first, system prompt leading.
     pub messages: Vec<ChatMessage>,

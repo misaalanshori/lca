@@ -45,6 +45,7 @@ mod tools;
 /// A namespace and the tools grouped under it (gh #77's grouping:
 /// related tools list under one heading with the description).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct NamespaceView {
     /// The grouping name.
     pub name: String,

@@ -13,6 +13,7 @@ mod tests;
 /// allowlist replaces the default, `+`/`-` deltas modify it, excludes
 /// and `--no-builtin-tools` subtract after everything else.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ToolSelection {
     /// Names for `set_active_tools` (the registry ignores unknowns,
     /// reported separately for the warning).
@@ -260,6 +261,7 @@ const TRUNCATED_MARKER: &str = "… (input truncated at 1 MiB)";
 /// A planned first message (gh #71, pi's `buildInitialMessage`): stdin,
 /// then `@file` text, then the first CLI message joined with no
 /// separator, with the remaining messages riding behind.
+#[non_exhaustive]
 pub struct PlannedMessages {
     /// `@path` arguments in order (the `@` stripped).
     pub files: Vec<String>,

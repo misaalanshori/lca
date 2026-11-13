@@ -67,6 +67,7 @@ pub fn output_mode(cli: &Cli) -> Result<OutputMode, String> {
 /// separately for attach staging, and which streams are redirected
 /// (pi's print-mode rule).
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct Invocation {
     /// Trimmed piped stdin (`None` on a terminal, when empty, or in RPC
     /// mode, which owns stdin).

@@ -160,6 +160,7 @@ pub fn thinking_level_change_record(
 /// rule that routing follows the model makes the profile part of the
 /// answer, not a detail the caller has to look up again.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ResolvedModel {
     /// The model id to use (never a label, G2).
     pub id: String,

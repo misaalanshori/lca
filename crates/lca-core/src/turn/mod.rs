@@ -55,6 +55,45 @@ pub(super) struct CallResponse {
     pub(super) truncated: bool,
 }
 
+/// What a turn step did: carry on, or end the turn with its outcome (gh
+/// #549).
+///
+/// These helpers used to return `Result<T, TurnOutcome>` and spell an
+/// early exit as `Err(outcome)` - "the turn is over, here is its outcome",
+/// which is not a failure at all. That is why nine `result_large_err`
+/// suppressions existed: `TurnOutcome` carries a whole `Usage`, so clippy saw
+/// a large error type everywhere a *successful* early exit was written as an
+/// `Err`.
+///
+/// A turn ending is not an error, so it does not travel as one. This enum says
+/// exactly the two things that can happen and nothing else: there is no error
+/// channel in it, so an end-of-turn cannot be mistaken for a failure, and a
+/// real failure still travels the way it always did (as a `TurnOutcome` with
+/// `status: Error`, built by `fail`).
+#[derive(Debug)]
+pub(super) enum TurnStep<T> {
+    /// Keep going with this value.
+    Continue(T),
+    /// The turn is over; this is its outcome.
+    End(TurnOutcome),
+}
+
+/// `?` for [`TurnStep`], usable from the sibling modules this module owns.
+///
+/// Deliberately a macro rather than the `?` operator: the point is that there
+/// is no `Err` to write at a call site, so an end-of-turn reads as one.
+macro_rules! step {
+    ($step:expr) => {
+        match $step {
+            $crate::turn::TurnStep::Continue(value) => value,
+            $crate::turn::TurnStep::End(outcome) => {
+                return $crate::turn::TurnStep::End(outcome);
+            }
+        }
+    };
+}
+pub(super) use step;
+
 /// Why one completion call did not produce a response.
 pub(super) enum CallFail {
     Cancelled,
@@ -159,7 +198,7 @@ impl Agent<'_> {
 
             // ADR-0038: steered messages join the turn's input at this
             // model-call boundary (never mid-stream).
-            if let Err(outcome) = self.drain_steer(sink) {
+            if let TurnStep::End(outcome) = self.drain_steer(sink) {
                 return outcome;
             }
 
@@ -167,8 +206,8 @@ impl Agent<'_> {
                 .assemble_request(input, &turn_record_id, rounds == 0, sink, &mut active_seen)
                 .await
             {
-                Ok(request) => request,
-                Err(outcome) => return outcome,
+                TurnStep::Continue(request) => request,
+                TurnStep::End(outcome) => return outcome,
             };
 
             let mut response = match self.provider_call(request, sink, cancel).await {
@@ -264,7 +303,7 @@ impl Agent<'_> {
             // error is a *consequence* of the cut, not an independent fault, and
             // reporting both would be the double-report this issue warns about.
             if response.truncated {
-                if let Err(outcome) = self.persist_response(&response, sink).await {
+                if let TurnStep::End(outcome) = self.persist_response(&response, sink).await {
                     return outcome;
                 }
                 sink.on_event(TurnEvent::TurnEnded {
@@ -278,10 +317,10 @@ impl Agent<'_> {
                     error: None,
                 };
             }
-            if let Err(outcome) = self.reject_incomplete(&response, sink, &turn_usage) {
+            if let TurnStep::End(outcome) = self.reject_incomplete(&response, sink, &turn_usage) {
                 return outcome;
             }
-            if let Err(outcome) = self.persist_response(&response, sink).await {
+            if let TurnStep::End(outcome) = self.persist_response(&response, sink).await {
                 return outcome;
             }
 
@@ -370,7 +409,7 @@ impl Agent<'_> {
             // Sequential execution inside one turn (FR-CONC-2).
             for call in &response.calls {
                 tool_calls += 1;
-                if let Err(outcome) = self
+                if let TurnStep::End(outcome) = self
                     .run_tool_call(call, sink, cancel, &mut nested, &mut turn_usage)
                     .await
                 {
@@ -403,8 +442,7 @@ impl Agent<'_> {
     /// user message does, so the stable cache prefix keeps its value.
     /// Gh #76: `OneAtATime` drains the first waiting message and leaves
     /// the rest queued, in order; `All` flushes everything (historical).
-    #[allow(clippy::result_large_err)]
-    fn drain_steer(&self, sink: &mut dyn TurnSink) -> Result<(), TurnOutcome> {
+    fn drain_steer(&self, sink: &mut dyn TurnSink) -> TurnStep<()> {
         let steered: Vec<lca_protocol::QueuedMessage> = {
             let mut queue = super::lock(&self.config.steer);
             match self.config.steering_mode {
@@ -434,7 +472,7 @@ impl Agent<'_> {
                     queue: Some(marker.clone()),
                 },
             ) {
-                return Err(self.fail(
+                return TurnStep::End(self.fail(
                     StopReason::Error,
                     format!("cannot write to the session log: {err}"),
                 ));
@@ -444,7 +482,7 @@ impl Agent<'_> {
                 mode: marker,
             });
         }
-        Ok(())
+        TurnStep::Continue(())
     }
 }
 

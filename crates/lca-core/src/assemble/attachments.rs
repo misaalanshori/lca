@@ -17,6 +17,39 @@ pub struct Attachment {
     pub bytes: Vec<u8>,
 }
 
+/// Why an attachment could not be read, sniffed, or stored (gh #549).
+///
+/// `lca-core`'s attachment API is public, and the SRDD's coding standards ask
+/// libraries for typed errors instead of bare `String`s. **The copy is the
+/// contract**: the `read` tool's refusal reaches a model and `/attach`'s reaches
+/// the user, so this type renders *exactly* the sentence each `format!`
+/// produced: the migration replaced the carrier, not the words. `From<String>`
+/// is what keeps that true - the call sites convert, they do not re-describe.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttachmentError(pub String);
+
+impl AttachmentError {
+    /// The refusal message, exactly as a caller reads it.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for AttachmentError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for AttachmentError {}
+
+impl From<String> for AttachmentError {
+    fn from(message: String) -> Self {
+        AttachmentError(message)
+    }
+}
+
 /// The result of staging one image file as a session attachment.
 #[derive(Debug, Clone)]
 pub struct StagedAttachment {
@@ -34,14 +67,17 @@ pub struct StagedAttachment {
 /// the file name is the digest (no traversal), the media type is sniffed and
 /// never taken from a user-controlled name, and the bytes are never
 /// executable. A non-image is refused rather than attached as opaque text.
-pub fn stage_image(session: &Session, path: &std::path::Path) -> Result<StagedAttachment, String> {
-    let bytes =
-        std::fs::read(path).map_err(|err| format!("cannot read {}: {err}", path.display()))?;
+pub fn stage_image(
+    session: &Session,
+    path: &std::path::Path,
+) -> Result<StagedAttachment, AttachmentError> {
+    let bytes = std::fs::read(path)
+        .map_err(|err| AttachmentError(format!("cannot read {}: {err}", path.display())))?;
     let Some(media_type) = lca_protocol::sniff_image_media_type(&bytes) else {
-        return Err(format!(
+        return Err(AttachmentError(format!(
             "{} is not a recognized image (png, jpeg, gif, or webp)",
             path.display()
-        ));
+        )));
     };
     let hash = store_image_bytes(session, &bytes)?;
     let stub = format!(
@@ -57,11 +93,11 @@ pub fn stage_image(session: &Session, path: &std::path::Path) -> Result<StagedAt
 /// already be a known image (the `read` tool and the clipboard path
 /// both validate before calling); the media type is re-sniffed at
 /// resolve time, so only bytes are stored (gh #113).
-pub fn store_image_bytes(session: &Session, bytes: &[u8]) -> Result<String, String> {
+pub fn store_image_bytes(session: &Session, bytes: &[u8]) -> Result<String, AttachmentError> {
     let hash = lca_tools::sha256_hex(bytes);
     let dir = session.dir().join("attachments");
     std::fs::create_dir_all(&dir)
-        .map_err(|err| format!("cannot create {}: {err}", dir.display()))?;
+        .map_err(|err| AttachmentError(format!("cannot create {}: {err}", dir.display())))?;
     let target = dir.join(&hash);
     // No `exists()`-then-write: the `create_new` inside is the only check,
     // and it is atomic with the create (gh #547). A pre-existing file for
@@ -73,17 +109,20 @@ pub fn store_image_bytes(session: &Session, bytes: &[u8]) -> Result<String, Stri
 /// [`store_image_bytes`] for async callers (gh #153): the same write
 /// through `tokio::fs`, so tool-result persistence never blocks a
 /// runtime thread.
-pub async fn store_image_bytes_async(session: &Session, bytes: &[u8]) -> Result<String, String> {
+pub async fn store_image_bytes_async(
+    session: &Session,
+    bytes: &[u8],
+) -> Result<String, AttachmentError> {
     use tokio::io::AsyncWriteExt;
     let hash = lca_tools::sha256_hex(bytes);
     let dir = session.dir().join("attachments");
     tokio::fs::create_dir_all(&dir)
         .await
-        .map_err(|err| format!("cannot create {}: {err}", dir.display()))?;
+        .map_err(|err| AttachmentError(format!("cannot create {}: {err}", dir.display())))?;
     let target = dir.join(&hash);
     if !tokio::fs::try_exists(&target)
         .await
-        .map_err(|err| format!("cannot stat {}: {err}", target.display()))?
+        .map_err(|err| AttachmentError(format!("cannot stat {}: {err}", target.display())))?
     {
         // Owner-only (0600 on Unix), like the sync writer: the
         // `create_new` miss below races a parallel identical store,
@@ -96,9 +135,9 @@ pub async fn store_image_bytes_async(session: &Session, bytes: &[u8]) -> Result<
         options.mode(0o600);
         match options.open(&target).await {
             Ok(mut file) => {
-                file.write_all(bytes)
-                    .await
-                    .map_err(|err| format!("cannot write {}: {err}", target.display()))?;
+                file.write_all(bytes).await.map_err(|err| {
+                    AttachmentError(format!("cannot write {}: {err}", target.display()))
+                })?;
                 // Gh #547: **flush before returning the hash**, because on Unix
                 // `tokio::fs` hands the write to a blocking thread and its
                 // `Drop` only *schedules* the close. Measured on this box: 100
@@ -108,12 +147,17 @@ pub async fn store_image_bytes_async(session: &Session, bytes: &[u8]) -> Result<
                 // outlive the call that reported success. A reader that ran
                 // immediately (the assembly prefetch below does exactly that)
                 // was reading whatever the scheduler had managed.
-                file.flush()
-                    .await
-                    .map_err(|err| format!("cannot write {}: {err}", target.display()))?;
+                file.flush().await.map_err(|err| {
+                    AttachmentError(format!("cannot write {}: {err}", target.display()))
+                })?;
             }
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(err) => return Err(format!("cannot create {}: {err}", target.display())),
+            Err(err) => {
+                return Err(AttachmentError(format!(
+                    "cannot create {}: {err}",
+                    target.display()
+                )));
+            }
         }
     }
     Ok(hash)
@@ -128,7 +172,7 @@ pub async fn store_image_bytes_async(session: &Session, bytes: &[u8]) -> Result<
 /// is the sync twin of `store_image_bytes_async`, which already ignored it;
 /// the two raced because they disagreed (`exists()`-then-create here, a bare
 /// `create_new` there).
-fn write_attachment(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+fn write_attachment(path: &std::path::Path, bytes: &[u8]) -> Result<(), AttachmentError> {
     use std::io::Write;
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
@@ -140,7 +184,12 @@ fn write_attachment(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> 
     let mut file = match options.open(path) {
         Ok(file) => file,
         Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => return Ok(()),
-        Err(err) => return Err(format!("cannot create {}: {err}", path.display())),
+        Err(err) => {
+            return Err(AttachmentError(format!(
+                "cannot create {}: {err}",
+                path.display()
+            )));
+        }
     };
     file.write_all(bytes)
         .map_err(|err| format!("cannot write {}: {err}", path.display()))?;

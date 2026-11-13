@@ -133,6 +133,7 @@ pub fn spawn(enabled: bool, notify: Option<Arc<OnceLock<String>>>) {
 /// What `lca update` runs (gh #50, pi's `pi update` flags): the plan is
 /// pure so every flag combination is a unit row; the jobs below run it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct UpdatePlan {
     /// Report only: no install, no extension writes, no refetch.
     pub check_only: bool,

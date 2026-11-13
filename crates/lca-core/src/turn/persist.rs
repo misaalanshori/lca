@@ -19,26 +19,24 @@
 //! same items are `crate::compact` and `crate::assemble`. The bodies are
 //! otherwise byte-identical.
 
-use lca_protocol::{
-    ContentBlock, FORMAT_VERSION, Record, StopReason, ToolSource, TurnEvent, TurnOutcome,
-};
+use lca_protocol::{ContentBlock, FORMAT_VERSION, Record, StopReason, ToolSource, TurnEvent};
 
 use crate::assemble::usage_prompt_tokens;
 use crate::compact::compact_candidate;
 use crate::{Agent, TurnSink};
 
 use super::CallResponse;
+use super::TurnStep;
 use super::effective_context_window;
 
 impl Agent<'_> {
     /// Persist the response: one assistant record plus one record per tool
     /// call, then surface the text and usage (docs/session-log-format.md).
-    #[allow(clippy::result_large_err)]
     pub(super) async fn persist_response(
         &self,
         response: &CallResponse,
         sink: &mut dyn TurnSink,
-    ) -> Result<(), TurnOutcome> {
+    ) -> TurnStep<()> {
         let mut blocks: Vec<ContentBlock> = Vec::new();
         if !response.text.is_empty() {
             blocks.push(ContentBlock::Text {
@@ -79,7 +77,7 @@ impl Agent<'_> {
                 usage: Some(response.usage.clone()),
             },
         ) {
-            return Err(self.fail(
+            return TurnStep::End(self.fail(
                 StopReason::Error,
                 format!("cannot write to the session log: {err}"),
             ));
@@ -113,7 +111,7 @@ impl Agent<'_> {
             self.store
                 .record_model_used(self.session, &self.config.provider, &self.config.model)
         {
-            return Err(self.fail(
+            return TurnStep::End(self.fail(
                 StopReason::Error,
                 format!("cannot update the session metadata: {err}"),
             ));
@@ -153,7 +151,7 @@ impl Agent<'_> {
                     source,
                 },
             ) {
-                return Err(self.fail(
+                return TurnStep::End(self.fail(
                     StopReason::Error,
                     format!("cannot write to the session log: {err}"),
                 ));
@@ -164,7 +162,7 @@ impl Agent<'_> {
         }
         sink.on_event(TurnEvent::MessageEnded { role: "assistant" });
         sink.on_event(TurnEvent::Usage(response.usage.clone()));
-        Ok(())
+        TurnStep::Continue(())
     }
 
     /// FR-SESS-4's budget check, then the shared compaction call.
@@ -297,13 +295,13 @@ impl Agent<'_> {
         }
         // Gh #45's failure observation: a strategy breakdown reports
         // with its error; the veto path above already reported.
-        let ok = compact_candidate(
-            self.store,
-            self.session,
-            &self.config.extensions,
-            self.config.completion_backend.as_ref(),
+        let ok = compact_candidate(crate::compact::CompactRequest {
+            store: self.store,
+            session: self.session,
+            extensions: &self.config.extensions,
+            completion_backend: self.config.completion_backend.as_ref(),
             candidate,
-            crate::compact::CompactMeta {
+            meta: crate::compact::CompactMeta {
                 first_kept_id: Some(plan.first_kept_id),
                 read_files,
                 modified_files,
@@ -311,7 +309,7 @@ impl Agent<'_> {
             },
             sink,
             reason,
-        )
+        })
         .await
         .is_ok();
         if !ok {

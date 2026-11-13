@@ -39,6 +39,7 @@ const FILES: [&str; 3] = ["report.txt", "session.jsonl", "meta.json"];
 /// Holds everything the inspection screen and the final zip need, so neither step
 /// reads the session again.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct Plan {
     /// The private staging directory (removed on [`discard`] and after [`write()`](crate::bug::write)).
     pub staging: PathBuf,
@@ -109,6 +110,7 @@ impl Drop for Plan {
 
 /// The written bundle.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct Written {
     /// The zip.
     pub path: PathBuf,

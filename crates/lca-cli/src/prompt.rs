@@ -9,6 +9,7 @@
 
 /// One discovered context file with its attribution header.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ContextFile {
     /// Header naming the source, e.g. `~/.lca/AGENTS.md`.
     pub source: String,
@@ -18,6 +19,7 @@ pub struct ContextFile {
 
 /// One append instruction with its attribution header.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct AppendInstruction {
     /// Header naming the source, e.g. `user APPEND_SYSTEM.md`.
     pub source: String,
@@ -28,6 +30,7 @@ pub struct AppendInstruction {
 /// Gathered prompt files: the optional preamble replacement, appends,
 /// and context files.
 #[derive(Debug, Default)]
+#[non_exhaustive]
 pub struct PromptFiles {
     /// A `SYSTEM.md` (or `--system-prompt`) replacement for the preamble.
     pub preamble_override: Option<String>,
@@ -262,6 +265,7 @@ pub fn agent_system_prompt_for(
 }
 
 /// Inputs to [`compose_system_prompt`]; the caller reads the files.
+#[non_exhaustive]
 pub struct PromptInputs<'a> {
     /// The preamble: the built-in identity, a `SYSTEM.md` replacement,
     /// or `--system-prompt`.

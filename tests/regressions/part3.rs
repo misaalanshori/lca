@@ -811,3 +811,8 @@ mod mcp_typed_error_keeps_copy;
 
 #[path = "551-ext-abi-split-and-result-layers.rs"]
 mod ext_abi_split_and_result_layers;
+
+// Gh #549 / #544 - the error-shape batch: a turn ending is not a failure, and the
+// CLI's "String errors" are printed messages rather than branch points.
+#[path = "549-and-544-error-shapes.rs"]
+mod error_shapes;

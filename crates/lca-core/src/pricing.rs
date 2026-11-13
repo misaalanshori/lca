@@ -40,6 +40,7 @@ pub fn rates_for(provider: &str, model: &str) -> Option<ModelRates> {
 ///
 /// The four buckets sum to `total`.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct PricedUsage {
     /// Billed input tokens at the input rate.
     pub cost_input: f64,
