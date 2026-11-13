@@ -172,7 +172,7 @@ impl Ui {
         let Some(image) = with_clipboard_timeout(|cb| cb.get_image().ok()) else {
             return match self.read_clipboard_text() {
                 Some(text) => CommandEffect::InsertText(text),
-                None => CommandEffect::ShowWidget(no_clipboard_image_notice()),
+                None => CommandEffect::ShowWidget(no_clipboard_paste_notice()),
             };
         };
         let png = match lca_tools::clipboard_png(
@@ -268,12 +268,12 @@ pub(crate) fn read_clipboard_files_hook() -> lca_ui::state::ClipboardFilesReader
     )
 }
 
-/// The notice `/paste` shows when the clipboard holds nothing it can stage.
+/// The notice `/paste` shows when the clipboard holds nothing the ladder can use.
 ///
 /// One sentence covers "no display", "holds only text", and "did not answer":
 /// all three mean there is no image to attach, and naming the distinction would
 /// leak a platform detail into a message the user can act on identically.
-fn no_clipboard_image_notice() -> String {
+fn no_clipboard_paste_notice() -> String {
     // Gh #403 gap 3 changed what this sentence may claim. It used to say "no
     // image", which was true and complete when the ladder had two tiers; now
     // files and text are tried too, so the honest statement is that nothing the
