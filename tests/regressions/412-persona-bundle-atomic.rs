@@ -65,6 +65,41 @@ fn sources(trees: &[&str]) -> Vec<(PathBuf, String)> {
     out
 }
 
+/// Every `.rs` file of the `lca-config` TOML layer module, concatenated.
+///
+/// Gh #545 phase 2 turned `src/toml_layer.rs` into a module directory. Reading
+/// the *module* (its own files, found by filename) rather than one path keeps
+/// this guard pointed at the code it is about whatever the split becomes; this
+/// crate is `lca-regressions`, which does walk modules (`crate::module_sources`),
+/// but the walk honours `mod` declarations and this module's children are
+/// declared from `toml_layer/mod.rs` under names that carry no `#[path]` - the
+/// walk would work too. A plain directory read is used instead because the guard
+/// asks "does the layer list the key anywhere", which is a text question about
+/// every file in it, not a question about declaration order.
+fn toml_layer_module() -> String {
+    let dir = root().join("crates/lca-config/src/toml_layer");
+    let mut out = String::new();
+    let entries =
+        std::fs::read_dir(&dir).unwrap_or_else(|err| panic!("read {}: {err}", dir.display()));
+    let mut paths: Vec<PathBuf> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("rs"))
+        .collect();
+    assert!(!paths.is_empty(), "the module directory holds no files");
+    paths.sort();
+    for path in paths {
+        out.push_str(&read_str(&path));
+        out.push('\n');
+    }
+    out
+}
+
+/// Read one file that a guard addresses by absolute path.
+fn read_str(path: &Path) -> String {
+    std::fs::read_to_string(path).unwrap_or_else(|err| panic!("read {}: {err}", path.display()))
+}
+
 // Verifies: gh #412 design point 1 - the atomic ordering is structural.
 //
 // The interface validates the whole bundle through a seam that writes nothing, and
@@ -225,14 +260,25 @@ fn the_key_is_in_both_allowlists_and_the_docs() {
         "the table key is registered (so the unknown-key walk stops there)"
     );
     let lib = read("crates/lca-config/src/lib.rs");
-    let toml_layer = read("crates/lca-config/src/toml_layer.rs");
-    for (name, text) in [("lib.rs", &lib), ("toml_layer.rs", &toml_layer)] {
+    // The layer is a module directory now (gh #545 phase 2), so this reads the
+    // whole module rather than one filename: the key lives in the family file
+    // that owns it (`bundles.rs`), and a guard naming `toml_layer.rs` would
+    // either fail to read the file at all or pass while checking a fragment.
+    let layer = toml_layer_module();
+    for (name, text) in [("lib.rs", &lib), ("toml_layer (the module)", &layer)] {
         assert!(
             text.contains("\"personas\","),
             "{name} lists the key in its apply loop; a key missing from either loads \
              as silence (gh #272)"
         );
     }
+    // And the key is in that family's `KEYS`, which is the list the dispatch
+    // routes: the arm alone would be dead (nothing would reach it).
+    let bundles = read("crates/lca-config/src/toml_layer/bundles.rs");
+    assert!(
+        bundles.contains("const KEYS") && bundles.contains("\"personas\","),
+        "the family that owns `personas` routes it"
+    );
     let docs = read("docs/configuration.md");
     assert!(
         docs.contains("[personas"),
