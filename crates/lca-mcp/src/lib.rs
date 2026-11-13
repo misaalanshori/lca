@@ -32,6 +32,89 @@
 
 pub mod cli;
 pub mod config;
+
+/// The crate's error, so a caller can tell a config refusal from a missing
+/// server from an auth-required state without substring-matching prose
+/// (gh #556).
+///
+/// **The copy is the contract.** MCP failures reach `/mcp`'s detail screen and
+/// `lca mcp list`, so every variant renders *exactly* the sentence the
+/// `String`-returning helpers produced: the migration replaced the carrier, not
+/// the words. `Result<_, String>` still exists inside the crate for the protocol
+/// helpers whose refusal is a raw JSON-RPC payload (a `serde_json` message is a
+/// value, not an error class), and those re-enter this type at the public
+/// boundary through [`McpError::Protocol`].
+///
+/// Hand-written rather than `thiserror::Error` because `lca-mcp` does not
+/// depend on `thiserror` and this cycle may not add a dependency
+/// (`Cargo.toml` is outside the file boundary); `lca-session` and
+/// `lca-permissions` do use it, so the shape is the house's, only spelled out.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum McpError {
+    /// The configuration document or a field in it is refused.
+    Config(String),
+    /// A named server is not configured for the active scope.
+    UnknownServer(String),
+    /// The server refused the call until the user signs in again.
+    AuthRequired(String),
+    /// The wire protocol (JSON-RPC shape, SSE envelope) refused something.
+    Protocol(String),
+    /// The transport (a child's stdio, an HTTP hop) failed.
+    Transport(String),
+    /// A filesystem operation failed.
+    Io(std::io::Error),
+}
+
+impl std::fmt::Display for McpError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            McpError::Config(message)
+            | McpError::AuthRequired(message)
+            | McpError::Protocol(message)
+            | McpError::Transport(message) => f.write_str(message),
+            McpError::UnknownServer(name) => write!(f, "unknown MCP server {name:?}"),
+            McpError::Io(err) => write!(f, "{err}"),
+        }
+    }
+}
+
+impl std::error::Error for McpError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            McpError::Io(err) => Some(err),
+            _ => None,
+        }
+    }
+}
+
+impl From<std::io::Error> for McpError {
+    fn from(err: std::io::Error) -> Self {
+        McpError::Io(err)
+    }
+}
+
+impl From<String> for McpError {
+    /// A refusal that arrived as prose from one of the crate's `String`-returning
+    /// helpers. It is classified [`McpError::Protocol`] by default because that is
+    /// the class those helpers speak (a JSON-RPC shape or an SSE envelope); a
+    /// caller that knows better constructs the specific variant, and the public
+    /// entry points below do exactly that for the classes they can tell apart.
+    fn from(message: String) -> Self {
+        McpError::Protocol(message)
+    }
+}
+
+/// The crate's result alias, so `?` reaches every variant above.
+///
+/// Named `McpResult` rather than a bare `Result` (the issue's spelling): a
+/// crate-root `Result` shadows `std`'s for every signature in this crate, so the
+/// migration would have had to convert all 87 internal `Result<_, String>`
+/// helpers in one commit before the crate compiled at all. Those helpers stay on
+/// `String` where the refusal *is* the wire payload (see [`McpError`]); the
+/// public boundary uses this alias, which is what a caller sees.
+pub type McpResult<T> = std::result::Result<T, McpError>;
+
 mod types;
 pub use types::{
     HttpServerConfig, OAuthConfig, ServerConfig, StoredToken, is_transient_status,

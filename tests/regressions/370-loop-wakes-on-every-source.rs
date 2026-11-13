@@ -115,7 +115,13 @@ fn every_producer_forwards_through_the_wake() {
 fn there_is_still_exactly_one_render_decision() {
     let source = run_source();
     // The loop's frame is the single `screen.render(` call.
-    let renders = source.matches("screen.render(").count();
+    //
+    // Gh #551 fixed `module_sources` to follow `pub(crate) mod` declarations, so
+    // the walk now reaches `run_input_helpers.rs`, whose prose *mentions*
+    // `screen.render()` in a comment. Counting code, not comments, is what this
+    // row always meant (the same reason `402` uses `code_only`).
+    let code = crate::code_lines(&source);
+    let renders = code.matches("screen.render(").count();
     assert_eq!(
         renders, 1,
         "the loop paints in exactly one place (found {renders})"

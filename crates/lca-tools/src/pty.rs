@@ -127,7 +127,9 @@ mod unsafe_ptmx {
             unsafe { libc::close(fd) };
             return Err(err);
         }
-        // SAFETY: same descriptor; unlock the slave side.
+        // SAFETY: `fd` is the slave descriptor `openpty` just returned and
+        // `unlockpt` takes only that integer, borrowing nothing else; on failure the
+        // next block closes it, so the handle is not leaked.
         if unsafe { libc::unlockpt(fd) } != 0 {
             let err = std::io::Error::last_os_error();
             // SAFETY: closing our own descriptor on the error path.
@@ -461,7 +463,9 @@ mod windows_conpty {
             let mut input_write: HANDLE = std::ptr::null_mut();
             let mut output_read: HANDLE = std::ptr::null_mut();
             let mut output_write: HANDLE = std::ptr::null_mut();
-            // SAFETY: all four are valid out-pointer slots.
+            // SAFETY: the four `&mut HANDLE` slots are stack locals initialised to
+            // null just above; `CreatePipe` only writes them once it has succeeded, so
+            // a failure leaves the nulls and the `last_os_error` branch reads none.
             unsafe {
                 if CreatePipe(&mut input_read, &mut input_write, std::ptr::null(), 0) == 0 {
                     return Err(std::io::Error::last_os_error());
@@ -480,8 +484,10 @@ mod windows_conpty {
             if unsafe { CreatePseudoConsole(size, input_read, output_write, 0, &mut hpc) } != 0 {
                 return Err(std::io::Error::last_os_error());
             }
-            // SAFETY: ConPTY duplicated its ends; closing ours makes EOF
-            // propagate once the console closes.
+            // SAFETY: both handles are the ones `CreatePipe` just returned and
+            // `CreatePseudoConsole` duplicated a copy of, so closing this process's
+            // originals is exactly right - the console keeps its own ends, and the
+            // child sees EOF once that console closes.
             unsafe {
                 CloseHandle(input_read);
                 CloseHandle(output_write);
@@ -492,7 +498,9 @@ mod windows_conpty {
         /// Resize; the program receives the new buffer size.
         pub fn resize(&self, rows: u16, cols: u16) -> std::io::Result<()> {
             let Some(hpc) = self.hpc else { return Ok(()) };
-            // SAFETY: valid HPCON, by-value COORD.
+            // SAFETY: `hpc` is the live `HPCON` this console owns until its `Drop`,
+            // and `ResizePseudoConsole` takes the size **by value** as a `COORD`, so
+            // there is no pointer into Rust memory for the callee to write through.
             if unsafe {
                 ResizePseudoConsole(
                     hpc,
@@ -523,6 +531,16 @@ mod windows_conpty {
     // closed exactly once in Drop. This keeps the capability engine
     // (and therefore the host store data) Send, which WasiView requires.
     unsafe impl Send for Console {}
+
+    // Gh #571: the `unsafe impl Send` above is a promise about the *fields*, so a
+    // field added later (an `Rc`, a `*mut c_void` with no owning rule) must fail
+    // to compile rather than quietly break it. A `const` assertion runs at
+    // compile time and adds no code.
+    const _: fn() = || {
+        fn assert_send<T: Send>() {}
+        assert_send::<Console>();
+        assert_send::<ProcessHandle>();
+    };
 
     impl Drop for Console {
         fn drop(&mut self) {
@@ -555,7 +573,9 @@ mod windows_conpty {
 
         /// Block until exit; returns the exit code.
         pub fn wait(&mut self) -> i32 {
-            // SAFETY: valid process handle owned by us.
+            // SAFETY: `self.handle` is the process handle this `ProcessHandle` owns
+            // and closes in `Drop`; `WaitForSingleObject` and `GetExitCodeProcess`
+            // only read it, and `code` is a local `u32` they write.
             unsafe {
                 WaitForSingleObject(self.handle, INFINITE);
                 let mut code: u32 = 0;
@@ -644,7 +664,9 @@ mod windows_conpty {
             .collect();
 
         let mut attr_size: usize = 0;
-        // SAFETY: documented two-call probe with a null list.
+        // SAFETY: this is the documented first call of a two-call sequence - a null
+        // `lpAttributeList` is legal and makes the API report the size it needs into
+        // `attr_size`, writing no list at all.
         unsafe {
             InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut attr_size);
         }
@@ -652,7 +674,9 @@ mod windows_conpty {
             return Err(std::io::Error::last_os_error());
         }
         let mut attr_list = vec![0u8; attr_size];
-        // SAFETY: the buffer matches the probe's requested size.
+        // SAFETY: `attr_list` is sized from `attr_size`, which the two-call probe
+        // above measured with a null list, and `InitializeProcThreadAttributeList`
+        // writes at most that many bytes into a buffer this function owns.
         if unsafe {
             InitializeProcThreadAttributeList(
                 attr_list.as_mut_ptr() as *mut _,
@@ -664,7 +688,9 @@ mod windows_conpty {
         {
             return Err(std::io::Error::last_os_error());
         }
-        // SAFETY: STARTUPINFOW zeroed is the documented initialization.
+        // SAFETY: `STARTUPINFOW` is plain-old-data that Win32 documents as
+        // zero-initialised before use, and `mem::zeroed` on it produces no invalid
+        // bit pattern; the `cb` field is then set explicitly just below.
         let zeroed_startup: STARTUPINFOW = unsafe { std::mem::zeroed() };
         let mut startup = STARTUPINFOEXW {
             StartupInfo: STARTUPINFOW {
@@ -691,6 +717,15 @@ mod windows_conpty {
         // byte. That mismatch was the root cause of the Windows pty
         // quarantine; see docs/platform-notes.md.
         let hpc_value = console.hpc.unwrap_or(0);
+        // SAFETY: `startup.lpAttributeList` is the block
+        // `InitializeProcThreadAttributeList` allocated with room for exactly this
+        // one attribute and still owns at this point; `cbSize` is
+        // `size_of::<HPCON>()`, the size `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`
+        // documents; `lpValue` is the `HPCON` **value** (not its address), which
+        // that pseudo-attribute requires - a pointer makes the call succeed while
+        // the child is born on a fresh console (`docs/platform-notes.md`, the
+        // Windows pty quarantine); both out-parameters are optional and passed
+        // null. The call writes only into that attribute block.
         let updated = unsafe {
             UpdateProcThreadAttribute(
                 startup.lpAttributeList,
@@ -791,7 +826,9 @@ fn read_impl(inner: &mut Inner, max: usize) -> std::io::Result<Option<Vec<u8>>> 
     // stream when the child has exited and the pipe has drained.
     use std::os::windows::io::AsRawHandle;
     let mut available: u32 = 0;
-    // SAFETY: the file is an open pipe end; the out params are valid.
+    // SAFETY: `inner.output.as_raw_handle()` is this console's live pipe end (held
+    // by `inner` for the call), the buffer arguments are optional and passed null,
+    // and `&mut available` is a local `u32` the API only writes.
     let ok = unsafe {
         windows_sys::Win32::System::Pipes::PeekNamedPipe(
             inner.output.as_raw_handle() as *mut _,

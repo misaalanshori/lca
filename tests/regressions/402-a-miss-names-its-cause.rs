@@ -106,10 +106,21 @@ fn exactly_one_function_decides_the_cause() {
     ] {
         // Gh #543: an *absence* check over a module that may be partitioned -
         // read the module, or "the file does not contain it" reads like health.
-        let text = code_only(&crate::module_text(other));
+        //
+        // Gh #551 fixed `module_sources` to follow `pub(super) mod` too, which is
+        // how `display.rs` declares `cache_cause` - the one module that is
+        // *supposed* to read the markers (it is the decider asserted above), so it
+        // is excluded here by path rather than by the accident of a walk that used
+        // to stop at the file.
+        let text = crate::module_sources(other)
+            .into_iter()
+            .filter(|(path, _)| !path.contains("cache_cause"))
+            .map(|(_, text)| code_only(&text))
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(
             !text.contains("[skill instructions]") && !text.contains("[instructions changed]"),
-            "{other} must not re-read the markers"
+            "{other} must not re-read the markers (outside `cache_cause`, the decider)"
         );
     }
 }

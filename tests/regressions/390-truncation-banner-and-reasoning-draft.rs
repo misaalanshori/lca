@@ -238,7 +238,8 @@ fn the_extension_adapter_forwards_the_reasoning_type() {
         adapter.contains("lca_ui::MarkdownMessageType::AssistantThinking"),
         "the adapter maps the reasoning type explicitly"
     );
-    let abi = read("crates/lca-ext-abi/src/lib.rs");
+    // Gh #551 split the dispatch contract out of `lib.rs`; read the module.
+    let abi = crate::module_text("crates/lca-ext-abi/src/lib.rs");
     assert!(
         abi.contains("AssistantThinking,"),
         "the Rust-side ABI enum carries it (no WIT declaration, so this is additive)"

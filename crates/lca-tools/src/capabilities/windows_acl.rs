@@ -106,9 +106,10 @@ pub fn dacl_is_protected(path: &std::path::Path) -> Result<bool, String> {
     use windows_sys::Win32::Security::Authorization::GetNamedSecurityInfoW;
     use windows_sys::Win32::Security::{SE_DACL_PROTECTED, SECURITY_DESCRIPTOR};
 
-    // SAFETY: GetNamedSecurityInfoW allocates the descriptor with
-    // LocalAlloc; LocalFree releases it, and the control field is read
-    // before the free.
+    // SAFETY: `GetNamedSecurityInfoW` allocates the returned descriptor with
+    // `LocalAlloc`, so `LocalFree` below is the matching release for exactly this
+    // pointer; `sd` is a `*mut c_void` local, the `wide` path buffer outlives the
+    // call, and the field read happens before the free.
     unsafe {
         let wide: Vec<u16> = path
             .as_os_str()

@@ -26,17 +26,16 @@ use crate::ServerConfig;
 /// guest and its manifest died with ADR-0047, so the concern the parity test
 /// guarded — one capability set with one source of truth — is satisfied by
 /// there being exactly one table left to read.
-#[allow(clippy::expect_used)] // the extension's own literal manifest patterns are valid by construction.
 pub fn manifest_grants() -> lca_tools::CapabilityGrants {
     lca_tools::CapabilityGrants {
         process: true,
         fs: vec![
-            lca_permissions::ScopeGrant::parse("workspace", lca_permissions::FsMode::Read)
-                .expect("workspace read grant parses"),
+            // Gh #556: infallible constructors for names in the fixed vocabulary,
+            // so nothing here can be a panicking path any more.
+            lca_permissions::ScopeGrant::workspace(lca_permissions::FsMode::Read),
             // gh #344: binary resource payloads stage in the per-session
             // temp scope (owner-only, scope-checked), never shared /tmp.
-            lca_permissions::ScopeGrant::parse("temp", lca_permissions::FsMode::ReadWrite)
-                .expect("temp read-write grant parses"),
+            lca_permissions::ScopeGrant::temp(lca_permissions::FsMode::ReadWrite),
         ],
         fs_declared: true,
         ..Default::default()

@@ -293,7 +293,7 @@ impl CliMcp {
     /// Refuses a spec that names both transports or neither, and refuses an
     /// option that only applies to the other transport — pi's rule, and the
     /// reason the error text names the transport rather than the flag.
-    pub fn add(&self, spec: &AddSpec) -> Result<AddOutcome, String> {
+    pub fn add(&self, spec: &AddSpec) -> crate::McpResult<AddOutcome> {
         let entry = entry_from_spec(spec)?;
         let path = self.path_for(spec.scope).to_path_buf();
         let replaced = file_defines(&path, &spec.name);
@@ -316,7 +316,7 @@ impl CliMcp {
 
     /// Remove one server, reporting the other scope when that is where it
     /// lives (pi: "use --local" / "omit --local", exit 1).
-    pub fn remove(&self, name: &str, scope: Scope) -> Result<RemoveOutcome, String> {
+    pub fn remove(&self, name: &str, scope: Scope) -> crate::McpResult<RemoveOutcome> {
         let path = self.path_for(scope).to_path_buf();
         if remove_entry(&path, name)? {
             // A user-level entry may also be overridden in the project file;
@@ -359,7 +359,7 @@ impl CliMcp {
     /// Each server already connects on its own worker (gh #418 Phase E), so
     /// "in parallel" is structural here rather than something this function
     /// arranges.
-    pub fn list(&self, budget: std::time::Duration) -> Result<ListReport, String> {
+    pub fn list(&self, budget: std::time::Duration) -> crate::McpResult<ListReport> {
         let manager = self.manager()?;
         // Gh #459 design point 3: after the budget, a row still `connecting` is not
         // "no news yet" any more - it is news, and it is that the server did not
@@ -478,7 +478,7 @@ impl CliMcp {
     /// The browser and the loopback callback are the whole interaction here;
     /// the redirect-URL paste fallback lives in the flow itself so a headless
     /// or SSH run can still complete (FR-PROV-4's manual delivery seam).
-    pub fn login(&self, name: &str, budget: std::time::Duration) -> Result<LoginOutcome, String> {
+    pub fn login(&self, name: &str, budget: std::time::Duration) -> crate::McpResult<LoginOutcome> {
         let manager = self.manager()?;
         let entry = manager
             .entries()
@@ -500,17 +500,19 @@ impl CliMcp {
                 )
             })?;
         let Some(config) = entry.http_config() else {
-            return Err(format!(
+            return Err(crate::McpError::Config(format!(
                 "MCP server {name:?} is a stdio server, which has no sign-in"
-            ));
+            )));
         };
         if config.has_static_auth() {
-            return Err(format!(
+            return Err(crate::McpError::Config(format!(
                 "MCP server {name:?} authenticates with a header, so there is nothing to sign in to"
-            ));
+            )));
         }
         if config.oauth.is_none() {
-            return Err(format!("MCP server {name:?} configures no OAuth"));
+            return Err(crate::McpError::Config(format!(
+                "MCP server {name:?} configures no OAuth"
+            )));
         }
         // Capture the challenge first, so RFC 9728 discovery has the hint a
         // 401 supplies (gh #418 Phase D's threading).
@@ -523,7 +525,9 @@ impl CliMcp {
         crate::sign_in(caps, &config)?;
         let auth_url = self.caps()?.oauth_opened().last().cloned();
         if auth_url.is_none() {
-            return Err("the sign-in published no authorization URL".to_string());
+            return Err(crate::McpError::AuthRequired(
+                "the sign-in published no authorization URL".to_string(),
+            ));
         }
         manager.drain_landed();
         let tools = self.tool_count(name);
@@ -531,16 +535,16 @@ impl CliMcp {
     }
 
     /// Delete one server's stored OAuth credentials.
-    pub fn logout(&self, name: &str) -> Result<LogoutOutcome, String> {
+    pub fn logout(&self, name: &str) -> crate::McpResult<LogoutOutcome> {
         let entry = self
             .entries
             .iter()
             .find(|entry| entry.name == name)
-            .ok_or_else(|| format!("no MCP server named {name:?}"))?;
+            .ok_or_else(|| crate::McpError::UnknownServer(name.to_string()))?;
         let Some(config) = entry.http_config() else {
-            return Err(format!(
+            return Err(crate::McpError::Config(format!(
                 "MCP server {name:?} is a stdio server, which stores no credentials"
-            ));
+            )));
         };
         let store = crate::TokenStore::new(self.caps()?, &config);
         let had = store.load()?.is_some();

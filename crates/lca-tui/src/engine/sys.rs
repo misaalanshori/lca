@@ -99,7 +99,9 @@ pub(crate) fn restore_raw_mode(state: RawModeState) {
 pub(crate) fn stdin_is_tty() -> bool {
     #[cfg(unix)]
     {
-        // SAFETY: isatty only inspects the fd.
+        // SAFETY: `isatty` takes the process's own stdin descriptor as an integer
+        // and reads no Rust memory; it answers from the kernel's file table, and
+        // closing stdin under it is not something this process does.
         unsafe { libc::isatty(libc::STDIN_FILENO) == 1 }
     }
     #[cfg(windows)]
@@ -314,7 +316,9 @@ pub(crate) fn terminal_size() -> io::Result<(u16, u16)> {
             return Ok((ws.ws_col, ws.ws_row));
         }
         // Fall back to stdin.
-        // SAFETY: same call against fd 0.
+        // SAFETY: the same `ioctl` against fd 0, with the same `ws` out-struct
+        // that `zeroed()` above initialised; a failure leaves `ws` untouched and
+        // falls through to the hard-coded 80×24 rather than reading it.
         if unsafe { libc::ioctl(libc::STDIN_FILENO, libc::TIOCGWINSZ, &mut ws) } == 0
             && ws.ws_col > 0
         {
@@ -419,7 +423,15 @@ mod windows_backend {
         let stdout = stdout_handle();
         let mut stdin_mode = 0u32;
         let mut stdout_mode = 0u32;
+        // SAFETY: `stdin` came from `stdin_handle()`, which returns a handle this
+        // process already owns (or `INVALID_HANDLE_VALUE`, which `valid` rejects
+        // first and short-circuits the `&&`); `&mut stdin_mode` is a fresh
+        // `u32` local whose lifetime covers the call, and `GetConsoleMode` only
+        // writes that `DWORD`. A zero return leaves `have_stdin` false and the
+        // caller falls back, so the failure path reads no uninitialised mode.
         let have_stdin = valid(stdin) && unsafe { GetConsoleMode(stdin, &mut stdin_mode) } != 0;
+        // SAFETY: same shape for stdout - owned handle, `valid` first, and
+        // `&mut stdout_mode` is a live `u32` local that no borrow outlives.
         let have_stdout = valid(stdout) && unsafe { GetConsoleMode(stdout, &mut stdout_mode) } != 0;
         if have_stdin {
             // Raw-ish input plus VT input so modified keys arrive as sequences.
@@ -432,7 +444,9 @@ mod windows_backend {
             }
         }
         if have_stdout {
-            // SAFETY: enable ANSI processing on the output console.
+            // SAFETY: `stdout` is the handle `valid()` accepted a few lines above,
+            // and `stdout_mode` is the `DWORD` `GetConsoleMode` filled for it, so
+            // the OR only sets documented flag bits on a handle this process owns.
             if unsafe { SetConsoleMode(stdout, stdout_mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING) }
                 == 0
             {
@@ -452,11 +466,15 @@ mod windows_backend {
     pub(super) fn restore_raw_mode(state: &super::RawModeState) {
         let saved = &state.original;
         if saved.have_stdin {
-            // SAFETY: restoring the mode we read earlier.
+            // SAFETY: `saved.stdin_mode` is the `DWORD` `GetConsoleMode` filled for
+            // the stdin handle earlier in this call, and `stdin_handle()` returns the
+            // same owned handle, so restoring it sets only documented flag bits.
             unsafe { SetConsoleMode(stdin_handle(), saved.stdin_mode) };
         }
         if saved.have_stdout {
-            // SAFETY: restoring the mode we read earlier.
+            // SAFETY: same shape on stdout - `saved.stdout_mode` is the value read
+            // from that handle earlier in this call, and the handle is the process's
+            // own, so the restore undoes exactly the flag changes this call made.
             unsafe { SetConsoleMode(stdout_handle(), saved.stdout_mode) };
         }
     }
@@ -464,6 +482,9 @@ mod windows_backend {
     pub(super) fn stdin_is_tty() -> bool {
         let h = stdin_handle();
         let mut mode = 0u32;
+        // SAFETY: owned stdin handle (or `INVALID_HANDLE_VALUE`, rejected by
+        // `valid` before the call); `&mut mode` is a live `u32` local. The return
+        // is only "is it a console", and a zero leaves `mode` unused.
         valid(h) && unsafe { GetConsoleMode(h, &mut mode) } != 0
     }
 
@@ -478,12 +499,19 @@ mod windows_backend {
         // still yields cooked input, so the owner's console verification
         // (docs/conpty-testing-plan.md) is the place a gap would surface.
         let mut read = 0u32;
-        // SAFETY: `buf` is writable for buf.len() bytes.
+        // SAFETY: `buf` is the caller's `&mut [u8]`, so it is writable for exactly
+        // `buf.len()` bytes and `bytes_to_read` below never exceeds that; `read`
+        // receives only the count the API actually wrote, which the caller then
+        // uses instead of assuming a full buffer.
         let ok = unsafe {
             ReadFile(
                 handle,
                 buf.as_mut_ptr().cast(),
-                buf.len() as u32,
+                // Gh #573: `Cell<u32>`-style clamping. `bytes_to_read` is a `u32`
+                // and `buf.len()` is `usize`; a >4 GiB buffer would truncate into
+                // a *smaller* count (not a soundness break, but a silently short
+                // read), so the min makes the cast total.
+                buf.len().min(u32::MAX as usize) as u32,
                 &mut read,
                 std::ptr::null_mut(),
             )
@@ -525,7 +553,9 @@ mod windows_backend {
             // for key and non-key events alike, so the key test happens after
             // the wait. A zero-millisecond wait would spin, hence the clamp.
             let wait_ms = remaining.as_millis().clamp(1, u32::MAX as u128) as u32;
-            // SAFETY: `handle` is our console stdin handle.
+            // SAFETY: `handle` is the console stdin handle `valid()` accepted, and
+            // `WaitForSingleObject` only reads it; `wait_ms` is a locally clamped
+            // `u32`, and the zero-return path above treats timeout and failure alike.
             if unsafe {
                 windows_sys::Win32::System::Threading::WaitForSingleObject(handle, wait_ms)
             } != 0
@@ -534,11 +564,16 @@ mod windows_backend {
                 return Ok(super::WaitOutcome::Timeout);
             }
             let mut count = 0u32;
-            // SAFETY: valid handle, valid out-pointer.
+            // SAFETY: `handle` is the console handle this function validated, and
+            // `&mut count` is a local `u32` the API only writes; a zero return is
+            // handled by the `!= 0` guard rather than read through.
             if unsafe { GetNumberOfConsoleInputEvents(handle, &mut count) } != 0 && count > 0 {
                 let mut record = INPUT_RECORD::default();
                 let mut peeked = 0u32;
-                // SAFETY: one INPUT_RECORD out-param, valid for the call.
+                // SAFETY: `record` is a default-initialised `INPUT_RECORD` local and
+                // `peeked` a `u32` local, both alive for the call; `1` says how many
+                // records the API may write, and `handle` is the console stdin
+                // handle `valid()` accepted.
                 if unsafe { PeekConsoleInputW(handle, &mut record, 1, &mut peeked) } != 0
                     && peeked > 0
                 {
@@ -569,7 +604,9 @@ mod windows_backend {
                     // in the same frame and one that lands a tick later.
                     let was_resize = super::console_record_meaning(record.EventType);
                     let mut consumed = 0u32;
-                    // SAFETY: same record, one event consumed.
+                    // SAFETY: `record` and `consumed` are the same locals
+                    // `PeekConsoleInputW` filled above, still alive for this call; `1`
+                    // is the single record this function reads and the API honours it.
                     unsafe {
                         ReadConsoleInputW(handle, &mut record, 1, &mut consumed);
                     }
@@ -607,7 +644,9 @@ mod windows_backend {
         }
         // SAFETY: info is a valid out-param for GetConsoleScreenBufferInfo.
         let mut info: CONSOLE_SCREEN_BUFFER_INFO = unsafe { std::mem::zeroed() };
-        // SAFETY: handle valid, info valid.
+        // SAFETY: `handle` is the console handle this function validated, and `info`
+        // is a `CONSOLE_SCREEN_BUFFER_INFO` local the API only writes; a zero return
+        // falls back to 80×24 without reading it.
         if unsafe { GetConsoleScreenBufferInfo(handle, &mut info) } == 0 {
             return Ok((80, 24));
         }

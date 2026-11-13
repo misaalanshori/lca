@@ -309,6 +309,29 @@ pub fn read_buffered(
     max: usize,
 ) -> std::io::Result<Option<Vec<u8>>> {
     use std::os::unix::io::AsRawFd;
+    // The descriptor state one call borrows, restored on **every** exit from the
+    // borrow (gh #571). Leaving `O_NONBLOCK` set makes the *next* blocking reader
+    // return `WouldBlock` forever, and an inline restore after the read covers the
+    // ordinary paths but not a panic on the way - hence a guard. Defined here so
+    // it lives inside this `#[allow(unsafe_code)]` item rather than beside it.
+    struct RestoreFlags {
+        fd: std::os::unix::io::RawFd,
+        flags: libc::c_int,
+    }
+
+    impl Drop for RestoreFlags {
+        fn drop(&mut self) {
+            // SAFETY: `fd` is the descriptor `flags` was read from and has not been
+            // closed (the child owns it and the caller still holds it); restoring
+            // exactly that value is the inverse of the set that armed this guard.
+            // The result is ignored deliberately: `Drop` has no caller to report to,
+            // and the only failure is `EBADF` on a descriptor that cannot
+            // legitimately be closed here.
+            unsafe {
+                libc::fcntl(self.fd, libc::F_SETFL, self.flags);
+            }
+        }
+    }
     let fd = reader.as_raw_fd();
     // SAFETY: our own descriptor, and F_GETFL/F_SETFL with libc::O_NONBLOCK is the
     // portable POSIX spelling (the constant differs between Linux and macOS, which
@@ -317,17 +340,17 @@ pub fn read_buffered(
     if flags < 0 {
         return Err(std::io::Error::last_os_error());
     }
+    // SAFETY: same descriptor, and `flags` is the value `F_GETFL` just returned on
+    // it; adding `O_NONBLOCK` is the documented way to make one read non-blocking.
     if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
         return Err(std::io::Error::last_os_error());
     }
+    // Armed only after the set succeeded, so a failed `F_SETFL` above (which left
+    // the flags untouched) never restores a stale value over someone else's.
+    let _restore = RestoreFlags { fd, flags };
     let mut buffer = vec![0u8; max.clamp(1, 64 * 1024)];
     let read = reader.read(&mut buffer);
-    // Restore before doing anything else, so a later blocking caller still blocks
-    // even when this read errored.
-    // SAFETY: same descriptor, restoring the flags we just read.
-    unsafe {
-        libc::fcntl(fd, libc::F_SETFL, flags);
-    }
+    drop(_restore);
     match read {
         Ok(0) => Ok(None),
         Ok(read) => {
@@ -356,7 +379,9 @@ pub fn read_buffered(
 ) -> std::io::Result<Option<Vec<u8>>> {
     use std::os::windows::io::AsRawHandle;
     let mut available: u32 = 0;
-    // SAFETY: the handle is an open pipe end; the out param is a valid u32.
+    // SAFETY: `reader.as_raw_handle()` is the child's live stderr pipe end (the
+    // caller still owns it), all buffer arguments are documented optional and
+    // passed null, and `&mut available` is a `u32` local the call only writes.
     let ok = unsafe {
         windows_sys::Win32::System::Pipes::PeekNamedPipe(
             reader.as_raw_handle() as *mut _,

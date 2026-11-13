@@ -795,3 +795,19 @@ mod subscription_split_by_flow;
 
 #[path = "550-debug-inline-scoped-and-one-spare.rs"]
 mod debug_inline_scoped_and_one_spare;
+
+// The last desloppify batch (#573 #571 #556 #551). The safety rows are the
+// substantive half: an `unsafe` block without a `SAFETY:` rationale is the one
+// class AGENTS.md's exemption rule exists to refuse, so the guard is exhaustive
+// across the named files rather than illustrative.
+#[path = "573-tui-unsafe-is-documented.rs"]
+mod tui_unsafe_is_documented;
+
+#[path = "571-tools-unsafe-and-fd-restore.rs"]
+mod tools_unsafe_and_fd_restore;
+
+#[path = "556-mcp-typed-error-keeps-copy.rs"]
+mod mcp_typed_error_keeps_copy;
+
+#[path = "551-ext-abi-split-and-result-layers.rs"]
+mod ext_abi_split_and_result_layers;

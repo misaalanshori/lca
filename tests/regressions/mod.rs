@@ -101,6 +101,19 @@ pub fn module_text(module_rel: &str) -> String {
         .join("\n")
 }
 
+/// Strip `//`-prefixed comment lines so a rule *named in prose* cannot satisfy a
+/// guard meant to check code.
+///
+/// Three rows needed it once `module_sources` learned to follow `pub(crate) mod`
+/// (gh #551): a walk that reaches one more file also reaches its comments, and an
+/// absence check over prose reads like health.
+pub fn code_lines(text: &str) -> String {
+    text.lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// The concatenation of several roots, for a guard whose partition the module
 /// walk cannot know: `chat_keys.rs`'s picker arms moved to a sibling declared
 /// from the crate root, not from `chat_keys.rs`, so no single root reaches both.
@@ -112,6 +125,28 @@ pub fn text_of(roots: &[&str]) -> String {
         .map(|root| module_text(root))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// The text after `mod ` in a module declaration, whatever its visibility.
+///
+/// `mod x;` → `x;`, `pub mod x;` → `x;`, `pub(crate) mod x;` → `x;`,
+/// `pub(in some::path) mod x;` → `x;`. Returns `None` for anything else.
+fn strip_mod_declaration(line: &str) -> Option<&str> {
+    let mut rest = line;
+    loop {
+        match rest.strip_prefix("pub ") {
+            Some(tail) => rest = tail,
+            None => {
+                // `pub(crate) `, `pub(super) `, `pub(self) `, `pub(in path) `.
+                let Some(after_pub) = rest.strip_prefix("pub(") else {
+                    break;
+                };
+                let close = after_pub.find(')')?;
+                rest = after_pub[close + 1..].trim_start();
+            }
+        }
+    }
+    rest.strip_prefix("mod ")
 }
 
 fn collect_sources(root: &std::path::Path, rel: &str, out: &mut Vec<(String, String)>) {
@@ -152,7 +187,12 @@ fn collect_sources(root: &std::path::Path, rel: &str, out: &mut Vec<(String, Str
         }
         // Any other attribute keeps the state it is in; any real statement
         // resets it, so a `#[cfg(test)]` further up never gates a later `mod`.
-        let Some(rest) = trimmed.strip_prefix("mod ") else {
+        // Visibility is irrelevant to the walk: `pub mod x;`, `pub(crate) mod x;`,
+        // `pub(super) mod x;`, `pub(in path) mod x;` and bare `mod x;` all name a
+        // file. Only the bare form was accepted until gh #551's row found that
+        // `pub mod dispatch;` made the walk stop at the declaring file - a guard
+        // reading that module saw one fragment and passed vacuously.
+        let Some(rest) = strip_mod_declaration(trimmed) else {
             if !trimmed.starts_with('#') && !trimmed.is_empty() {
                 pending_path = None;
                 gated = false;

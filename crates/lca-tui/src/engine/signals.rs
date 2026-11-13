@@ -100,16 +100,15 @@ pub fn install() {
     extern "C" fn on_hangup(_signal: libc::c_int) {
         request();
     }
-    // SAFETY: `signal(2)` takes an integer signal number and a handler by value
-    // - it borrows no Rust memory, reads no pointer, and both values are libc
-    // constants. `on_hangup` touches nothing but a `static AtomicBool`, which is
-    // async-signal-safe.
-    //
-    // The signature also has to be the real one: `signal` is typed against
+    // The signature has to be the real one: `signal` is typed against
     // `sighandler_t`, so the coercion goes through a function pointer rather than a
     // direct item-to-integer cast (which `clippy::fn_to_numeric_cast` refuses, for
     // the good reason that it usually means someone is boxing a function).
     let handler: extern "C" fn(libc::c_int) = on_hangup;
+    // SAFETY: `signal(2)` takes an integer signal number and a handler by value -
+    // it borrows no Rust memory and reads no pointer, and `SIGHUP` is a libc
+    // constant. The handler `on_hangup` touches nothing but a `static AtomicBool`,
+    // which is async-signal-safe, so the signal may fire mid-anything.
     unsafe {
         libc::signal(libc::SIGHUP, handler as *const () as libc::sighandler_t);
     }

@@ -205,7 +205,9 @@ fn hook_methods_in_impl(src: &str) -> Vec<String> {
 // filter already meant, and an author who wants a hook declares `hooks`.
 #[test]
 fn the_six_hook_methods_are_defaulted() {
-    let src = read("crates/lca-ext-abi/src/lib.rs");
+    // Gh #551 split the dispatch contract into `dispatch.rs`; the module walk
+    // keeps this row pointed at the trait wherever the trait lives.
+    let src = crate::module_text("crates/lca-ext-abi/src/lib.rs");
     for method in HOOK_METHODS {
         let decl = format!("fn {method}");
         let at = src

@@ -186,11 +186,15 @@ fn the_version_is_bumped_in_one_place_and_never_on_a_read() {
 // change, not a `wit/` one: the host asks its own handles, so no guest sees it.
 #[test]
 fn the_trait_default_is_none_and_only_the_bridge_overrides_it() {
-    let abi = read("crates/lca-ext-abi/src/lib.rs");
+    // Gh #551 split the dispatch contract into `dispatch.rs`; read the module.
+    let abi = crate::module_text("crates/lca-ext-abi/src/lib.rs");
+    // `module_text` joins several files, so the closure is "the first `}` at the
+    // declaration's own indent" rather than a literal `\n        }\n` (which a
+    // rustfmt'd single-line `fn … { None }` would never match).
     let default_body = abi
         .split("fn specs_version(&self) -> Option<u64> {")
         .nth(1)
-        .and_then(|rest| rest.split("\n        }\n").next())
+        .and_then(|rest| rest.split("\n    }\n").next())
         .expect("the trait's defaulted `specs_version` exists");
     assert!(
         default_body.trim() == "None",

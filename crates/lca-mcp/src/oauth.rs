@@ -555,12 +555,14 @@ fn sign_in_flow(
         server,
         &meta,
         &store,
-        &client_id,
-        client_secret.as_deref(),
-        &code,
-        &redirect_uri,
-        &verifier,
-        scope.as_deref(),
+        CodeExchange {
+            client_id: &client_id,
+            client_secret: client_secret.as_deref(),
+            code: &code,
+            redirect_uri: &redirect_uri,
+            verifier: &verifier,
+            scope: scope.as_deref(),
+        },
     )
 }
 
@@ -634,29 +636,45 @@ fn store_issuance(
     })
 }
 
-/// The code exchange at the end of [`sign_in`].
-#[allow(clippy::too_many_arguments)]
+/// The six code-exchange strings one OAuth round trip carries (gh #556).
+///
+/// They were six consecutive `&str`/`Option<&str>` arguments under
+/// `#[allow(clippy::too_many_arguments)]`, three of them secrets whose
+/// transposition would have compiled and sent the wrong value to the token
+/// endpoint. Named fields make each one say what it is.
+struct CodeExchange<'a> {
+    /// The OAuth client id the gateway issued.
+    client_id: &'a str,
+    /// The client secret, when the gateway needs one.
+    client_secret: Option<&'a str>,
+    /// The authorization code the redirect carried.
+    code: &'a str,
+    /// The redirect URI the authorize request named.
+    redirect_uri: &'a str,
+    /// The PKCE verifier for this exchange.
+    verifier: &'a str,
+    /// The requested scope, when the gateway wants it restated.
+    scope: Option<&'a str>,
+}
+
+/// The code exchange at the end of [`sign_in`]: form-POST the code with its
+/// verifier, then store what the token endpoint returns.
 fn exchange(
     caps: Arc<lca_tools::Capabilities>,
     server: &HttpServerConfig,
     meta: &IdpMeta,
     store: &TokenStore,
-    client_id: &str,
-    client_secret: Option<&str>,
-    code: &str,
-    redirect_uri: &str,
-    verifier: &str,
-    scope: Option<&str>,
+    exchange: CodeExchange<'_>,
 ) -> Result<(), String> {
     let mut pairs = vec![
         ("grant_type", "authorization_code"),
-        ("code", code),
-        ("redirect_uri", redirect_uri),
-        ("client_id", client_id),
-        ("code_verifier", verifier),
+        ("code", exchange.code),
+        ("redirect_uri", exchange.redirect_uri),
+        ("client_id", exchange.client_id),
+        ("code_verifier", exchange.verifier),
     ];
     let secret;
-    if let Some(secret_value) = client_secret {
+    if let Some(secret_value) = exchange.client_secret {
         secret = secret_value.to_string();
         pairs.push(("client_secret", secret.as_str()));
     }
@@ -664,10 +682,10 @@ fn exchange(
     store_issuance(
         store,
         &answer,
-        client_id,
-        client_secret,
+        exchange.client_id,
+        exchange.client_secret,
         &meta.token_endpoint,
-        scope,
+        exchange.scope,
     )?;
     // The grant now covers the stepped-up scopes: forget the pending
     // memory (a best-effort delete; absence is the common case).

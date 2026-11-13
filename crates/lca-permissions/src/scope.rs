@@ -154,6 +154,25 @@ impl ScopeGrant {
             _ => Err(ScopeViolationKind::UnknownScope),
         }
     }
+
+    /// The `workspace` scope (gh #556): a known name in a fixed vocabulary, so
+    /// this cannot fail - the parser above exists for names that arrive as data.
+    #[must_use]
+    pub fn workspace(mode: FsMode) -> ScopeGrant {
+        ScopeGrant {
+            scope: "workspace",
+            mode,
+        }
+    }
+
+    /// The `temp` scope, for staged payloads (gh #344).
+    #[must_use]
+    pub fn temp(mode: FsMode) -> ScopeGrant {
+        ScopeGrant {
+            scope: "temp",
+            mode,
+        }
+    }
 }
 
 /// A refused resolution, carrying enough detail to record the attempt

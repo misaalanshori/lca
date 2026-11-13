@@ -591,6 +591,14 @@ impl Terminal for ProcessTerminal {
                 #[cfg(windows)]
                 {
                     let deadline = Instant::now() + Duration::from_millis(500);
+                    // The sleep is the *gap between cancellation attempts*, not a
+                    // poll of anything the reader publishes: `CancelSynchronousIo` is
+                    // asynchronous by nature (it flags the thread and returns), so
+                    // retrying without a gap spins on a kernel call while the reader
+                    // is still inside `ReadFile`. 2 ms is the shortest gap that keeps
+                    // this loop off the CPU on the measured Windows console, and the
+                    // 500 ms `deadline` above bounds it either way - the loop cannot
+                    // outlive teardown even if `reader_done` never arrives.
                     while !self.shared.reader_done.load(Ordering::SeqCst)
                         && Instant::now() < deadline
                     {
@@ -629,6 +637,9 @@ impl Terminal for ProcessTerminal {
                 // One cancel can miss: the reader can pass its `shutdown`
                 // check and slip into `ReadFile` between the flag and the
                 // cancel, then block forever. Retry until it reports done.
+                // Same mechanism as the hangup path above, and the same bound: the
+                // gap exists because a cancel is asynchronous, the 500 ms deadline
+                // because a reader that never reports must not wedge shutdown.
                 let deadline = Instant::now() + Duration::from_millis(500);
                 while !self.shared.reader_done.load(Ordering::SeqCst) && Instant::now() < deadline {
                     cancel_blocking_read(&handle);
@@ -1043,6 +1054,11 @@ fn tmux_forwards_hyperlinks() -> bool {
                     let _ = child.wait();
                     return false;
                 }
+                // A child-process poll, not a terminal read: `try_wait` has no
+                // waiting form that also watches a deadline without a second
+                // thread, so this is the loop's own interval. 5 ms keeps the
+                // 250 ms budget above meaningful (50 tries) and costs nothing
+                // when tmux answers at once, which is the normal case.
                 std::thread::sleep(std::time::Duration::from_millis(5));
             }
             Err(_) => return false,
