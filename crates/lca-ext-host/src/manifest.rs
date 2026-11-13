@@ -3,7 +3,18 @@
 use super::*;
 
 /// A parsed `extension.toml`.
+///
+/// **`#[non_exhaustive]` (gh #553).** This is the capability trust boundary:
+/// [`Manifest::parse`] enforces the invariants that make a consent line honest -
+/// the namespace equals the name (FR-PERM-6), `oauth` needs `net`, no bare `net`
+/// wildcard (FR-PERM-15), no `env` wildcard, canonical local ranges (FR-PERM-14),
+/// resource kinds and clamp. A struct literal outside this crate could skip all
+/// of it, so a caller can no longer build one: the only way in is `parse`
+/// (**E0639** for an outside literal). Field *reads* are unaffected, which is why
+/// this needs no accessor set - measured: zero struct literals outside
+/// `manifest.rs` (`grep -rn "Manifest {" crates/ extensions/ tests/ fuzz/`).
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct Manifest {
     /// Extension identity; also its credential namespace later (FR-PERM-6).
     pub name: String,

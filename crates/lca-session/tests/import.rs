@@ -63,7 +63,7 @@ fn corrupt_lines_abort_before_any_session_exists() {
     let err = store
         .import_jsonl(&project, "bad", &bad)
         .expect_err("corrupt aborts");
-    assert!(err.contains('2'), "names the line: {err}");
+    assert!(err.to_string().contains('2'), "names the line: {err}");
     assert_eq!(
         store.list_sessions(&project).expect("list").len(),
         before,

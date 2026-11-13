@@ -776,3 +776,22 @@ mod choose_reads_as_named_axes;
 
 #[path = "568-try-build-names-the-turn.rs"]
 mod try_build_names_the_turn;
+
+// The second boundary-hygiene batch (#553 #559 #565 #567 #550), same class as
+// `1f0c1e5d`: a boundary whose invariant lives only in a constructor, a
+// `String` error on a library API, a file at the ceiling, and an attribute that
+// forces work against the binary-size gate. Each row asserts the new contract.
+#[path = "553-manifest-cannot-skip-its-parse.rs"]
+mod manifest_cannot_skip_its_parse;
+
+#[path = "559-record-split-and-typed-exposure.rs"]
+mod record_split_and_typed_exposure;
+
+#[path = "565-import-typed-and-named-warming.rs"]
+mod import_typed_and_named_warming;
+
+#[path = "567-subscription-split-by-flow.rs"]
+mod subscription_split_by_flow;
+
+#[path = "550-debug-inline-scoped-and-one-spare.rs"]
+mod debug_inline_scoped_and_one_spare;

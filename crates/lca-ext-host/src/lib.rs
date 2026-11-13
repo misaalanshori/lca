@@ -413,13 +413,19 @@ impl WasiView for HostState {
 /// target. Construction is load-time (the component compile dominates
 /// it); fuel budgets and epoch deadlines are per-store either way, so
 /// nothing else changes shape.
-#[allow(clippy::expect_used)] // startup-fatal: a wasmtime engine that cannot build leaves nothing to run.
-fn build_engine() -> Engine {
+///
+/// # Errors
+///
+/// [`LoadError::Link`] when wasmtime refuses the configuration. Gh #553: this
+/// used to `expect`, and release builds set `panic = "abort"`, so a refused
+/// engine configuration aborted the process instead of failing the one load.
+fn build_engine() -> Result<Engine, LoadError> {
     let mut config = wasmtime::Config::new();
     config.wasm_component_model(true);
     config.consume_fuel(true);
     config.epoch_interruption(true);
-    Engine::new(&config).expect("engine")
+    Engine::new(&config)
+        .map_err(|err| LoadError::Link(format!("wasmtime engine setup failed: {err}")))
 }
 
 /// The host: limits and environment shared by every extension load.
@@ -481,7 +487,6 @@ impl ExtHost {
     /// ABI window), resolve its grants, then link and probe-instantiate
     /// so a broken component fails here, before the first input
     /// (FR-EXT-1, FR-EXT-2, FR-EXT-8, `docs/flows.md`).
-    #[allow(clippy::expect_used)] // `add_to_linker` only fails on a duplicate definition, which is a programming error.
     pub fn load(&mut self, wasm: &[u8], manifest_text: &str) -> Result<WasmExtension, LoadError> {
         let manifest = Manifest::parse(manifest_text)?;
         if !manifest.abi_in_window() {
@@ -552,12 +557,18 @@ impl ExtHost {
             Some(vars) => env_grant::declared_env(manifest_text, vars)?,
             None => env_grant::declared_env_from_process(manifest_text)?,
         };
-        let engine = build_engine();
+        let engine = build_engine()?;
         let component = wasmtime::component::Component::new(&engine, wasm)
             .map_err(|err| LoadError::Link(err.to_string()))?;
         let mut linker: HostLinker = Linker::new(&engine);
-        wasmtime_wasi::p2::add_to_linker_sync(&mut linker).expect("wasi imports");
-        Tool::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state).expect("world imports");
+        // Gh #553: every `add_to_linker` below returns `Result` and reports a
+        // duplicate definition - a programming error, but one that reached a
+        // `panic = "abort"` in release builds. `LoadError::Link` already exists
+        // for "linking failed", so a collision now fails this load only.
+        wasmtime_wasi::p2::add_to_linker_sync(&mut linker)
+            .map_err(|err| LoadError::Link(format!("wasi imports: {err}")))?;
+        Tool::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)
+            .map_err(|err| LoadError::Link(format!("world imports: {err}")))?;
         // The compaction world always imports `completion`; like every
         // capability interface it links in a denied state until the
         // manifest declares it (FR-PERM-3), so this is unconditional
@@ -568,7 +579,7 @@ impl ExtHost {
             &mut linker,
             |state| state,
         )
-        .expect("completion imports");
+        .map_err(|err| LoadError::Link(format!("completion imports: {err}")))?;
         // The provider world's remaining imports link unconditionally, in a
         // denied state until the manifest declares them - the same rule the
         // compaction world's `completion` follows (FR-PERM-3). A component
@@ -585,9 +596,9 @@ impl ExtHost {
             // `wit/deps/lca-host/capabilities.wit`, so the tool-world entry
             // satisfies a provider-world import as well.
             provider_host::oauth::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)
-                .expect("oauth imports");
+                .map_err(|err| LoadError::Link(format!("oauth imports: {err}")))?;
             provider_host::credentials::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)
-                .expect("credentials imports");
+                .map_err(|err| LoadError::Link(format!("credentials imports: {err}")))?;
         }
         let declares_provider = declared.contains(&lca_ext_abi::World::Provider);
         let pre = linker

@@ -133,7 +133,7 @@ fn the_paint_flag_is_per_tab_state() {
 // argument for deleting either paint.
 #[test]
 fn there_is_no_persisted_error_record_to_replay() {
-    let records = crate::module_text("crates/lca-protocol/src/record.rs");
+    let records = crate::module_text("crates/lca-protocol/src/record/mod.rs");
     assert!(
         !records.contains("    Error {"),
         "no `Record::Error` variant exists, so nothing replays an error as history"

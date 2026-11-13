@@ -21,6 +21,7 @@ pub struct DebugPaths {
 
 impl DebugPaths {
     /// The pair inside a logs directory (production: `<data>/logs`).
+    #[must_use]
     pub fn in_dir(dir: &Path) -> DebugPaths {
         DebugPaths {
             log: dir.join("debug.log"),
@@ -29,13 +30,17 @@ impl DebugPaths {
     }
 
     /// The single spare a file rotates to.
+    ///
+    /// Delegates to [`spare_path`], which is also what the writer uses: the
+    /// `.1` suffix used to be built in two places (gh #550), so a change to it
+    /// had to be made twice.
+    #[must_use]
     pub fn spare_for(&self, path: &Path) -> PathBuf {
-        let mut spare = path.as_os_str().to_owned();
-        spare.push(".1");
-        PathBuf::from(spare)
+        spare_path(path)
     }
 
     /// The file a domain writes (`is_wire` decides).
+    #[must_use]
     pub fn file_for(&self, domain: crate::Domain) -> &Path {
         if domain.is_wire() {
             &self.wire
@@ -43,6 +48,15 @@ impl DebugPaths {
             &self.log
         }
     }
+}
+
+/// The single `.1` spare of `path` (gh #550): one function, because two copies
+/// of the suffix could drift and the spare is what rotation renames onto.
+#[must_use]
+pub fn spare_path(path: &Path) -> PathBuf {
+    let mut spare = path.as_os_str().to_owned();
+    spare.push(".1");
+    PathBuf::from(spare)
 }
 
 /// An appending writer that rotates past the cap: the full file moves
@@ -57,20 +71,24 @@ pub struct RotatingWriter {
 
 impl RotatingWriter {
     /// Open (creating parent directories) with the production cap.
+    ///
+    /// # Errors
+    ///
+    /// [`std::io::Error`] when the parent directory or the file cannot be created.
     pub fn open(path: &Path) -> std::io::Result<RotatingWriter> {
         RotatingWriter::with_cap(path, FILE_CAP_BYTES)
     }
 
     /// Open with an explicit cap (tests use a tiny one).
+    ///
+    /// # Errors
+    ///
+    /// [`std::io::Error`] when the parent directory or the file cannot be created.
     pub fn with_cap(path: &Path, cap: u64) -> std::io::Result<RotatingWriter> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let spare = {
-            let mut spare = path.as_os_str().to_owned();
-            spare.push(".1");
-            PathBuf::from(spare)
-        };
+        let spare = spare_path(path);
         Ok(RotatingWriter {
             path: path.to_path_buf(),
             spare,
@@ -82,9 +100,7 @@ impl RotatingWriter {
     /// Rotate when the live file reached the cap. Returns whether it
     /// rotated (the caller reopens).
     fn rotate_if_full(&mut self) -> std::io::Result<bool> {
-        let size = std::fs::metadata(&self.path)
-            .map(|meta| meta.len())
-            .unwrap_or(0);
+        let size = std::fs::metadata(&self.path).map_or(0, |meta| meta.len());
         if size < self.cap {
             return Ok(false);
         }

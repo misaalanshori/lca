@@ -28,6 +28,7 @@ pub enum EntryKind {
 
 /// One navigable row of a session's entry tree (gh #37, FR-UI-16).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct EntryRow {
     /// The record navigating here branches at.
     pub id: String,
@@ -145,6 +146,45 @@ fn tool_call_label(name: &str, arguments: &str) -> String {
 /// attach to their nearest candidate ancestor through jump markers
 /// and non-row records; orphans root; children sort oldest-first;
 /// emission is pre-order. The live set and the label map overlay.
+fn row_kind_text(record: &lca_protocol::Record) -> Option<(EntryKind, String)> {
+    let head = |text: &str| text.lines().next().unwrap_or_default().to_string();
+    match record {
+        lca_protocol::Record::User { content, .. } => Some((EntryKind::User, head(content))),
+        lca_protocol::Record::Assistant { content, .. } => {
+            let text = content.iter().find_map(|block| match block {
+                lca_protocol::ContentBlock::Text { text } => Some(text.clone()),
+                _ => None,
+            });
+            Some((
+                EntryKind::Assistant,
+                text.map(|t| head(&t))
+                    .unwrap_or_else(|| "(tool call)".to_string()),
+            ))
+        }
+        lca_protocol::Record::ToolCall { name, .. } => Some((EntryKind::Tool, name.clone())),
+        lca_protocol::Record::ToolResult { content, .. } => Some((
+            EntryKind::Tool,
+            content
+                .as_deref()
+                .map(head)
+                .unwrap_or_else(|| "(no output)".to_string()),
+        )),
+        lca_protocol::Record::BranchSummary { summary, .. } => {
+            Some((EntryKind::Summary, head(summary)))
+        }
+        lca_protocol::Record::Compaction { summary, .. } => {
+            Some((EntryKind::Compaction, head(summary)))
+        }
+        lca_protocol::Record::Custom { custom_type, .. } => {
+            Some((EntryKind::Custom, custom_type.clone()))
+        }
+        lca_protocol::Record::CustomMessage { content, .. } => {
+            Some((EntryKind::CustomMessage, head(content)))
+        }
+        _ => None,
+    }
+}
+
 fn entry_rows(
     records: &[lca_protocol::Record],
     live: &std::collections::BTreeSet<String>,
@@ -152,44 +192,6 @@ fn entry_rows(
     marks: &std::collections::BTreeMap<String, String>,
 ) -> Vec<EntryRow> {
     use std::collections::BTreeMap;
-    fn row_kind_text(record: &lca_protocol::Record) -> Option<(EntryKind, String)> {
-        let head = |text: &str| text.lines().next().unwrap_or_default().to_string();
-        match record {
-            lca_protocol::Record::User { content, .. } => Some((EntryKind::User, head(content))),
-            lca_protocol::Record::Assistant { content, .. } => {
-                let text = content.iter().find_map(|block| match block {
-                    lca_protocol::ContentBlock::Text { text } => Some(text.clone()),
-                    _ => None,
-                });
-                Some((
-                    EntryKind::Assistant,
-                    text.map(|t| head(&t))
-                        .unwrap_or_else(|| "(tool call)".to_string()),
-                ))
-            }
-            lca_protocol::Record::ToolCall { name, .. } => Some((EntryKind::Tool, name.clone())),
-            lca_protocol::Record::ToolResult { content, .. } => Some((
-                EntryKind::Tool,
-                content
-                    .as_deref()
-                    .map(head)
-                    .unwrap_or_else(|| "(no output)".to_string()),
-            )),
-            lca_protocol::Record::BranchSummary { summary, .. } => {
-                Some((EntryKind::Summary, head(summary)))
-            }
-            lca_protocol::Record::Compaction { summary, .. } => {
-                Some((EntryKind::Compaction, head(summary)))
-            }
-            lca_protocol::Record::Custom { custom_type, .. } => {
-                Some((EntryKind::Custom, custom_type.clone()))
-            }
-            lca_protocol::Record::CustomMessage { content, .. } => {
-                Some((EntryKind::CustomMessage, head(content)))
-            }
-            _ => None,
-        }
-    }
     fn row_text(record: &lca_protocol::Record) -> Option<String> {
         row_kind_text(record).map(|(_, text)| text)
     }
@@ -253,18 +255,42 @@ fn entry_rows(
         siblings.sort_by_key(|r| order.get(r.id().unwrap_or_default()));
     }
     let mut rows = Vec::new();
-    #[allow(clippy::too_many_arguments)] // the walk's carried state, one arg each
-    fn emit(
-        parent: Option<&str>,
-        depth: usize,
-        children: &BTreeMap<Option<&str>, Vec<&lca_protocol::Record>>,
-        live: &std::collections::BTreeSet<String>,
-        live_leaf: Option<&str>,
-        marks: &std::collections::BTreeMap<String, String>,
-        calls: &BTreeMap<&str, (&str, &str)>,
-        rows: &mut Vec<EntryRow>,
-    ) {
-        let Some(siblings) = children.get(&parent) else {
+    // Gh #565: the walk's carried state is one struct with names, not eight
+    // positional arguments. Every field is read-only except `rows`, and the
+    // three that were most confusable (`live`, `live_leaf`, `marks`) are now
+    // distinguishable at the recursion site.
+    let walk = Walk {
+        children: &children,
+        live,
+        live_leaf,
+        marks,
+        calls: &calls,
+    };
+    walk.emit(None, 0, &mut rows);
+    rows
+}
+
+/// The read-only state one `entry_rows` walk carries down the tree (gh #565).
+struct Walk<'a> {
+    /// Records grouped by their resolved parent (the tree's edges).
+    children: &'a std::collections::BTreeMap<Option<&'a str>, Vec<&'a lca_protocol::Record>>,
+    /// Record ids on the live chain (the display view).
+    live: &'a std::collections::BTreeSet<String>,
+    /// The live chain's tip, which the navigator's cursor opens on.
+    live_leaf: Option<&'a str>,
+    /// Bookmark labels by record id.
+    marks: &'a std::collections::BTreeMap<String, String>,
+    /// Tool-call arguments by call id, for the `[read: …]` row summaries.
+    calls: &'a std::collections::BTreeMap<&'a str, (&'a str, &'a str)>,
+}
+
+impl<'a> Walk<'a> {
+    /// Push every row under `parent`, depth-first, in sibling order.
+    ///
+    /// Recursive by construction: the tree is the recursion, and the state is
+    /// on `self` rather than on a nine-argument call.
+    fn emit(&self, parent: Option<&'a str>, depth: usize, rows: &mut Vec<EntryRow>) {
+        let Some(siblings) = self.children.get(&parent) else {
             return;
         };
         for record in siblings {
@@ -272,7 +298,8 @@ fn entry_rows(
             let (kind, text) =
                 row_kind_text(record).unwrap_or((EntryKind::Assistant, String::new()));
             let call = match record {
-                lca_protocol::Record::ToolResult { call_id, .. } => calls
+                lca_protocol::Record::ToolResult { call_id, .. } => self
+                    .calls
                     .get(call_id.as_str())
                     .map(|(name, arguments)| tool_call_label(name, arguments)),
                 _ => None,
@@ -283,26 +310,13 @@ fn entry_rows(
                 kind,
                 text,
                 call,
-                label: marks.get(&id).cloned(),
-                live: live.contains(&id),
-                live_leaf: live_leaf == Some(id.as_str()),
+                label: self.marks.get(&id).cloned(),
+                live: self.live.contains(&id),
+                live_leaf: self.live_leaf == Some(id.as_str()),
             });
-            emit(
-                Some(record.id().unwrap_or_default()),
-                depth + 1,
-                children,
-                live,
-                live_leaf,
-                marks,
-                calls,
-                rows,
-            );
+            self.emit(Some(record.id().unwrap_or_default()), depth + 1, rows);
         }
     }
-    emit(
-        None, 0, &children, live, live_leaf, marks, &calls, &mut rows,
-    );
-    rows
 }
 
 impl SessionStore {

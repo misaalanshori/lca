@@ -21,48 +21,52 @@
 /// `zip_code`-style names mask too, because their normalized form ends in
 /// a sensitive suffix.
 fn is_sensitive_key(key: &str) -> bool {
+    // One allocation, not two (gh #550): the filter and the lowercase used to
+    // be separate passes over a `String`.
     let normalized: String = key
         .chars()
         .filter(|c| *c != '_' && *c != '-')
-        .collect::<String>()
-        .to_ascii_lowercase();
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
     if normalized.is_empty() {
         return false;
     }
-    const EXACT: &[&str] = &[
-        "key",
-        "token",
-        "code",
-        "secret",
-        "password",
-        "authorization",
-        "auth",
-        "credentials",
-        "session",
-        "cookie",
-        // The short session-cookie forms the suffix rule cannot reach.
-        "sid",
-        "sessid",
-        "sessionid",
-        "apikey",
-        // A bare JWT is a credential by shape (gh #343 fix-up).
-        "jwt",
-    ];
-    const SUFFIXES: &[&str] = &[
-        "token",
-        "key",
-        "secret",
-        "password",
-        "code",
-        "auth",
-        "session",
-        "credentials",
-    ];
     EXACT.contains(&normalized.as_str()) || SUFFIXES.iter().any(|s| normalized.ends_with(s))
 }
 
+/// Normalized key names that are a credential in themselves (gh #343).
+const EXACT: &[&str] = &[
+    "key",
+    "token",
+    "code",
+    "secret",
+    "password",
+    "authorization",
+    "auth",
+    "credentials",
+    "session",
+    "cookie",
+    // The short session-cookie forms the suffix rule cannot reach.
+    "sid",
+    "sessid",
+    "sessionid",
+    "apikey",
+    // A bare JWT is a credential by shape (gh #343 fix-up).
+    "jwt",
+];
+const SUFFIXES: &[&str] = &[
+    "token",
+    "key",
+    "secret",
+    "password",
+    "code",
+    "auth",
+    "session",
+    "credentials",
+];
 /// Mask a secret, keeping an identifying prefix: 8 chars for keys of
 /// 16+ chars, the first half below that, nothing for a 0-1 char value.
+#[must_use]
 pub fn redact_secret(secret: &str) -> String {
     let len = secret.chars().count();
     if len <= 1 {
@@ -78,6 +82,7 @@ pub fn redact_secret(secret: &str) -> String {
 /// per-cookie (sessions go, preferences stay), and anything else —
 /// `content-type`, `user-agent` — passes through untouched so traces
 /// stay readable.
+#[must_use]
 pub fn redact_header(name: &str, value: &str) -> String {
     let lower = name.to_ascii_lowercase();
     if lower == "cookie" || lower == "set-cookie" {
@@ -122,6 +127,7 @@ fn redact_cookie(value: &str) -> String {
 
 /// Mask sensitive query parameters, keeping names and every other
 /// parameter untouched.
+#[must_use]
 pub fn redact_url(url: &str) -> String {
     let Some(query_start) = url.find('?') else {
         return url.to_string();
@@ -147,6 +153,7 @@ pub fn redact_url(url: &str) -> String {
 /// Mask sensitive values in a JSON payload, preserving schema and keys
 /// at every depth. Non-JSON input passes through (body previews are
 /// often plain text).
+#[must_use]
 pub fn redact_json(text: &str) -> String {
     let Ok(mut value) = serde_json::from_str::<serde_json::Value>(text) else {
         return text.to_string();
@@ -194,6 +201,7 @@ fn mask_json(value: &mut serde_json::Value) {
 
 /// One credential-store lookup line: the key name in full, the value
 /// as a prefix only (`None` stays `None` — absence is not a secret).
+#[must_use]
 pub fn redact_credential(label: &str, value: Option<&str>) -> String {
     match value {
         Some(secret) => format!(

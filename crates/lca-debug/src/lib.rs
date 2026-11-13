@@ -43,6 +43,7 @@ pub enum Domain {
 
 impl Domain {
     /// The `tracing` target (`LCA_LOG="lca_core=trace"`).
+    #[must_use]
     pub fn target(self) -> &'static str {
         match self {
             Domain::Core => "lca_core",
@@ -56,6 +57,7 @@ impl Domain {
 
     /// Whether the domain writes the wire file (`debug-wire.log`)
     /// rather than the internal file (`debug.log`).
+    #[must_use]
     pub fn is_wire(self) -> bool {
         matches!(self, Domain::Net | Domain::Wasm)
     }
@@ -64,7 +66,16 @@ impl Domain {
 /// Emit one structured event. Off-feature this is an empty inline body
 /// (zero symbols, zero overhead); on-feature it writes a `tracing`
 /// event at the domain's target with the event name and detail.
-#[inline(always)]
+///
+/// **The attribute is scoped (gh #550).** With `debug-trace` off the body is one
+/// call to an empty function, so `inline(always)` is exactly what collapses it
+/// and the wrappers below to nothing. With the feature **on**, `emit_inner`
+/// holds a six-arm `tracing::info!` dispatch, and `inline(always)` would force
+/// that machinery into every trace call site in the workspace - against NFR-1's
+/// binary-size gate - so the on-feature arm asks for a plain `inline` and lets
+/// `emit_inner` keep the dispatch in one function.
+#[cfg_attr(not(feature = "debug-trace"), inline(always))]
+#[cfg_attr(feature = "debug-trace", inline)]
 pub fn emit(domain: Domain, name: &str, detail: &str) {
     emit_inner(domain, name, detail);
 }

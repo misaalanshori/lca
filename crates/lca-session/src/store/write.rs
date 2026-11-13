@@ -138,7 +138,7 @@ impl SessionStore {
     /// a half-document shape fails loudly rather than half-importing.
     fn parse_import_records(
         lines: &[&str],
-    ) -> std::result::Result<(Vec<lca_protocol::Record>, &'static str), String> {
+    ) -> std::result::Result<(Vec<lca_protocol::Record>, &'static str), crate::Error> {
         let joined = lines.join("\n");
         if let Ok(document) = serde_json::from_str::<serde_json::Value>(&joined)
             && let Some(array) = document.get("records").and_then(|value| value.as_array())
@@ -148,7 +148,10 @@ impl SessionStore {
                 match serde_json::from_value::<lca_protocol::Record>(entry.clone()) {
                     Ok(record) => records.push(record),
                     Err(err) => {
-                        return Err(format!("record {}: {err}", index + 1));
+                        return Err(crate::Error::InvalidImport(format!(
+                            "record {}: {err}",
+                            index + 1
+                        )));
                     }
                 }
             }
@@ -161,7 +164,7 @@ impl SessionStore {
             }
             serde_json::from_str::<lca_protocol::Record>(line)
                 .map(|record| records.push(record))
-                .map_err(|err| format!("line {}: {err}", index + 1))?;
+                .map_err(|err| crate::Error::InvalidImport(format!("line {}: {err}", index + 1)))?;
         }
         Ok((records, "line"))
     }
@@ -177,27 +180,36 @@ impl SessionStore {
     /// the new session cannot resolve stay dangling exactly like a
     /// raw-JSONL import of the same records; restoring bytes is out
     /// of scope.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::InvalidImport`] when a document or line refuses (naming
+    /// the shape and its 1-based position), or the session store's own
+    /// [`crate::Error`] when creating or appending fails.
     pub fn import_jsonl(
         &self,
         project_dir: &Path,
         title: &str,
         lines: &[&str],
-    ) -> std::result::Result<Session, String> {
+    ) -> crate::Result<Session> {
         let (records, shape) = Self::parse_import_records(lines)?;
         match records.first() {
             Some(lca_protocol::Record::SessionStart { .. }) => {}
             _ => {
-                return Err(format!("{shape} 1: a session must open with session-start"));
+                return Err(crate::Error::InvalidImport(format!(
+                    "{shape} 1: a session must open with session-start"
+                )));
             }
         }
-        let session = self
-            .create_session(project_dir, title)
-            .map_err(|err| format!("cannot create the session: {err}"))?;
+        let session = self.create_session(project_dir, title).map_err(|err| {
+            crate::Error::InvalidImport(format!("cannot create the session: {err}"))
+        })?;
         // The created session stamps its own start; the file's opener
         // only proved the shape.
         for record in records.into_iter().skip(1) {
-            self.append(&session, record)
-                .map_err(|err| format!("cannot write the session: {err}"))?;
+            self.append(&session, record).map_err(|err| {
+                crate::Error::InvalidImport(format!("cannot write the session: {err}"))
+            })?;
         }
         Ok(session)
     }

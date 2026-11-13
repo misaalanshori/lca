@@ -8,7 +8,8 @@
 pub const TARGET: &str = "lca_net";
 
 /// One wire event (`name` like `"http.request"`).
-#[inline(always)]
+#[cfg_attr(not(feature = "debug-trace"), inline(always))]
+#[cfg_attr(feature = "debug-trace", inline)]
 pub fn event(name: &str, detail: &str) {
     crate::emit(crate::Domain::Net, name, detail);
 }

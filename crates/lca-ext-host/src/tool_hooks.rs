@@ -241,8 +241,8 @@ pub(super) fn session_close_work(inner: &Inner) -> Result<(), CallError> {
 fn parse_catalog_spec(
     spec: &lca_ext_abi::host::tool_catalog::exports::lca::ext::catalog::ToolSpec,
 ) -> Result<ToolSpec, CallError> {
-    let exposure =
-        lca_protocol::ToolExposure::parse(&spec.exposure).map_err(CallError::InvalidArguments)?;
+    let exposure = lca_protocol::ToolExposure::parse(&spec.exposure)
+        .map_err(|err| CallError::InvalidArguments(err.to_string()))?;
     let parameters = serde_json::from_str(&spec.parameters)
         .unwrap_or_else(|_| serde_json::json!({ "type": "object" }));
     Ok(ToolSpec {

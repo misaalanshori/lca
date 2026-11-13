@@ -66,7 +66,9 @@ fn code_lines(text: &str) -> String {
 #[test]
 fn the_fork_linkage_is_the_stores_parent_session() {
     // The record the linkage actually lives in (ADR-0046).
-    let record = read("crates/lca-protocol/src/record.rs");
+    // Gh #559 made `record.rs` a module; `module_text` reads every file of it, so
+    // this row keeps seeing the variant wherever the schema half lives.
+    let record = crate::module_text("crates/lca-protocol/src/record/mod.rs");
     assert!(
         record.contains("ForkPoint {") && record.contains("parent_session: String"),
         "the fork-point record names the parent session"

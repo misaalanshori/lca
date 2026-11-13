@@ -423,13 +423,13 @@ fn the_device_flow_primitives_hold() {
         (200, br#"{"error":"authorization_pending"}"#.to_vec()),
         (200, br#"{"access_token":"tok-2"}"#.to_vec()),
     ]);
-    let auth = lca_subscription::DeviceAuthorization {
-        device_code: "d".to_string(),
-        user_code: "u".to_string(),
-        verification_uri: "https://x.test/device".to_string(),
-        interval_secs: 1,
-        expires_in_secs: 30,
-    };
+    let auth = lca_subscription::DeviceAuthorization::new(
+        "d".to_string(),
+        "u".to_string(),
+        "https://x.test/device".to_string(),
+        1,
+        30,
+    );
     let json = poll_device_code(&cap, &auth, "https://x.test/token", &[("a", "b")]).expect("token");
     assert_eq!(
         json.get("access_token").and_then(|v| v.as_str()),
@@ -495,13 +495,13 @@ fn a_cancelled_device_flow_returns_inside_the_cancellation_budget() {
         (200, br#"{"error":"authorization_pending"}"#.to_vec()),
     ])
     .abort_probes_after(2);
-    let auth = DeviceAuthorization {
-        device_code: "d".to_string(),
-        user_code: "u".to_string(),
-        verification_uri: "https://x.test/device".to_string(),
-        interval_secs: 5,
-        expires_in_secs: 60,
-    };
+    let auth = DeviceAuthorization::new(
+        "d".to_string(),
+        "u".to_string(),
+        "https://x.test/device".to_string(),
+        5,
+        60,
+    );
     let started = std::time::Instant::now();
     let outcome = poll_device_code(&cap, &auth, "https://x.test/token", &[("a", "b")]);
     let elapsed = started.elapsed();
@@ -539,13 +539,13 @@ fn slicing_the_wait_preserves_the_poll_arithmetic() {
         (200, br#"{"error":"authorization_pending"}"#.to_vec()),
         (200, br#"{"access_token":"tok"}"#.to_vec()),
     ]);
-    let auth = DeviceAuthorization {
-        device_code: "d".to_string(),
-        user_code: "u".to_string(),
-        verification_uri: "https://x.test/device".to_string(),
-        interval_secs: 1,
-        expires_in_secs: 30,
-    };
+    let auth = DeviceAuthorization::new(
+        "d".to_string(),
+        "u".to_string(),
+        "https://x.test/device".to_string(),
+        1,
+        30,
+    );
     let json = poll_device_code(&cap, &auth, "https://x.test/token", &[("a", "b")])
         .expect("a pending answer is waited out, then a token");
     assert_eq!(

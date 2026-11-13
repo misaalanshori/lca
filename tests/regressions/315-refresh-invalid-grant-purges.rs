@@ -19,7 +19,13 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 
-const KIT: &str = include_str!("../../crates/lca-subscription/src/lib.rs");
+// Gh #567 split `lib.rs` into `spec`/`crypto`/`transport`/`token`/`login`/`device`,
+// all re-exported from the crate root. Reading the one file would now check a
+// fragment (the predicate moved to `token.rs`), so this reads the module - the
+// same `module_text` walk gh #574's guards use.
+fn kit() -> String {
+    crate::module_text("crates/lca-subscription/src/lib.rs")
+}
 
 // Verifies: gh #315 acceptance 2 - the status check includes 400 alongside
 // 401. This is the direct assertion on the defect: the old code tested
@@ -27,7 +33,7 @@ const KIT: &str = include_str!("../../crates/lca-subscription/src/lib.rs");
 #[test]
 fn the_rejection_check_covers_the_rfc_400_case() {
     assert!(
-        KIT.contains("status == 401 || (status == 400 && refresh_grant_is_dead(&text))"),
+        kit().contains("status == 401 || (status == 400 && refresh_grant_is_dead(&text))"),
         "the purge condition must cover 401 OR 400-invalid_grant; 401 alone is the bug"
     );
 }
@@ -39,10 +45,11 @@ fn the_rejection_check_covers_the_rfc_400_case() {
 #[test]
 fn the_verdict_parses_the_error_field() {
     assert!(
-        KIT.contains("fn refresh_grant_is_dead"),
+        kit().contains("fn refresh_grant_is_dead"),
         "the predicate is named so its contract is greppable"
     );
-    let body = KIT
+    let source = kit();
+    let body = source
         .split("fn refresh_grant_is_dead")
         .nth(1)
         .expect("the predicate body");
@@ -66,13 +73,13 @@ fn the_verdict_parses_the_error_field() {
 #[test]
 fn a_purged_session_says_to_log_in_again() {
     assert!(
-        KIT.contains("run /login {}"),
+        kit().contains("run /login {}"),
         "the dead-grant failure must name the way back"
     );
     // And it is the *purge* arm that says it, not the generic arm: locate
     // the purge call and require the actionable copy in the same statement
     // chain, with whitespace normalized (rustfmt reflows this block).
-    let flat = KIT.split_whitespace().collect::<Vec<_>>().join(" ");
+    let flat = kit().split_whitespace().collect::<Vec<_>>().join(" ");
     let arm_start = flat
         .find("purge_tokens(cap);")
         .expect("the purge call exists");

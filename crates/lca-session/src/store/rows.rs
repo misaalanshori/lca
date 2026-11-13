@@ -31,6 +31,7 @@ pub struct ExportOptions {
 
 /// Session metadata, stored as `meta.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SessionMeta {
     /// Record format version this session was created with.
     pub format_version: u32,
@@ -58,6 +59,7 @@ pub struct SessionMeta {
 
 /// One line of `index.json`; a cache rebuilt from the directories.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SessionSummary {
     /// Session identifier (its directory name).
     pub id: String,

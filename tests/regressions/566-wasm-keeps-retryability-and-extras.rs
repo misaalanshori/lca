@@ -380,13 +380,13 @@ fn a_native_cancel_lands_inside_the_device_code_wait() {
         canceller.cancel();
     });
 
-    let auth = lca_subscription::DeviceAuthorization {
-        device_code: "d".to_string(),
-        user_code: "u".to_string(),
-        verification_uri: "https://x.test/device".to_string(),
-        interval_secs: 5,
-        expires_in_secs: 30,
-    };
+    let auth = lca_subscription::DeviceAuthorization::new(
+        "d".to_string(),
+        "u".to_string(),
+        "https://x.test/device".to_string(),
+        5,
+        30,
+    );
     let started = std::time::Instant::now();
     let outcome = lca_subscription::poll_device_code(
         cap.as_ref() as &dyn lca_protocol::ProviderCap,

@@ -240,84 +240,90 @@ fn collect(records: &[Record]) -> Vec<CacheMiss> {
 // and savings clearing the floor. Every other shape refuses.
 #[test]
 fn warming_eligibility_needs_every_gate() {
-    use lca_session::warming_eligible;
+    use lca_session::{WarmingQuery, warming_eligible};
     // Happy path: 300 s tier, six idle minutes, a dime at stake.
-    assert!(warming_eligible(
-        "idle",
-        Some(300),
-        None,
-        360_000,
-        0.20,
-        0.01,
-        1.0
-    ));
+    assert!(warming_eligible(WarmingQuery {
+        mode: "idle",
+        short_secs: Some(300),
+        long_secs: None,
+        idle_ms: 360_000,
+        miss_cost: 0.20,
+        warm_cost: 0.01,
+        p_continue: 1.0,
+    }));
     // The long tier covers when short is silent.
-    assert!(warming_eligible(
-        "idle",
-        None,
-        Some(1500),
-        1_600_000,
-        0.20,
-        0.01,
-        1.0
-    ));
-    assert!(!warming_eligible(
-        "off",
-        Some(300),
-        None,
-        360_000,
-        0.20,
-        0.01,
-        1.0
-    ));
-    assert!(!warming_eligible(
-        "streaming",
-        Some(300),
-        None,
-        360_000,
-        0.20,
-        0.01,
-        1.0
-    ));
-    assert!(!warming_eligible(
-        "idle", None, None, 360_000, 0.20, 0.01, 1.0
-    ));
-    assert!(!warming_eligible(
-        "idle",
-        Some(0),
-        None,
-        360_000,
-        0.20,
-        0.01,
-        1.0
-    ));
-    assert!(!warming_eligible(
-        "idle",
-        Some(300),
-        None,
-        299_999,
-        0.20,
-        0.01,
-        1.0
-    ));
-    assert!(!warming_eligible(
-        "idle",
-        Some(300),
-        None,
-        lca_session::MAX_IDLE_WARMING_MS + 1,
-        0.20,
-        0.01,
-        1.0
-    ));
-    assert!(!warming_eligible(
-        "idle",
-        Some(300),
-        None,
-        360_000,
-        0.04,
-        0.01,
-        1.0
-    ));
+    assert!(warming_eligible(WarmingQuery {
+        mode: "idle",
+        short_secs: None,
+        long_secs: Some(1500),
+        idle_ms: 1_600_000,
+        miss_cost: 0.20,
+        warm_cost: 0.01,
+        p_continue: 1.0,
+    }));
+    assert!(!warming_eligible(WarmingQuery {
+        mode: "off",
+        short_secs: Some(300),
+        long_secs: None,
+        idle_ms: 360_000,
+        miss_cost: 0.20,
+        warm_cost: 0.01,
+        p_continue: 1.0,
+    }));
+    assert!(!warming_eligible(WarmingQuery {
+        mode: "streaming",
+        short_secs: Some(300),
+        long_secs: None,
+        idle_ms: 360_000,
+        miss_cost: 0.20,
+        warm_cost: 0.01,
+        p_continue: 1.0,
+    }));
+    assert!(!warming_eligible(WarmingQuery {
+        mode: "idle",
+        short_secs: None,
+        long_secs: None,
+        idle_ms: 360_000,
+        miss_cost: 0.20,
+        warm_cost: 0.01,
+        p_continue: 1.0,
+    }));
+    assert!(!warming_eligible(WarmingQuery {
+        mode: "idle",
+        short_secs: Some(0),
+        long_secs: None,
+        idle_ms: 360_000,
+        miss_cost: 0.20,
+        warm_cost: 0.01,
+        p_continue: 1.0,
+    }));
+    assert!(!warming_eligible(WarmingQuery {
+        mode: "idle",
+        short_secs: Some(300),
+        long_secs: None,
+        idle_ms: 299_999,
+        miss_cost: 0.20,
+        warm_cost: 0.01,
+        p_continue: 1.0,
+    }));
+    assert!(!warming_eligible(WarmingQuery {
+        mode: "idle",
+        short_secs: Some(300),
+        long_secs: None,
+        idle_ms: lca_session::MAX_IDLE_WARMING_MS + 1,
+        miss_cost: 0.20,
+        warm_cost: 0.01,
+        p_continue: 1.0,
+    }));
+    assert!(!warming_eligible(WarmingQuery {
+        mode: "idle",
+        short_secs: Some(300),
+        long_secs: None,
+        idle_ms: 360_000,
+        miss_cost: 0.04,
+        warm_cost: 0.01,
+        p_continue: 1.0,
+    }));
 }
 
 // Verifies: gh #42 - a `cache_warm` usage record never perturbs

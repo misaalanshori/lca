@@ -48,8 +48,8 @@ pub use response_guard::ResponseGuard;
 pub use stream::{StreamEvent, THINKING_SIGNATURE_KIND, TRUNCATED_KIND};
 pub use stream_failure::StreamFailure;
 pub use tool::{
-    ImageContent, ToolAnnotations, ToolCall, ToolExposure, ToolNamespace, ToolResult,
-    ToolResultStatus, ToolSpec,
+    ImageContent, ParseToolExposureError, ToolAnnotations, ToolCall, ToolExposure, ToolNamespace,
+    ToolResult, ToolResultStatus, ToolSpec,
 };
 pub use turn::{
     QueueMode, QueuedMessage, SteerQueue, StopReason, SubmitMode, TurnEvent, TurnOutcome,

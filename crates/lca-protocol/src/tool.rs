@@ -29,21 +29,35 @@ pub enum ToolExposure {
     Hidden,
 }
 
+/// The refusal a `tool.exposure` string gets when it is not in the vocabulary
+/// (gh #559).
+///
+/// The rendered text is what this parser has always produced - the extension
+/// host forwards it into `CallError::InvalidArguments`, so a caller reads it.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("unknown tool exposure `{0}`")]
+pub struct ParseToolExposureError(pub String);
+
 impl ToolExposure {
     /// Parse the wire string; unknown values refuse with the value
     /// itself, so a typo fails at registration, not at call time.
-    pub fn parse(value: &str) -> Result<ToolExposure, String> {
+    ///
+    /// # Errors
+    ///
+    /// [`ParseToolExposureError`] naming the unrecognised string.
+    pub fn parse(value: &str) -> Result<ToolExposure, ParseToolExposureError> {
         match value {
             "direct" => Ok(ToolExposure::Direct),
             "model-only" => Ok(ToolExposure::ModelOnly),
             "codemode" => Ok(ToolExposure::Codemode),
             "deferred" => Ok(ToolExposure::Deferred),
             "hidden" => Ok(ToolExposure::Hidden),
-            unknown => Err(format!("unknown tool exposure `{unknown}`")),
+            unknown => Err(ParseToolExposureError(unknown.to_string())),
         }
     }
 
     /// The wire string.
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             ToolExposure::Direct => "direct",
@@ -52,6 +66,16 @@ impl ToolExposure {
             ToolExposure::Deferred => "deferred",
             ToolExposure::Hidden => "hidden",
         }
+    }
+}
+
+impl std::str::FromStr for ToolExposure {
+    type Err = ParseToolExposureError;
+
+    /// [`ToolExposure::parse`] as the standard trait, so `"...".parse()`
+    /// works where a `FromStr` bound is expected.
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        ToolExposure::parse(value)
     }
 }
 

@@ -188,6 +188,30 @@ pub const MAX_IDLE_WARMING_MS: u64 = 1_800_000;
 /// fires only when it is expected to save at least this much.
 pub const WARMING_MIN_SAVINGS_DOLLARS: f64 = 0.05;
 
+/// The inputs [`warming_eligible`] decides on (gh #565).
+///
+/// Seven positional arguments included three consecutive `f64`s
+/// (`miss_cost`, `warm_cost`, `p_continue`) and two `Option<u64>`s; swapping
+/// two of them at a call site compiled cleanly and silently corrupted the
+/// savings arithmetic. Named fields make each one say what it is.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct WarmingQuery<'a> {
+    /// The `cache.warming` setting; only `"idle"` opts in.
+    pub mode: &'a str,
+    /// The model's short cache lifetime, when it declares one.
+    pub short_secs: Option<u64>,
+    /// The model's long cache lifetime, when it declares one.
+    pub long_secs: Option<u64>,
+    /// How long the session has been idle, in milliseconds.
+    pub idle_ms: u64,
+    /// What a cache miss on this conversation costs.
+    pub miss_cost: f64,
+    /// What a refresh costs.
+    pub warm_cost: f64,
+    /// The probability that the conversation continues after this turn.
+    pub p_continue: f64,
+}
+
 /// Whether an idle cache refresh should fire (gh #42): every gate
 /// must pass - the mode is opted into `idle` (never by default),
 /// the model declares a cache lifetime, the session sat idle past
@@ -196,25 +220,17 @@ pub const WARMING_MIN_SAVINGS_DOLLARS: f64 = 0.05;
 /// without timers or network. Lifetimes come from the model's
 /// `prompt_cache` metadata (`models.toml`, gh #64); the short tier
 /// wins when both declare.
-#[allow(clippy::too_many_arguments)]
-pub fn warming_eligible(
-    mode: &str,
-    short_secs: Option<u64>,
-    long_secs: Option<u64>,
-    idle_ms: u64,
-    miss_cost: f64,
-    warm_cost: f64,
-    p_continue: f64,
-) -> bool {
-    if mode != "idle" {
+#[must_use]
+pub fn warming_eligible(query: WarmingQuery<'_>) -> bool {
+    if query.mode != "idle" {
         return false;
     }
-    let Some(ttl_secs) = short_secs.or(long_secs).filter(|ttl| *ttl > 0) else {
+    let Some(ttl_secs) = query.short_secs.or(query.long_secs).filter(|ttl| *ttl > 0) else {
         return false;
     };
     let ttl_ms = ttl_secs.saturating_mul(1_000);
-    if idle_ms < ttl_ms || idle_ms > MAX_IDLE_WARMING_MS {
+    if query.idle_ms < ttl_ms || query.idle_ms > MAX_IDLE_WARMING_MS {
         return false;
     }
-    p_continue * miss_cost - warm_cost >= WARMING_MIN_SAVINGS_DOLLARS
+    query.p_continue * query.miss_cost - query.warm_cost >= WARMING_MIN_SAVINGS_DOLLARS
 }

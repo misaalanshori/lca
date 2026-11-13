@@ -7,7 +7,8 @@
 pub const TARGET: &str = "lca_core";
 
 /// One turn-lifecycle event (`name` like `"turn.start"`).
-#[inline(always)]
+#[cfg_attr(not(feature = "debug-trace"), inline(always))]
+#[cfg_attr(feature = "debug-trace", inline)]
 pub fn event(name: &str, detail: &str) {
     crate::emit(crate::Domain::Core, name, detail);
 }

@@ -7,7 +7,8 @@
 pub const TARGET: &str = "lca_session";
 
 /// One session-engine event (`name` like `"record.append"`).
-#[inline(always)]
+#[cfg_attr(not(feature = "debug-trace"), inline(always))]
+#[cfg_attr(feature = "debug-trace", inline)]
 pub fn event(name: &str, detail: &str) {
     crate::emit(crate::Domain::Session, name, detail);
 }

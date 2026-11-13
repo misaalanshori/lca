@@ -19,6 +19,7 @@ use super::view::ViewMode;
 /// A log's version state (gh #98): every stamp the format carries,
 /// read without rewriting.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct VersionState {
     /// `meta.json`'s version (`None` when the meta is unreadable).
     pub meta_version: Option<u32>,
@@ -48,6 +49,7 @@ impl VersionState {
 
 /// What a migration did (gh #98).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct MigrateReport {
     /// Linkage stamps written.
     pub stamped: usize,
