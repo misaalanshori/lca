@@ -129,3 +129,13 @@ pub async fn turn(
     );
     agent.run_turn(input, sink, &CancelFlag::new()).await
 }
+
+// Gh #548 phase 4: the two fixture sets that used to live inside the targets that
+// needed them. A sibling target cannot import another target's items, so the rows
+// split out of `loop_phases.rs` (the compaction doubles) and `hooks.rs` (the
+// dispatch doubles) share them here rather than carrying a copy each - a copy of a
+// 122-line `ExtensionDispatch` impl is exactly the drift these cycles keep paying
+// for. They are submodules, not targets: nothing declares `common/phases.rs` as a
+// test binary, so it is an ordinary module of this one.
+pub mod hooks;
+pub mod phases;

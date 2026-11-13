@@ -8,7 +8,7 @@
 //! This guards the user-visible half: a multi-turn conversation with no
 //! transform and no compaction leaves no `cache-boundary-narrowed` record.
 //! The rewritten-content case is guarded in
-//! `crates/lca-core/tests/loop.rs::stable_region_divergence_narrows_the_boundary_once_and_settles`.
+//! `crates/lca-core/tests/loop_context.rs::stable_region_divergence_narrows_the_boundary_once_and_settles`.
 //!
 //! Verifies: FR-CACHE-6.
 
