@@ -7,7 +7,7 @@
 //! ... does not declare` ever since the flat-file layout landed, which the
 //! bundled build hides (it reads the embedded bag and never installs).
 //!
-//! `crates/lca-registry/tests/registry.rs`'s kind rows could not catch it:
+//! `crates/lca-registry/tests/registry/archive.rs`'s kind rows could not catch it:
 //! they pair a synthetic manifest with synthetic files, and nothing ever
 //! asked whether the REAL package's manifest matched its REAL bag. This row
 //! does, through the registry's own install validation rather than a copy of

@@ -299,7 +299,8 @@ cache baseline reset to real compaction records.
 ## Phase 4 — compaction, context transform, and skills: PASS
 
 The exit test clause by clause, with receipts (all in
-`crates/lca-core/tests/loop.rs` unless noted):
+`crates/lca-core/tests/loop_*.rs` unless noted; gh #548 phase 4 split that
+file by subject, so a row below names the target it now lives in):
 
 - **Usage crossing the configured threshold triggers the default
   compaction extension.** `the_default_strategy_compacts_through_the_
@@ -928,7 +929,8 @@ was not — FR-CACHE-6's event is for content that was sent and then changed.
 The check now compares only indices the previous request actually had, and
 narrows past the previous request length silently. Tests:
 `a_plain_conversation_never_reports_a_boundary_divergence`
-(`crates/lca-core/tests/loop.rs`) and the released-defect guard
+(`crates/lca-core/tests/loop_context.rs`, where gh #548 phase 4 moved it)
+and the released-defect guard
 `tests/regressions/10-plain-conversation-no-boundary-warning.rs`; the
 rewritten-content case still narrows once and settles.
 
