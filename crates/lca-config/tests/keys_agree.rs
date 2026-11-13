@@ -112,10 +112,12 @@ fn quoted_strings(text: &str) -> Vec<String> {
 /// starts with `_`, not a quote, so it is skipped - it is the mis-route
 /// refusal, not an owner.
 fn parser_keys(text: &str) -> Vec<String> {
-    let body = text
-        .split("fn parse(")
-        .nth(1)
-        .unwrap_or_else(|| panic!("a family file declares `fn parse`"));
+    let Some(body) = text.split("fn parse(").nth(1) else {
+        // No parser: the file is a bare key list, which is the old shape this
+        // cycle replaced. Returning no keys makes the row report it as "routes X
+        // but no arm types it" rather than as a panic.
+        return Vec::new();
+    };
     let match_line = body
         .lines()
         .find(|line| line.trim_start().starts_with("match key {"))
@@ -250,11 +252,13 @@ fn the_three_key_lists_agree() {
         .map(|key| key.to_string())
         .collect();
 
+    let expected: BTreeSet<String> = documented.difference(&routed_elsewhere).cloned().collect();
     assert_eq!(
         routed,
-        documented.difference(&routed_elsewhere).cloned().collect(),
+        expected,
         "the families' keys and the documented vocabulary disagree: \
-         routed-only={:?} documented-only={:?}",
+         routed-but-not-documented={:?} documented-but-not-routed={:?} \
+         (the second list should be exactly `permissions.proposals`)",
         routed.difference(&documented).collect::<Vec<_>>(),
         documented.difference(&routed).collect::<Vec<_>>()
     );
