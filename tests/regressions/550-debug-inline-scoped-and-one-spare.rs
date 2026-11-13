@@ -103,19 +103,22 @@ fn there_is_one_spare_path_builder() {
 
     // Behaviour: the method and the free function agree, and the writer's spare
     // is the file the method names.
-    let paths = lca_debug::DebugPaths::in_dir(std::path::Path::new("/tmp/logs"));
+    //
+    // Built from `Path` operations rather than string literals (the first
+    // version hard-coded `/tmp/logs/debug.log.1` and went red on Windows, where
+    // `Path::join` uses `\` - my bug, in the row rather than the product).
+    let logs = std::path::Path::new("/tmp").join("logs");
+    let paths = lca_debug::DebugPaths::in_dir(&logs);
     assert_eq!(
         paths.spare_for(&paths.log),
         lca_debug::logfiles::spare_path(&paths.log)
     );
     assert_eq!(
-        paths.spare_for(&paths.log).to_str(),
-        Some("/tmp/logs/debug.log.1")
+        paths.spare_for(&paths.log),
+        logs.join("debug.log.1"),
+        "the spare is the log's own name plus one suffix"
     );
-    assert_eq!(
-        paths.spare_for(&paths.wire).to_str(),
-        Some("/tmp/logs/debug-wire.log.1")
-    );
+    assert_eq!(paths.spare_for(&paths.wire), logs.join("debug-wire.log.1"));
 }
 
 // Verifies: gh #550 (AGENTS.md Rule 6) - a redaction that nobody bound is a
