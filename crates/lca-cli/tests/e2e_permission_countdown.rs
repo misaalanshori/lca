@@ -155,8 +155,8 @@ fn an_untouched_permission_modal_runs_the_tool_at_its_announced_second() {
         "and every repaint shows a smaller number than the last (a frozen clock \
          repeats one): saw {shown_series:?}"
     );
-    let span = (*shown_series.first().unwrap_or(&0))
-        .saturating_sub(*shown_series.last().unwrap_or(&0));
+    let span =
+        (*shown_series.first().unwrap_or(&0)).saturating_sub(*shown_series.last().unwrap_or(&0));
     assert!(
         span >= 15,
         "the number tracks the countdown across at least fifteen seconds of it, \
