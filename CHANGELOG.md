@@ -6,6 +6,22 @@ Dates are UTC.
 
 ## [Unreleased]
 
+### Added
+- **The paste key now pastes copied *files*, not just images and text** (gh #403 gap 3,
+  interface). Pi's paste ladder is **files → image → text**; LCA's was two tiers, so a
+  file copied in Finder or Explorer and pasted gave "the clipboard holds no image" or
+  the raw path text. A clipboard holding one or more file paths now pastes them: on its
+  own line each in the prompt (`/tmp/a.txt\n/tmp/b.txt`, so an `@path` opener cannot
+  swallow its neighbour), shell-quoted and space-joined in `!` bash mode
+  (`!/tmp/my file.txt` survives as one argument, with pi's `'\''` escaping for an
+  embedded quote), and a name containing a control character refuses the whole paste
+  with a notice naming the path — a partial paste of a copied selection would be worse
+  than none. The tier is asked **first** (`lca_ui::state_paste::pick_tier`, one pure
+  decision, so the priority cannot drift), it uses `arboard`'s own `file_list` (macOS
+  `NSPasteboard` file URLs, Windows `CF_HDROP`, X11 `text/uri-list`), so **no new
+  dependency and no new `unsafe`**, and it goes through the same bounded read as the
+  other two tiers so a stalled clipboard owner still cannot freeze the interface.
+
 ### Fixed
 - **An interactive `/compact` no longer summarizes a large session with a 4096-token
   budget** (gh #594, interface). The compaction backend starts with no budget and falls

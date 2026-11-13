@@ -816,3 +816,8 @@ mod ext_abi_split_and_result_layers;
 // CLI's "String errors" are printed messages rather than branch points.
 #[path = "549-and-544-error-shapes.rs"]
 mod error_shapes;
+
+// Gh #403 gap 3: the paste ladder's missing **file tier** - files before images,
+// on the existing clipboard seam, with no new crate and no new `unsafe`.
+#[path = "403-gap3-paste-file-tier.rs"]
+mod paste_file_tier;

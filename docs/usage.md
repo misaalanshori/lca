@@ -234,7 +234,9 @@ everyday set:
   a changed `tui.editor.*` or `tui.input.*` binding; see
   [Configuration](configuration.md#key-bindings)).
 - `/settings`, `/theme`, `/fullscreen` — the interface itself.
-- `/attach`, `/paste` — stage an image for the next message.
+- `/attach`, `/paste` — stage an image for the next message. `/paste` follows pi's
+  ladder: a clipboard holding **copied files** pastes their paths (one per line,
+  shell-quoted in `!` mode), then an image is staged, then plain text is inserted.
 - `/mcp`, `/ext`, `/skill` — servers, extensions, and skills.
 
 Skills and extensions add their own `/`-commands to the same menu. A skill is a
@@ -302,7 +304,7 @@ their own `/`-commands to the same menu.
 | `/mcp` | manage MCP servers (status, reconnect, enable, exposure, login) |
 | `/model` | list or switch the session's model |
 | `/name <name>` | rename this session (`/rename` is the same) |
-| `/paste` | paste the clipboard image to the next message |
+| `/paste` | paste the clipboard to the prompt: copied files first, then an image, then text (gh #403) |
 | `/quit` | leave the interface (`/exit` is the same) |
 | `/permissions` | manage allow/deny rules (session, project, global) |
 | `/persona` | apply a named bundle of model, thinking, tools, and instructions |

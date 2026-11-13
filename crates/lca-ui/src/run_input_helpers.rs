@@ -164,6 +164,31 @@ pub(crate) fn finish_mouse_event(
 /// No second clipboard mechanism: the reader is `UiHooks::read_clipboard`, which
 /// the host fills from the bounded `arboard` path gh #406 built.
 pub(crate) fn paste_from_clipboard(chat: &mut Chat) {
+    // Gh #403 gap 3: the ladder is **files -> image -> text**, and this is the
+    // seam that owns the editor, so it is where the order is decided (the CLI's
+    // hook only supplies the file list). A file list wins over text even when
+    // both are present: what the user copied is the files.
+    let files = chat
+        .world
+        .options
+        .hooks
+        .read_clipboard_files
+        .clone()
+        .map(|read_files| read_files());
+    match crate::state_paste::pick_tier(files, false, None) {
+        crate::state_paste::PasteTier::Files(text) if text.starts_with("paste refused:") => {
+            // A refusal is its own answer: show it, insert nothing, and do not
+            // consult the text tier underneath it.
+            chat.toast_error(&text);
+            return;
+        }
+        crate::state_paste::PasteTier::Files(text) => {
+            chat.editor.insert_str(&crate::state::sanitize_block(&text));
+            chat.toast_success(PASTED_FROM_CLIPBOARD);
+            return;
+        }
+        _ => {}
+    }
     let Some(read) = chat.world.options.hooks.read_clipboard.clone() else {
         chat.toast_error(MISSING_CLIPBOARD_HINT);
         return;

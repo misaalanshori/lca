@@ -140,6 +140,28 @@ impl Ui {
     /// already using `arboard`.
     pub(super) fn command_paste(&self) -> CommandEffect {
         let session = self.session();
+        // Gh #403 gap 3: pi's ladder is **files -> image -> text**, and the file
+        // tier was missing. A clipboard holding paths copied in Finder or Explorer
+        // now pastes them as text the composer can use (shell-quoted in `!` mode,
+        // newline-joined otherwise) instead of answering "the clipboard holds no
+        // image". An error here is the refusal (a control character in a name) and
+        // is shown as-is: it names the path, and a partial paste of a multi-file
+        // copy would be worse than none.
+        // Gh #403 gap 3: the file tier. The ladder's **order** is decided in
+        // `lca-ui` (`state_paste::pick_tier`), which owns the editor and the
+        // `!`-mode reading; `/paste` needs the same first tier, so it asks the
+        // same function with the same shape rather than re-implementing the
+        // priority here.
+        let files = Some(self.clipboard_files());
+        match lca_ui::state_paste::pick_tier(files, false, None) {
+            lca_ui::state_paste::PasteTier::Files(text) => {
+                return CommandEffect::InsertText(text);
+            }
+            lca_ui::state_paste::PasteTier::Image
+            | lca_ui::state_paste::PasteTier::Text(_)
+            | lca_ui::state_paste::PasteTier::Nothing => {}
+        }
+
         // Gh #406: pi's paste ladder is files -> image -> text, and this is the
         // text half. An image still wins when one is present (that is what
         // `/paste` was asked for first), but a clipboard holding *only* text now
@@ -205,6 +227,12 @@ impl Ui {
     pub(super) fn read_clipboard_text(&self) -> Option<String> {
         with_clipboard_timeout(|cb| cb.get_text().ok()).filter(|text| !text.is_empty())
     }
+
+    /// The clipboard's copied file paths, or `None` when it holds no list (gh #403
+    /// gap 3). Bounded like every other clipboard read.
+    fn clipboard_files(&self) -> Result<Vec<std::path::PathBuf>, String> {
+        Ok(with_clipboard_timeout(|cb| cb.get().file_list().ok()).unwrap_or_default())
+    }
 }
 
 /// The `read_clipboard` hook (gh #374 gap 4): a right-button paste reads the
@@ -217,13 +245,41 @@ pub(crate) fn read_clipboard_hook() -> lca_ui::state::ClipboardReader {
     Arc::new(|| with_clipboard_timeout(|cb| cb.get_text().ok()).filter(|text| !text.is_empty()))
 }
 
+/// The `read_clipboard_files` hook (gh #403 gap 3): the paste ladder's **first**
+/// tier, on the same seam and the same bound as the image and text reads.
+///
+/// `arboard`'s `file_list` is the platform file-list read itself (macOS
+/// `NSPasteboard` file URLs, Windows `CF_HDROP`, X11 `text/uri-list`), so this
+/// needs no new dependency and no new `unsafe`: it is the crate's own API,
+/// called through the same [`with_clipboard_timeout`] that keeps a stalled
+/// clipboard owner from freezing the interface.
+///
+/// `Ok(vec![])` is "the clipboard advertises no file list" - the caller treats
+/// it as "try the image tier", which is what pi's ladder does. An `Err` is the
+/// one case the user must be told about: a control character in a copied name
+/// would otherwise inject a second composer line.
+pub(crate) fn read_clipboard_files_hook() -> lca_ui::state::ClipboardFilesReader {
+    Arc::new(
+        || match with_clipboard_timeout(|cb| cb.get().file_list().ok()) {
+            // No reader answer (no display, a timeout) is the same as "no files".
+            None => Ok(Vec::new()),
+            Some(files) => Ok(files),
+        },
+    )
+}
+
 /// The notice `/paste` shows when the clipboard holds nothing it can stage.
 ///
 /// One sentence covers "no display", "holds only text", and "did not answer":
 /// all three mean there is no image to attach, and naming the distinction would
 /// leak a platform detail into a message the user can act on identically.
 fn no_clipboard_image_notice() -> String {
-    "the clipboard holds no image - copy one first".to_string()
+    // Gh #403 gap 3 changed what this sentence may claim. It used to say "no
+    // image", which was true and complete when the ladder had two tiers; now
+    // files and text are tried too, so the honest statement is that nothing the
+    // paste key can use was there - and it lists what it can use, because "copy
+    // one first" no longer names the right thing for a user who copied a file.
+    "nothing to paste - copy an image, a file, or text first".to_string()
 }
 
 #[cfg(test)]

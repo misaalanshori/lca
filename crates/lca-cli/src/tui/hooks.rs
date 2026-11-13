@@ -546,6 +546,7 @@ impl Ui {
             load_attachment: Some(self.load_attachment()),
             copy_to_clipboard: Some(Arc::new(|text: &str| native_clipboard(text))),
             read_clipboard: Some(super::attach::read_clipboard_hook()),
+            read_clipboard_files: Some(super::attach::read_clipboard_files_hook()),
             open_url: Some(Arc::new(open_url)),
             session_tree: Some(self.entry_tree()),
             new_session: Some(self.new_session()),

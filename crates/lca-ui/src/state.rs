@@ -24,15 +24,15 @@ pub use crate::state_modals::{
 };
 
 pub use crate::state_hooks::{
-    BranchHere, BugResolve, CacheMissNotice, ClipboardReader, ClipboardWriter, CloneSession,
-    CommandInvoker, CompactPoll, CurrentSessionId, DeleteSession, DisplayTuningHook,
-    DoubleEscapeAction, ExternalEditor, ForkAt, ForkAtRecord, GrantList, GrantRevoke,
-    InteractiveShell, ListLabels, LoadAttachment, LoginCancel, LoginComplete, LoginConfirm,
-    LoginPick, LoginPoll, LoginRequest, McpAction, McpPoll, ModelCycle, ModelList, ModelSave,
-    NewSession, OpenUrl, ProjectSettingPersist, PromptTemplates, RegionInteractor, RegionRenderer,
-    Reload, RenameSession, SaveScopedModels, ScopedModels, ScreenModePersist, SessionList,
-    SetLabel, SettingPersist, ShellHandle, ShellRunner, StageBug, SwitchConfirm, SwitchSession,
-    ThinkingOffered, ThinkingSave, ThinkingSetter, TrustApply, TrustNeeded,
+    BranchHere, BugResolve, CacheMissNotice, ClipboardFilesReader, ClipboardReader,
+    ClipboardWriter, CloneSession, CommandInvoker, CompactPoll, CurrentSessionId, DeleteSession,
+    DisplayTuningHook, DoubleEscapeAction, ExternalEditor, ForkAt, ForkAtRecord, GrantList,
+    GrantRevoke, InteractiveShell, ListLabels, LoadAttachment, LoginCancel, LoginComplete,
+    LoginConfirm, LoginPick, LoginPoll, LoginRequest, McpAction, McpPoll, ModelCycle, ModelList,
+    ModelSave, NewSession, OpenUrl, ProjectSettingPersist, PromptTemplates, RegionInteractor,
+    RegionRenderer, Reload, RenameSession, SaveScopedModels, ScopedModels, ScreenModePersist,
+    SessionList, SetLabel, SettingPersist, ShellHandle, ShellRunner, StageBug, SwitchConfirm,
+    SwitchSession, ThinkingOffered, ThinkingSave, ThinkingSetter, TrustApply, TrustNeeded,
 };
 
 /// A one-line description of the running turn (NFR-28: state also has a
@@ -568,6 +568,9 @@ pub struct UiHooks {
     pub copy_to_clipboard: Option<ClipboardWriter>,
     /// Read the clipboard's text for a right-button paste (gh #374 gap 4).
     pub read_clipboard: Option<ClipboardReader>,
+    /// Read the clipboard's **copied file paths** (gh #403 gap 3): the first
+    /// tier of the paste ladder, ahead of the image and text reads.
+    pub read_clipboard_files: Option<ClipboardFilesReader>,
     /// Open a URL a click landed on (R6).
     pub open_url: Option<OpenUrl>,
     /// List the project's grants (S8).

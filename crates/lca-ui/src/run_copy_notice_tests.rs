@@ -460,3 +460,56 @@ fn a_right_press_that_is_not_allowed_pastes_nothing() {
     assert_eq!(chat.editor.text(), "", "and nothing was pasted");
     assert!(chat.toasts.is_empty(), "no notice either");
 }
+
+// Verifies: gh #403 gap 3 - **the tier is asked first, and it does not fall
+// through.** A clipboard that offers a file list pastes that list into the
+// editor, even when the text reader would also have answered - the mocked
+// readers are the two hooks the host fills, so this is the same seam a real
+// paste uses (a real clipboard cannot be driven in CI).
+#[test]
+fn a_file_list_pastes_from_the_file_tier_before_the_text_reader() {
+    let mut chat = super::chat();
+    let files: std::sync::Arc<std::sync::Mutex<Vec<std::path::PathBuf>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(vec![
+            std::path::PathBuf::from("/tmp/one.txt"),
+            std::path::PathBuf::from("/tmp/two.txt"),
+        ]));
+    {
+        let files = files.clone();
+        chat.world.options.hooks.read_clipboard_files = Some(std::sync::Arc::new(move || {
+            Ok(files.lock().unwrap().clone())
+        }));
+    }
+    // The text reader **would** answer too; if it is reached the assertion below
+    // sees its sentence in the editor and fails.
+    chat.world.options.hooks.read_clipboard = Some(std::sync::Arc::new(|| {
+        Some("text from the clipboard".to_string())
+    }));
+    super::input_helpers::paste_from_clipboard(&mut chat);
+    assert_eq!(
+        chat.editor.text(),
+        "/tmp/one.txt\n/tmp/two.txt",
+        "the file tier inserted the newline-joined paths"
+    );
+    assert!(
+        !chat.editor.text().contains("text from the clipboard"),
+        "and the text tier was not consulted"
+    );
+}
+
+// Verifies: gh #403 gap 3 - a refusal from the file tier is **shown**, not
+// swallowed: the text tier must not paste prose underneath it.
+#[test]
+fn a_refused_file_list_does_not_fall_through_to_text() {
+    let mut chat = super::chat();
+    chat.world.options.hooks.read_clipboard_files = Some(std::sync::Arc::new(|| {
+        Err(
+            "paste refused: a copied file name contains a control character: \"/tmp/a\\nb\""
+                .to_string(),
+        )
+    }));
+    chat.world.options.hooks.read_clipboard =
+        Some(std::sync::Arc::new(|| Some("prose".to_string())));
+    super::input_helpers::paste_from_clipboard(&mut chat);
+    assert_eq!(chat.editor.text(), "", "nothing was inserted");
+}

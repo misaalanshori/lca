@@ -92,6 +92,7 @@ pub mod startup_header;
 pub mod state;
 mod state_hooks;
 mod state_modals;
+pub mod state_paste;
 mod state_persona;
 mod status;
 pub mod theme;

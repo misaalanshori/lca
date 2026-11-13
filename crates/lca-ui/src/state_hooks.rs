@@ -101,6 +101,19 @@ pub type ClipboardWriter = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 /// Reads the clipboard's text for a right-button paste (gh #374 gap 4).
 pub type ClipboardReader = Arc<dyn Fn() -> Option<String> + Send + Sync>;
 
+/// Reads the clipboard's **copied file paths**, for the paste ladder's first
+/// tier (gh #403 gap 3).
+///
+/// A second hook on the same seam rather than a new global: the host already owns
+/// one bounded clipboard reader ([`ClipboardReader`]), and the file list comes
+/// from the same platform call family (`arboard`'s `file_list`, which reads
+/// `NSPasteboard`'s file URLs on macOS, `CF_HDROP` on Windows, and the
+/// `text/uri-list` target on X11). `Err` carries the refusal in the form the user
+/// is shown - pi refuses the whole paste when a copied name holds a control
+/// character, and that sentence has to name the path.
+pub type ClipboardFilesReader =
+    Arc<dyn Fn() -> Result<Vec<std::path::PathBuf>, String> + Send + Sync>;
+
 /// Opens a URL from an OSC-8 link click (R6/S7). `Err` names the reason
 /// (no launcher found, the launcher refused), which the notice shows.
 pub type OpenUrl = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
