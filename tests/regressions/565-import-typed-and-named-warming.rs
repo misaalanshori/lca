@@ -66,9 +66,13 @@ fn an_import_refusal_is_typed_and_keeps_its_copy() {
         "the refusal is the crate's own `Error`, not a bare `String`: {err:?}"
     );
     let text = err.to_string();
+    // The position must lead the message: `line 2: <serde reason>`. A row that
+    // only asked for a `2` somewhere would pass on the serde text itself
+    // (`… at line 1 column 2`), which is exactly how a mutation that dropped the
+    // index went green once (this cycle, measured).
     assert!(
-        text.contains('2') && text.contains("line"),
-        "it names the line: {text}"
+        text.starts_with("line 2:"),
+        "the refusal leads with the 1-based line: {text}"
     );
     assert_eq!(
         store.list_sessions(&project).expect("list").len(),
@@ -84,8 +88,9 @@ fn an_import_refusal_is_typed_and_keeps_its_copy() {
         .import_jsonl(&project, "bad-opener", &[not_start])
         .expect_err("the opener is required");
     assert!(
-        err.to_string().contains("must open with session-start"),
-        "the opener refusal keeps its copy: {err}"
+        err.to_string()
+            .starts_with("line 1: a session must open with session-start"),
+        "the opener refusal keeps its copy, position first: {err}"
     );
 }
 
