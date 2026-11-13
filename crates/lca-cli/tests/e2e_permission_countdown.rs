@@ -133,10 +133,34 @@ fn an_untouched_permission_modal_runs_the_tool_at_its_announced_second() {
         painted_at < COUNTDOWN,
         "the modal paints before its deadline, showing {painted_second}s at +{painted_at:?}"
     );
-    // The paint keeps up: the printed second must reach 0 before the modal leaves.
+    // The paint keeps up. **Not "the last capture happened to land on 0"** - the
+    // first version asserted exactly that, and CI's macOS leg caught it: 500 ms
+    // polls on a loaded runner each cost well over a second, so the series it saw
+    // was `[29, 28, …, 11]` and the modal closed before a capture could land on
+    // `0`. That is a fact about capture cadence, not about the countdown.
+    //
+    // What the paint has to prove, and what a frozen clock cannot fake:
+    //   * the printed second **strictly decreases** (a frozen number repeats it);
+    //   * the series spans a large part of the countdown (so the number is
+    //     tracking wall time, not a paint that stopped updating);
+    //   * the modal closes inside `countdown + 2 s` (the clause below), which is
+    //     the promise itself - the exact final second a capture sees is the
+    //     capture's business.
     assert!(
-        shown_series.last() == Some(&0),
-        "the countdown advances to `0s` rather than freezing: saw {shown_series:?}"
+        shown_series.len() >= 5,
+        "the countdown is repainted repeatedly: saw {shown_series:?}"
+    );
+    assert!(
+        shown_series.windows(2).all(|pair| pair[0] > pair[1]),
+        "and every repaint shows a smaller number than the last (a frozen clock \
+         repeats one): saw {shown_series:?}"
+    );
+    let span = u64::from(*shown_series.first().unwrap_or(&0))
+        .saturating_sub(u64::from(*shown_series.last().unwrap_or(&0)));
+    assert!(
+        span >= 15,
+        "the number tracks the countdown across at least fifteen seconds of it, \
+         which is what a paint that stopped updating cannot do: saw {shown_series:?}"
     );
     // The effect. A promise kept means the modal CLOSED on its own and the tool
     // ran - no keypress was ever sent (this row sends only the initial prompt).
