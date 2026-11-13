@@ -48,7 +48,11 @@ fi
 # Verifies: NFR-31 - the canonical twenty-turn scripted conversation,
 # run in this same gate so a cache regression fails the build the way a
 # binary-size regression does (testing-plan section9).
-cargo test --release -p lca-core --test loop \
+#
+# Gh #548 phase 4 split `tests/loop.rs` by subject, so the row lives in
+# `loop_limits` now; the gate names the *target the row is in*, which a target
+# split is exactly what can break (and did, on the first CI run after it).
+cargo test --release -p lca-core --test loop_limits \
   twenty_clean_turns_report_zero_cache_waste_and_hold_the_ratio
 
 # Verifies: NFR-2 (the interpreter-only host stays under12 MB) and
