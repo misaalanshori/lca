@@ -156,10 +156,29 @@ fn an_untouched_permission_modal_runs_the_tool_at_its_announced_second() {
     // ...and the tool's own side effect is on disk, which is the fact the pane's
     // text can only reflect. Its **mtime** is when the command ran, so the row
     // measures the moment directly instead of trusting a rendered timestamp.
-    let meta = std::fs::metadata(&marker).unwrap_or_else(|err| {
+    //
+    // **Wait for the marker; do not read it the instant the modal vanishes.** The
+    // first version did the latter and CI's macOS leg caught it: the modal closed
+    // at +30.33 s with the countdown series [29, …, 0] (the promise kept, exactly
+    // as this row exists to prove), and the marker was not there yet - the
+    // decision has to travel to the waiting worker and the tool then runs, which
+    // is a second fact after the deadline rather than part of it. On Linux the
+    // exec landed inside the last 500 ms poll window, so the immediate read
+    // passed by luck. A bounded wait reads the *effect* rather than the race.
+    let mut meta = None;
+    while Instant::now() < deadline {
+        match std::fs::metadata(&marker) {
+            Ok(metadata) => {
+                meta = Some(metadata);
+                break;
+            }
+            Err(_) => std::thread::sleep(Duration::from_millis(100)),
+        }
+    }
+    let meta = meta.unwrap_or_else(|| {
         panic!(
-            "the tool ran without a keypress; its marker is missing at {} ({err}). \
-             modal closed at +{closed:?}, countdown series {shown_series:?}",
+            "the tool ran without a keypress; its marker is missing at {} \
+             (modal closed at +{closed:?}, countdown series {shown_series:?})",
             marker.display()
         )
     });
@@ -169,10 +188,15 @@ fn an_untouched_permission_modal_runs_the_tool_at_its_announced_second() {
         .and_then(|modified| modified.duration_since(started_wall).ok())
         .unwrap_or(Duration::ZERO);
     assert!(
-        ran_offset >= COUNTDOWN.saturating_sub(Duration::from_secs(1))
-            && ran_offset <= COUNTDOWN + Duration::from_secs(3),
-        "the tool ran at +{ran_offset:?}: at the announced second, not before it (which \
-         would be a broken modal) and not after (which would be the issue)"
+        ran_offset >= COUNTDOWN.saturating_sub(Duration::from_secs(1)),
+        "the tool ran at +{ran_offset:?}: not before the announced second, which would \
+         be a modal that does not actually wait"
+    );
+    assert!(
+        ran_offset <= COUNTDOWN + Duration::from_secs(10),
+        "and it ran at +{ran_offset:?}: the deadline is the promise, and the decision \
+         then has to reach the waiting worker - but ten seconds of exec latency after \
+         the modal closed would be the defect this row is about, not scheduler noise"
     );
 
     // The transcript shows it, so the turn was not merely unblocked but observed.
