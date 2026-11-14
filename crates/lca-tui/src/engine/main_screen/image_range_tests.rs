@@ -149,6 +149,88 @@ fn a_replaced_image_emits_a_delete_for_its_old_id() {
     );
 }
 
+// Verifies: gh #324 gap 5 (the clears-first ordering) - **the delete for the old
+// texture lands before the transmission that replaces it, inside one synchronized
+// update.**
+//
+// pi emits the clear first so the replaced texture never shows for a frame; the
+// same rule applies to any terminal, not only WezTerm, and this row is the proof
+// rather than a source grep: it drives a `FakeTerminal` with **no** `WEZTERM_PANE`
+// in the environment, so a WezTerm-only gate would leave the frame delete-free and
+// fail here. Both offsets are asserted **inside** the single `?2026h`/`?2026l`
+// pair, which is the "same synchronized update" half - a delete emitted before the
+// block would clear the texture for a frame before the new drawing arrived, i.e.
+// the flicker this ordering exists to remove.
+#[test]
+fn a_replaced_image_is_cleared_before_it_is_re_placed() {
+    let previous: Vec<String> = vec![header(11, 2), String::new(), "after".into()];
+    let mut next = previous.clone();
+    next[0] = header(22, 2);
+    let out = second_frame(&previous, &next, 24);
+
+    let open = out
+        .find("\x1b[?2026h")
+        .unwrap_or_else(|| panic!("the frame opens a synchronized update: {out:?}"));
+    let close = out
+        .rfind("\x1b[?2026l")
+        .unwrap_or_else(|| panic!("and closes it: {out:?}"));
+    let delete = out
+        .find("\x1b_Ga=d,d=I,i=11")
+        .unwrap_or_else(|| panic!("the old texture is deleted: {out:?}"));
+    let place = out
+        .find("i=22")
+        .unwrap_or_else(|| panic!("the new one is transmitted: {out:?}"));
+    assert!(
+        open < delete,
+        "the delete is inside the synchronized block, not before it: {out:?}"
+    );
+    assert!(
+        delete < place,
+        "and it comes **before** the transmission that replaces the row, so the old          texture never shows for a frame (delete at {delete}, place at {place}): {out:?}"
+    );
+    assert!(
+        place < close,
+        "both are inside the one synchronized update: {out:?}"
+    );
+    // One update, not two: a second `?2026h` would put the pair in separate blocks.
+    assert_eq!(
+        out.matches("\x1b[?2026h").count(),
+        1,
+        "the frame is a single synchronized update: {out:?}"
+    );
+}
+
+// Verifies: gh #324 gap 5 - **the ordering is generic, not a WezTerm special
+// case.** `docs/platform-notes.md` states the rule as universal ("the orphaned ids
+// are deleted inside the synchronized block, before the repaint"), and the code
+// carries no `WEZTERM_PANE` gate: this row runs with a terminal that has no
+// WezTerm identity at all and still finds the delete first. If someone later
+// scopes the ordering behind a terminal check, this frame loses its delete and the
+// row fails.
+#[test]
+fn the_clears_first_ordering_does_not_depend_on_the_terminal_identity() {
+    let previous: Vec<String> = vec![header(31, 2), String::new()];
+    let mut next = previous.clone();
+    next[0] = header(32, 2);
+    let plain = second_frame(&previous, &next, 24);
+    // Same document, different terminal **height**: the frame must carry the same
+    // ordering, which is what "generic" means for a code path that takes no
+    // terminal parameter at all.
+    let shorter = second_frame(&previous, &next, 12);
+    for (label, out) in [("24-row", &plain), ("12-row", &shorter)] {
+        let delete = out
+            .find("a=d,d=I,i=31")
+            .unwrap_or_else(|| panic!("{label}: the old texture is deleted: {out:?}"));
+        let place = out
+            .find("i=32")
+            .unwrap_or_else(|| panic!("{label}: the new one is placed: {out:?}"));
+        assert!(
+            delete < place,
+            "{label}: delete before place, whatever the terminal: {out:?}"
+        );
+    }
+}
+
 // Verifies: gh #324 gap 4 + gap 3 - **a *cropped* image is not deleted.** Gap 3 made a
 // crop the same id with a new placement, so a blunt "delete anything that changed" would
 // delete the texture it is about to re-place. This is the row that fix fails.
