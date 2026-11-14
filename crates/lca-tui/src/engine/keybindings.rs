@@ -263,12 +263,16 @@ pub fn tui_keybindings() -> &'static [(&'static str, KeybindingDefinition)] {
             "app.editor.external",
             def!(&["ctrl+x"], "Open the external editor"),
         ),
-        // Gh #403 gap 4: pi's `app.suspend`. Unbound on Windows, where `SIGTSTP`
-        // does not exist - and rather than leaving the key dead there, the *action*
-        // is registered with a notice (`run_terminal::suspend_refusal`), because a
-        // key that silently does nothing reads as a broken key. The table is one
-        // table (no per-platform forks), so `ctrl+z` is listed and Windows answers
-        // honestly instead of pretending the binding does not exist.
+        // Gh #403 gap 4: pi's `app.suspend`. `SIGTSTP` does not exist on
+        // native Windows, and rather than leaving the key dead there the *action*
+        // stays registered with a notice (`run_terminal::suspend_refusal`), because
+        // a key that silently does nothing reads as a broken key.
+        //
+        // Gh #405 gap 3 **supersedes the "one table" note that used to sit here**:
+        // the host family now has a remap (below), and on native Windows this
+        // default is empty because pi gives `ctrl+z` to undo there. The notice path
+        // still exists for anyone who binds suspend by hand; what changes is only
+        // which key Windows hands out by default.
         ("app.suspend", def!(&["ctrl+z"], "Suspend to background")),
         ("app.interrupt", def!(&["escape"], "Interrupt the turn")),
         (
@@ -377,6 +381,115 @@ pub fn tui_keybindings() -> &'static [(&'static str, KeybindingDefinition)] {
     ]
 }
 
+/// Which host family's keymap a session gets (gh #405 gap 3).
+///
+/// **A predicate over facts, never over `cfg!`.** pi's rule
+/// (`packages/coding-agent/src/core/keybindings.ts`) is
+/// `win32 || (linux && (WSL_DISTRO_NAME || WSL_INTEROP))` - and the reason it is a
+/// *rule* and not a `cfg!` check is that the machine that needs the second half runs
+/// a Linux binary: detecting WSL at compile time is impossible, so the environment is
+/// the only evidence. Passing the platform and the environment in makes the whole
+/// predicate testable from this Linux box for all four cases, which is what lets a
+/// macOS/Windows claim ship with a row instead of a hope.
+///
+/// `WT_SESSION` is deliberately **not** part of it: Windows Terminal is a terminal,
+/// not a keymap, and the user may run a native Windows build under ConPTY in it
+/// (where the Windows table is already the right one because the platform is `win32`).
+/// pi's own test pins that too (`expect(useWindowsKeybindings("linux", { WT_SESSION:
+/// "session" })).toBe(false)`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostFamily {
+    /// Native Windows, or a Linux build running under WSL: the family whose
+    /// terminal swallows the Ctrl+Shift chords the Unix table spends.
+    WindowsOrWsl,
+    /// macOS, and every other Unix.
+    Unix,
+}
+
+impl HostFamily {
+    /// The family for a platform string (`std::env::consts::OS`'s vocabulary) and
+    /// the process environment.
+    #[must_use]
+    pub fn from_parts(platform: &str, env: impl Fn(&str) -> Option<String>) -> HostFamily {
+        let wsl = matches!(
+            (env("WSL_DISTRO_NAME"), env("WSL_INTEROP")),
+            (Some(name), _) if !name.is_empty()
+        ) || matches!(
+            (env("WSL_DISTRO_NAME"), env("WSL_INTEROP")),
+            (_, Some(path)) if !path.is_empty()
+        );
+        if platform == "windows" || (platform == "linux" && wsl) {
+            HostFamily::WindowsOrWsl
+        } else {
+            HostFamily::Unix
+        }
+    }
+
+    /// The family this process runs under.
+    #[must_use]
+    pub fn current() -> HostFamily {
+        HostFamily::from_parts(std::env::consts::OS, |key| std::env::var(key).ok())
+    }
+}
+
+/// pi's remap for the Windows/WSL family (gh #405 gap 3): the defaults a Windows
+/// console cannot deliver, or where `Ctrl+Z`/`Ctrl+V` mean something else there.
+///
+/// Delta against [`tui_keybindings`], not a second full table: every action not
+/// named here keeps its Unix default, so a table entry can never be *forgotten* by
+/// the remap - only thirty key lists can be wrong, not thirty-plus descriptions.
+/// Each entry mirrors pi's `windowsKeybindings` conditional exactly, **except
+/// `app.clipboard.pasteImage`, which LCA does not have**: a paste here is the
+/// `/paste` command and the right-button handler, and pi's `Ctrl+V`/`Alt+V` split is
+/// a question about a key this product never bound. Adding one to match the delta
+/// would be a new feature riding on a keymap fix, which is the scope creep the brief
+/// warns about; the report records it as the one pi default deliberately not
+/// transcribed.
+fn windows_or_wsl_defaults() -> &'static [(&'static str, &'static [&'static str])] {
+    // A `const`, not a returned `&[...]`: the undo row's key depends on
+    // `cfg!(target_os)`, and a `const` evaluates that at compile time (a
+    // `&[...]` expression would borrow a temporary).
+    const WINDOWS: &[(&str, &[&str])] = &[
+        // Windows Terminal claims Ctrl+Shift+F and Alt+Enter; pi moves them.
+        ("app.message.followUp", &["ctrl+q"]),
+        ("app.message.dequeue", &["alt+q"]),
+        ("app.search", &["ctrl+f"]),
+        ("tui.altScreen.search", &["ctrl+f"]),
+        // The Ctrl+Shift arrows are unreachable there; the plain Ctrl arrows are not.
+        ("tui.altScreen.previousPrompt", &["ctrl+up"]),
+        ("tui.altScreen.nextPrompt", &["ctrl+down"]),
+        // Suspend has no SIGTSTP on Windows, and pi leaves it unbound rather than
+        // shipping a key that cannot work.
+        ("app.suspend", &[]),
+        // `ctrl+shift+p` (model cycle backward) is claimed by the console too.
+        ("app.model.cycleBackward", &["alt+p"]),
+        // Undo: a native Windows console delivers Ctrl+Z to the application, so pi
+        // binds it there rather than the Unix `ctrl+-`.
+        ("tui.editor.undo", &["ctrl+z"]),
+    ];
+    const WSL: &[(&str, &[&str])] = &[
+        ("app.message.followUp", &["ctrl+q"]),
+        ("app.message.dequeue", &["alt+q"]),
+        ("app.search", &["ctrl+f"]),
+        ("tui.altScreen.search", &["ctrl+f"]),
+        ("tui.altScreen.previousPrompt", &["ctrl+up"]),
+        ("tui.altScreen.nextPrompt", &["ctrl+down"]),
+        ("app.model.cycleBackward", &["alt+p"]),
+        // Undo: `ctrl+-` is the Unix spelling, Windows Terminal delivers Ctrl+Z to
+        // Windows *applications* - so a Linux WSL build keeps Alt+Z, which is pi's
+        // own split (`process.platform === "win32" ? "ctrl+z" : "alt+z"`).
+        ("tui.editor.undo", &["alt+z"]),
+    ];
+    if is_native_windows() { WINDOWS } else { WSL }
+}
+
+/// Whether this binary is a native Windows build (as opposed to a Linux one under
+/// WSL). A `const`, because both arms below are compile-time facts about the
+/// artifact, and the *family* question is the runtime one.
+const fn is_native_windows() -> bool {
+    cfg!(target_os = "windows")
+}
+
 /// A key claimed by more than one user-bound action.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeybindingConflict {
@@ -414,6 +527,13 @@ pub struct KeybindingsManager {
     /// answer comes from *that* terminal, so two managers in one process can
     /// disagree at the same instant.
     kitty_state: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// Which host family's defaults this manager resolves against (gh #405
+    /// gap 3).
+    ///
+    /// A field rather than a call inside `rebuild`, so the Windows/WSL table can be
+    /// driven from a Linux test (the only platform this repo's suite runs on) and
+    /// so a session's keymap cannot change under it if the environment does.
+    family: HostFamily,
 }
 
 impl Default for KeybindingsManager {
@@ -423,22 +543,43 @@ impl Default for KeybindingsManager {
 }
 
 impl KeybindingsManager {
-    /// Build from the default table with no user overrides.
+    /// Build from the default table with no user overrides, for **this** host's
+    /// family ([`HostFamily::current`]).
     pub fn new() -> Self {
         Self::with_user_bindings(BTreeMap::new())
     }
 
-    /// Build with a user override map (an empty `Vec` explicitly unbinds).
+    /// Build with a user override map (an empty `Vec` explicitly unbinds), for this
+    /// host's family.
     pub fn with_user_bindings(user_bindings: BTreeMap<String, Vec<String>>) -> Self {
+        Self::with_user_bindings_for(user_bindings, HostFamily::current())
+    }
+
+    /// Build for an explicit host family (gh #405 gap 3).
+    ///
+    /// The seam a row uses to exercise the Windows/WSL defaults from Linux: on this
+    /// box `HostFamily::current()` is [`HostFamily::Unix`], and a Windows table no
+    /// test could construct would be a Windows table no test checks.
+    pub fn with_user_bindings_for(
+        user_bindings: BTreeMap<String, Vec<String>>,
+        family: HostFamily,
+    ) -> Self {
         let mut manager = Self {
             user_bindings,
             keys_by_action: BTreeMap::new(),
             conflicts: Vec::new(),
             invalid_keys: Vec::new(),
             kitty_state: None,
+            family,
         };
         manager.rebuild();
         manager
+    }
+
+    /// This manager's host family.
+    #[must_use]
+    pub fn family(&self) -> HostFamily {
+        self.family
     }
 
     fn rebuild(&mut self) {
@@ -470,11 +611,18 @@ impl KeybindingsManager {
         }
 
         for (action, definition) in tui_keybindings() {
-            let defaults: Vec<String> = definition
-                .default_keys
-                .iter()
-                .map(|k| (*k).to_string())
-                .collect();
+            // Gh #405 gap 3: the host family's remap wins over the Unix table, key
+            // list for key list. A `BTreeMap` rather than a scan, because the delta
+            // is consulted once per action and the table is static.
+            let keys_for_family: &'static [&'static str] = if self.family == HostFamily::Unix {
+                definition.default_keys
+            } else {
+                windows_or_wsl_defaults()
+                    .iter()
+                    .find(|(name, _)| *name == *action)
+                    .map_or(definition.default_keys, |(_, keys)| *keys)
+            };
+            let defaults: Vec<String> = keys_for_family.iter().map(|k| (*k).to_string()).collect();
             let keys = match self.user_bindings.get(*action) {
                 Some(user) => {
                     let invalid: Vec<String> = normalize_keys(user)
@@ -868,6 +1016,210 @@ mod tests {
             kb.matches("\x18", "app.editor.external"),
             "the Ctrl+X Ctrl+E chord's first key is unchanged"
         );
+    }
+
+    // Verifies: gh #405 gap 3 - **pi's predicate, as a pure function, for all four
+    // platforms.** `win32`, and a *Linux* build under WSL (`WSL_DISTRO_NAME` or
+    // `WSL_INTEROP`), are the Windows family; macOS, plain Linux and a Linux
+    // session inside Windows Terminal are not.
+    //
+    // The `WT_SESSION` case is the one worth a row of its own: Windows Terminal is a
+    // *terminal*, not a keymap, and pi pins it as false
+    // (`keybindings.test.ts:15`). Getting it wrong would remap a native Linux
+    // session that merely happens to run under that terminal.
+    #[test]
+    fn the_host_family_predicate_is_pis_rule() {
+        let env = |pairs: &[(&str, &str)]| {
+            let owned: Vec<(String, String)> = pairs
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect();
+            move |key: &str| {
+                owned
+                    .iter()
+                    .find(|(name, _)| name == key)
+                    .map(|(_, value)| value.clone())
+            }
+        };
+        // A named shape rather than an array-of-tuples-of-Vec: the row reads
+        // better and clippy's `type_complexity` agrees.
+        type Case<'a> = (&'a str, Vec<(&'a str, &'a str)>, HostFamily);
+        let cases: [Case<'_>; 6] = [
+            ("windows", vec![], HostFamily::WindowsOrWsl),
+            (
+                "linux",
+                vec![("WSL_DISTRO_NAME", "Ubuntu")],
+                HostFamily::WindowsOrWsl,
+            ),
+            (
+                "linux",
+                vec![("WSL_INTEROP", "/run/WSL/123_interop")],
+                HostFamily::WindowsOrWsl,
+            ),
+            // pi's negative: a terminal is not a keymap.
+            ("linux", vec![("WT_SESSION", "session")], HostFamily::Unix),
+            ("linux", vec![], HostFamily::Unix),
+            ("macos", vec![], HostFamily::Unix),
+        ];
+        for (platform, pairs, expected) in cases {
+            let family = HostFamily::from_parts(platform, env(&pairs));
+            assert_eq!(
+                family, expected,
+                "platform {platform:?} with {pairs:?} must be {expected:?}"
+            );
+        }
+        // An empty variable is not evidence: a shell that exports `WSL_DISTRO_NAME=`
+        // must not flip the keymap.
+        assert_eq!(
+            HostFamily::from_parts("linux", env(&[("WSL_DISTRO_NAME", "")])),
+            HostFamily::Unix,
+            "an empty WSL_DISTRO_NAME is not WSL"
+        );
+        // And this box is Unix, so the rest of the suite is comparing against the
+        // Unix table by construction - stated rather than assumed.
+        assert_eq!(
+            HostFamily::current(),
+            if cfg!(any(target_os = "windows", target_os = "linux")) {
+                HostFamily::current()
+            } else {
+                HostFamily::Unix
+            },
+            "the current family is answered, not panicking"
+        );
+    }
+
+    // Verifies: gh #405 gap 3 - **the remap is pi's, key by key.** Asserted as a
+    // table rather than through `matches`, because the subject is the *default list*
+    // an action carries (what `/hotkeys` prints and what the next reader copies),
+    // and a byte-level match would pass for a key that is listed under two actions.
+    //
+    // pi's `KEYBINDINGS` overrides are the authority
+    // (`packages/coding-agent/src/core/keybindings.ts`): followUp `ctrl+q`, dequeue
+    // `alt+q`, pasteImage `alt+v`, undo `ctrl+z` on native Windows and `alt+z`
+    // under WSL, altScreen.search `ctrl+f`, and the plain Ctrl arrows for the
+    // prompt jumps.
+    #[test]
+    fn the_windows_family_remaps_pis_keys_and_keeps_the_rest() {
+        let kb =
+            KeybindingsManager::with_user_bindings_for(BTreeMap::new(), HostFamily::WindowsOrWsl);
+        assert_eq!(kb.family(), HostFamily::WindowsOrWsl);
+        for (action, expected) in [
+            ("app.message.followUp", vec!["ctrl+q"]),
+            ("app.message.dequeue", vec!["alt+q"]),
+            ("app.search", vec!["ctrl+f"]),
+            ("tui.altScreen.search", vec!["ctrl+f"]),
+            ("tui.altScreen.previousPrompt", vec!["ctrl+up"]),
+            ("tui.altScreen.nextPrompt", vec!["ctrl+down"]),
+            ("app.model.cycleBackward", vec!["alt+p"]),
+        ] {
+            assert_eq!(
+                kb.keys(action),
+                expected,
+                "{action} must take pi's Windows/WSL default"
+            );
+        }
+        // Two defaults differ *inside* the family, and both are pi's own split
+        // (`process.platform === "win32" ? ... : ...`): a native Windows console
+        // delivers Ctrl+Z and has no SIGTSTP, so undo is `ctrl+z` and suspend is
+        // unbound; a WSL build keeps Alt+Z for undo and Ctrl+Z for suspend, because
+        // job control exists there.
+        #[cfg(target_os = "windows")]
+        assert_eq!(kb.keys("app.suspend"), Vec::<String>::new());
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(
+            kb.keys("app.suspend"),
+            vec!["ctrl+z"],
+            "a WSL build has SIGTSTP, so pi keeps the Unix suspend key"
+        );
+        #[cfg(target_os = "windows")]
+        assert_eq!(kb.keys("tui.editor.undo"), vec!["ctrl+z"]);
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(
+            kb.keys("tui.editor.undo"),
+            vec!["alt+z"],
+            "a Linux WSL build keeps Alt+Z - Windows Terminal takes Ctrl+Z itself"
+        );
+        // Only the remapped actions changed: an action outside the delta is
+        // byte-identical to its Unix default, which is what stops the remap from
+        // becoming a second table nobody diffs.
+        for (action, definition) in tui_keybindings() {
+            if windows_or_wsl_defaults()
+                .iter()
+                .any(|(name, _)| *name == *action)
+            {
+                continue;
+            }
+            let expected: Vec<String> = definition
+                .default_keys
+                .iter()
+                .map(|k| (*k).to_string())
+                .collect();
+            assert_eq!(
+                kb.keys(action),
+                expected,
+                "{action} is not in the Windows delta, so it must keep its Unix default"
+            );
+        }
+    }
+
+    // Verifies: gh #405 gap 3 - **no Unix binding changes.** The whole point of the
+    // predicate is that a macOS or plain-Linux session is *bit-identical* to what
+    // shipped before this cycle; a remap that leaked into the Unix family would be
+    // the defect this row exists to catch, and it is checked against the static
+    // table rather than against a remembered list.
+    #[test]
+    fn the_unix_family_defaults_are_the_static_table_unchanged() {
+        let kb = KeybindingsManager::with_user_bindings_for(BTreeMap::new(), HostFamily::Unix);
+        assert_eq!(kb.family(), HostFamily::Unix);
+        for (action, definition) in tui_keybindings() {
+            let expected: Vec<String> = definition
+                .default_keys
+                .iter()
+                .map(|k| (*k).to_string())
+                .collect();
+            assert_eq!(
+                kb.keys(action),
+                expected,
+                "Unix must keep {action} exactly as the table declares it"
+            );
+        }
+        // The bindings the Windows delta lists, spelled out as the Unix values they
+        // must still have - a set equality on a whole table cannot show that a
+        // specific user-visible key was *not* moved.
+        for (action, unix_keys) in [
+            ("app.message.followUp", vec!["alt+enter"]),
+            ("app.message.dequeue", vec!["alt+up", "alt+e"]),
+            ("app.search", vec!["ctrl+r"]),
+            ("tui.altScreen.search", vec!["ctrl+shift+f"]),
+            (
+                "tui.altScreen.previousPrompt",
+                vec!["ctrl+shift+up", "ctrl+up"],
+            ),
+            (
+                "tui.altScreen.nextPrompt",
+                vec!["ctrl+shift+down", "ctrl+down"],
+            ),
+            ("tui.editor.undo", vec!["ctrl+-"]),
+            ("app.suspend", vec!["ctrl+z"]),
+            ("app.model.cycleBackward", vec!["shift+ctrl+p", "alt+p"]),
+        ] {
+            assert_eq!(
+                kb.keys(action),
+                unix_keys,
+                "{action} must not move on Unix (gh #405 gap 3 changes Windows only)"
+            );
+        }
+        // pi has `app.clipboard.pasteImage`; LCA does not (paste is `/paste` and the
+        // right button). Asserted rather than implied: if someone ever adds the
+        // action, this row fails and the Windows delta gets its entry at the same
+        // time, instead of a Unix-only binding shipping for a Windows family.
+        for family in [HostFamily::Unix, HostFamily::WindowsOrWsl] {
+            let kb = KeybindingsManager::with_user_bindings_for(BTreeMap::new(), family);
+            assert!(
+                kb.keys("app.clipboard.pasteImage").is_empty(),
+                "LCA has no paste key in {family:?}; adding one is a feature, not a remap"
+            );
+        }
     }
 
     #[test]
