@@ -155,10 +155,36 @@ impl MainScreenRenderer {
             };
 
         // Full render helper
+        // Gh #324 item 1, measured: **a full clear must free every texture the
+        // previous frame held.** The differential path diffs ids and deletes the
+        // orphans (`deleted_ids` below), but every early return above (`width_changed`,
+        // `height_changed`, `clear_on_shrink`, the shrink arm, and the first render)
+        // reaches this helper and used to leave the old textures in the terminal with
+        // nothing pointing at them. A width change is exactly the case that makes that
+        // unbounded: the id hashes the cell scale, so **every** distinct width is a
+        // distinct texture, and a resize drag at 30 columns wide mints 30 of them.
+        //
+        // pi's shape (`tui-main-screen.ts`'s `fullRender`): when the frame clears, it
+        // emits `deleteKittyImages(previousKittyImageIds)` immediately **before**
+        // `2J/H/3J`, inside the same synchronized block. All previous ids, not a diff:
+        // the clear wipes the screen, so every texture the old frame referenced is
+        // orphaned by definition. Emitting before the clear (rather than after) keeps
+        // the ordering rule the differential path already states - the old texture never
+        // shows for a frame after its replacement is on screen.
+        let mut previous_ids: Vec<u32> = self
+            .previous_lines
+            .iter()
+            .flat_map(|line| image_ranges::kitty_ids_on(line))
+            .collect();
+        previous_ids.sort_unstable();
+        previous_ids.dedup();
         let mut full_render = |clear: bool, renderer: &mut Self| {
             let mut out = String::new();
             out.push_str("\x1b[?2026h"); // synchronized output
             if clear {
+                for id in &previous_ids {
+                    out.push_str(&delete_kitty_image(*id));
+                }
                 out.push_str("\x1b[2J\x1b[H\x1b[3J"); // Clear screen, home, clear scrollback
             }
             for (i, line) in new_lines.iter().enumerate() {

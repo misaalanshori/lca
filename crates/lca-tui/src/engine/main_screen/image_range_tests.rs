@@ -231,6 +231,90 @@ fn the_clears_first_ordering_does_not_depend_on_the_terminal_identity() {
     }
 }
 
+// Verifies: gh #324 item 1 - **a full clear frees every texture the old frame held.**
+//
+// The differential path deletes orphans; every early return (`width_changed`,
+// `height_changed`, `clear_on_shrink`, the shrink arm) goes through `full_render`,
+// which used to clear the screen and leave the textures behind. A **width change**
+// is the case that makes the leak unbounded rather than merely untidy: the id hashes
+// the cell scale, so each distinct rendered width is a *distinct* texture - a resize
+// drag thirty columns wide mints thirty textures per image, and nothing ever frees
+// them.
+//
+// Asserted as bytes, and as a **set**: every id the previous frame carried is deleted,
+// before the clear sequence, inside the one synchronized update. The count is the
+// number of distinct ids, not the number of image rows - a two-row block is one id.
+#[test]
+fn a_full_clear_deletes_every_texture_the_previous_frame_held() {
+    let previous: Vec<String> = vec![
+        header(11, 2),
+        String::new(),
+        header(12, 2),
+        String::new(),
+        "end".into(),
+    ];
+    let mut r = MainScreenRenderer::new();
+    let mut term = FakeTerminal::new(40, 24);
+    r.render(&mut term, previous.clone(), 40, 24);
+    let _ = term.take_output();
+    // A width change takes the full-clear path.
+    r.render(&mut term, previous, 20, 24);
+    let out = term.take_output();
+
+    let open = out
+        .find("\x1b[?2026h")
+        .unwrap_or_else(|| panic!("the frame opens a synchronized update: {out:?}"));
+    let clear = out
+        .find("\x1b[2J\x1b[H\x1b[3J")
+        .unwrap_or_else(|| panic!("a width change clears the screen: {out:?}"));
+    assert!(
+        clear > open,
+        "the clear is inside the synchronized block: {out:?}"
+    );
+    for id in [11u32, 12u32] {
+        let delete = format!("\x1b_Ga=d,d=I,i={id},q=2\x1b\\");
+        let at = out
+            .find(&delete)
+            .unwrap_or_else(|| panic!("the old texture i={id} is freed: {out:?}"));
+        assert!(
+            at < clear,
+            "i={id} is deleted **before** the clear wipes the rows that named it: {out:?}"
+        );
+    }
+    assert_eq!(
+        out.matches("a=d,d=I").count(),
+        2,
+        "one delete per distinct id, not per image row: {out:?}"
+    );
+}
+
+// Verifies: gh #324 item 1 - **the deletion set is the previous frame's ids, not the
+// new frame's.** A clear is a wholesale replacement: every texture the *old* rows
+// named is orphaned by it, including any the new frame no longer shows at all.
+#[test]
+fn a_full_clear_frees_a_texture_the_new_frame_does_not_have() {
+    let previous: Vec<String> = vec![header(41, 2), String::new(), "tail".into()];
+    let stripped: Vec<String> = vec!["no image here".to_string(), String::new(), "tail".into()];
+    let mut r = MainScreenRenderer::new();
+    let mut term = FakeTerminal::new(40, 24);
+    r.render(&mut term, previous, 40, 24);
+    let _ = term.take_output();
+    // Same width, but the content shrank under `clear_on_shrink` - the shrink arm.
+    r.clear_on_shrink = true;
+    r.render(&mut term, stripped, 40, 24);
+    let out = term.take_output();
+    assert!(
+        out.contains("a=d,d=I,i=41"),
+        "the texture the old frame named is freed even though the new frame names \
+         nothing: {out:?}"
+    );
+    assert_eq!(
+        out.matches("a=d,d=I").count(),
+        1,
+        "and exactly once: {out:?}"
+    );
+}
+
 // Verifies: gh #324 gap 4 + gap 3 - **a *cropped* image is not deleted.** Gap 3 made a
 // crop the same id with a new placement, so a blunt "delete anything that changed" would
 // delete the texture it is about to re-place. This is the row that fix fails.

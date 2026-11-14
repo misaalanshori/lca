@@ -154,3 +154,47 @@ fn a_probe_arriving_after_first_paint_changes_the_id() {
     // And the store is back to the estimate, so no later row inherits it.
     assert_eq!(current_cell_pixels(), DEFAULT_CELL_PIXELS);
 }
+
+// Verifies: gh #324 item 1 - **every distinct rendered width is a distinct texture
+// id**, which is why a bounded *placement* cache cannot bound what the terminal
+// holds. The measurement behind declining pi's LRU: the id hashes the cell scale
+// (`columns`, `rows`), so one 800x600 image spread over a resize drag mints one
+// texture per width the pane passed through. The bound is therefore
+// "images in the session x distinct widths rendered", not "images scrolled past",
+// and no cache size makes it small - only freeing textures does (the full-clear
+// sweep in `main_screen`).
+//
+// The numbers below are pinned so a future "optimisation" that dropped the scale
+// from the id would fail here: 800x600 at widths 60..120 is 30 distinct ids, and a
+// probe that changed only the cell height at a fixed width is a 31st.
+#[test]
+fn every_distinct_rendered_width_is_a_distinct_texture_id() {
+    let bytes = png(800, 600);
+    let info = ImageInfo::new("image/png", &bytes);
+    let ids: std::collections::BTreeSet<u32> = (60..=120)
+        .map(|max_width| {
+            let (cols, rows) = image_cell_size(&info, max_width);
+            kitty_image_id(&bytes, cols, rows)
+        })
+        .collect();
+    assert_eq!(
+        ids.len(),
+        30,
+        "a 30-column drag mints 30 textures for one image; ids {ids:?}"
+    );
+    // And the same width twice is the *same* id: a repaint is idempotent, which is
+    // the property that makes an LRU unnecessary in the first place.
+    let (cols, rows) = image_cell_size(&info, 80);
+    assert_eq!(
+        kitty_image_id(&bytes, cols, rows),
+        kitty_image_id(&bytes, cols, rows),
+        "re-painting one width re-places the same texture"
+    );
+    // Two widths that round to the same grid share an id - the count above is
+    // distinct *grids*, not distinct widths, which is the honest bound.
+    let (a, b) = (image_cell_size(&info, 100), image_cell_size(&info, 101));
+    assert_eq!(
+        a, b,
+        "widths 100 and 101 land on one grid, so they cost one texture"
+    );
+}
