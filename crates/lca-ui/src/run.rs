@@ -595,9 +595,15 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> i32 {
     // disables); anything the registry never defined, any conflict, or a
     // load failure is reported loud on the startup notice - a typo keeps
     // defaults, never silently nothing.
-    let keybindings = Arc::new(KeybindingsManager::with_user_bindings(std::mem::take(
-        &mut options.keybinding_overrides,
-    )));
+    // Gh #405 gap 3: the **host** picks the family, so a Windows build and a Linux
+    // build under WSL get pi's remapped table while macOS and plain Linux keep the
+    // canonical one. `KeybindingsManager::new()` stays Unix on purpose - a fixture or
+    // an embedder that never mentions a family must not inherit the runner's
+    // platform.
+    let keybindings = Arc::new(KeybindingsManager::with_user_bindings_for(
+        std::mem::take(&mut options.keybinding_overrides),
+        lca_tui::engine::keybindings::HostFamily::current(),
+    ));
     let keybinding_notice = crate::run_keybindings::keybinding_problems(
         options.keybinding_error.clone(),
         &keybindings.unknown_actions(),

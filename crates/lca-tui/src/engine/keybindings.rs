@@ -544,16 +544,24 @@ impl Default for KeybindingsManager {
 }
 
 impl KeybindingsManager {
-    /// Build from the default table with no user overrides, for **this** host's
-    /// family ([`HostFamily::current`]).
+    /// Build from the **Unix** table with no user overrides.
+    ///
+    /// The family is chosen by the *host*, not by this constructor (gh #405 gap 3):
+    /// `lca_ui::run` calls [`KeybindingsManager::with_user_bindings_for`] with
+    /// [`HostFamily::current`], so production gets the remap while a fixture, an
+    /// embedder or a library test that never mentions a family keeps the portable
+    /// table. Making `new()` sniff the environment was the first shape and it was
+    /// wrong: every UI row that presses `ctrl+r` would silently assert the Windows
+    /// table on a Windows runner, which is a platform-as-assertion, not a behaviour
+    /// assertion (CI's Windows leg proved it - seven rows reddened).
     pub fn new() -> Self {
         Self::with_user_bindings(BTreeMap::new())
     }
 
-    /// Build with a user override map (an empty `Vec` explicitly unbinds), for this
-    /// host's family.
+    /// Build with a user override map (an empty `Vec` explicitly unbinds), over the
+    /// Unix table.
     pub fn with_user_bindings(user_bindings: BTreeMap<String, Vec<String>>) -> Self {
-        Self::with_user_bindings_for(user_bindings, HostFamily::current())
+        Self::with_user_bindings_for(user_bindings, HostFamily::Unix)
     }
 
     /// Build for an explicit host family (gh #405 gap 3).

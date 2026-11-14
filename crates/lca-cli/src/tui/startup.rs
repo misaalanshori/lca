@@ -67,7 +67,13 @@ pub fn compact_header(
         plural("extension", extensions),
         plural("skill", skills),
         plural("template", templates),
-        lca_tui::engine::keybindings::KeybindingsManager::new().display_keys("app.tools.expand"),
+        // Gh #405 gap 3: the header must print the key **this host** accepts, so it
+        // asks the family the loop resolves rather than the portable default table.
+        lca_tui::engine::keybindings::KeybindingsManager::with_user_bindings_for(
+            std::collections::BTreeMap::new(),
+            lca_tui::engine::keybindings::HostFamily::current(),
+        )
+        .display_keys("app.tools.expand"),
     )]
 }
 

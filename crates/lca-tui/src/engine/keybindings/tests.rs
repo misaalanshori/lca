@@ -6,11 +6,23 @@
 
 use super::*;
 
+/// The **Unix** manager, explicitly.
+///
+/// `KeybindingsManager::new()` resolves the *current host's* family (gh #405
+/// gap 3), so on a Windows runner it yields the remapped table. The rows in this
+/// file assert Unix key lists by name, so they must say which family they mean -
+/// otherwise "no Unix binding changed" would be tested only on the machines that
+/// happen to be Unix, which is the platform-as-assertion mistake CI kept catching
+/// in the lca-ui fixtures.
+fn unix_defaults() -> KeybindingsManager {
+    KeybindingsManager::with_user_bindings_for(BTreeMap::new(), HostFamily::Unix)
+}
+
 // Verifies: gh #173 - Shift+Up/Down join the prompt-step
 // bindings (pi's Shift+Scroll ergonomics have a keyboard twin).
 #[test]
 fn shift_arrows_step_between_prompts() {
-    let kb = KeybindingsManager::new();
+    let kb = unix_defaults();
     assert!(kb.matches("\x1b[1;2A", "app.prompt.previous"));
     assert!(kb.matches("\x1b[1;2B", "app.prompt.next"));
     assert!(!kb.matches("\x1b[1;2A", "app.prompt.next"));
@@ -89,7 +101,7 @@ fn display_keys_follows_the_override_and_the_unbind() {
 
 #[test]
 fn defaults_resolve_and_match() {
-    let kb = KeybindingsManager::new();
+    let kb = unix_defaults();
     assert!(kb.matches("\x1b[A", "tui.editor.cursorUp"));
     assert!(kb.matches("\x1b[A", "tui.select.up"));
     assert!(kb.matches("\r", "tui.input.submit"));
@@ -167,7 +179,7 @@ fn user_override_and_explicit_unbind() {
 // extension panel kept a key of its own after moving (`alt+x`).
 #[test]
 fn the_model_cycle_keys_are_pis_and_ctrl_p_is_claimed_once() {
-    let kb = KeybindingsManager::new();
+    let kb = unix_defaults();
     assert!(
         kb.matches("\x10", "app.model.cycleForward"),
         "Ctrl+P cycles"
@@ -215,7 +227,7 @@ fn the_model_cycle_keys_are_pis_and_ctrl_p_is_claimed_once() {
 // exclusive_pickers`), where the pickers live.
 #[test]
 fn ctrl_s_is_pis_save_default_and_no_other_kind_of_action_claims_it() {
-    let kb = KeybindingsManager::new();
+    let kb = unix_defaults();
     assert!(kb.matches("\x13", "app.models.save"));
     assert!(kb.matches("\x13", "app.thinking.save"));
     let claimants: Vec<&str> = tui_keybindings()
@@ -241,7 +253,7 @@ fn ctrl_s_is_pis_save_default_and_no_other_kind_of_action_claims_it() {
 // too (FR-UI-15's suite row keeps passing).
 #[test]
 fn ctrl_x_is_pis_message_copy_and_still_arms_the_editor_chord() {
-    let kb = KeybindingsManager::new();
+    let kb = unix_defaults();
     assert!(kb.matches("\x18", "app.message.copy"));
     assert!(
         kb.matches("\x18", "app.editor.external"),
