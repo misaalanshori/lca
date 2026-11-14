@@ -175,6 +175,311 @@ fn a_plain_table_renders_exactly_as_before() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Gh #384 bug 2 - the allocator, not the measurement.
+//
+// Both rows below render a table whose columns cannot all reach their
+// natural width, and assert the **widths** rather than "no panic": a starved
+// neighbour is a number. The two numbers in each message are today's answer
+// and the proportional one, so a reader can see the divergence without
+// re-running anything.
+// ---------------------------------------------------------------------------
+
+// Verifies: gh #384 bug 2 - **grow by potential, not round-robin.**
+//
+// The fixture: a 2-char id column (min-word 2, natural 3) beside an 8-word
+// prose column (min-word 7, natural 45), in a 20-column terminal. The budget
+// for cells is `20 - (2*3+1) = 13`.
+//
+// Round-robin handed the id `+1` per pass until it hit its natural 3, so the
+// prose column got 10. Proportional gives the id its minimum 2 (its grow
+// potential is `3-2 = 1` against the prose's `45-7 = 38`) and the prose 11 -
+// "the narrow column stops growing while prose keeps gaining".
+#[test]
+fn a_narrow_identifier_column_stops_growing_while_prose_keeps_gaining() {
+    let md = "| id | notes |\n| --- | --- |\n\
+              | a b | alpha beta gamma delta epsilon zeta eta theta |";
+    let out = render_markdown(md, 20, &plain(), &Default::default());
+    let widths = column_widths(&out);
+    assert_eq!(
+        widths,
+        vec![2, 11],
+        "the id column keeps its min-word 2 and the prose takes the rest. \
+         Round-robin answered [3, 10] - the id grew to its natural 3 while prose \
+         was still one short. widths: {widths:?}\n{out:?}"
+    );
+}
+
+// Verifies: gh #384 bug 2 - **shrink by weight, not equally.**
+//
+// A 3-char id beside a three-word prose column whose longest word is 30 (the
+// `getLongestWordWidth` cap). The minima sum to 33 against a 13-cell budget,
+// so the shrink rule runs. Round-robin took one column from every column in
+// turn, so the id lost its `b` and the prose lost 18; weighted shrink starts
+// both at 1 and hands the budget out by `min_word - 1`, so the id keeps 2 and
+// the prose 11.
+#[test]
+fn min_overflow_shrinks_a_wide_column_harder_than_a_narrow_one() {
+    let md = "| id | note |\n| --- | --- |\n\
+              | abc | antidisestablishmentarianism floccinaucinihilipilification \
+              pneumonoultramicroscopicsilicovolcanoconiosis archaeological |";
+    let out = render_markdown(md, 20, &plain(), &Default::default());
+    let widths = column_widths(&out);
+    assert_eq!(
+        widths,
+        vec![2, 11],
+        "the id keeps 2 of its 3 columns and the prose column takes the loss. \
+         Round-robin answered [1, 12] - the id lost exactly as much as the prose \
+         column beside it. widths: {widths:?}\n{out:?}"
+    );
+}
+
+// Verifies: gh #384 bug 2 - **the sweep is deterministic and spends the
+// budget exactly.**
+//
+// Two halves. First, `sum(widths) == available` **exactly**, not `<=`: a table
+// that leaves a column of the budget unspent has drawn a narrower frame than
+// the terminal offers, which is a layout defect a `<=` assertion would pass.
+// Second, the same table solves to the same widths twice, and allocating
+// against the answer it produced changes nothing (`sum(natural) <= available`
+// then holds, so rule 1 returns the widths unchanged) - that is the
+// idempotence the largest-remainder sweep buys, and a sweep whose leftovers
+// depended on iteration order would fail it.
+#[test]
+fn the_remainder_sweep_is_deterministic_and_sums_to_the_budget() {
+    // (min_word, natural, available) triples whose remainders do NOT divide
+    // evenly, so the leftover columns are what decides the layout.
+    let cases: [(Vec<usize>, Vec<usize>, usize); 4] = [
+        (vec![2, 7], vec![3, 45], 13),
+        (vec![3, 30], vec![3, 119], 13),
+        (vec![1, 1, 1], vec![20, 20, 20], 10),
+        (vec![4, 9, 2], vec![8, 61, 6], 40),
+    ];
+    for (min_word, natural, available) in cases {
+        let first = super::tables::solve_column_widths(&min_word, &natural, available);
+        assert_eq!(
+            first.iter().sum::<usize>(),
+            available,
+            "the budget is spent exactly: {first:?} for {available} \
+             (min_word {min_word:?}, natural {natural:?})"
+        );
+        let second = super::tables::solve_column_widths(&min_word, &natural, available);
+        assert_eq!(first, second, "the same table solves identically twice");
+        // Idempotence: the widths become their own natural width, which fits.
+        let idempotent = super::tables::solve_column_widths(&first, &first, available);
+        assert_eq!(
+            idempotent, first,
+            "allocating against the allocation it produced changes nothing"
+        );
+        // And the sweep really is **largest-remainder**: each column within one
+        // of its exact share of the budget. This is the clause that separates a
+        // proportional allocator from an equal-share one - the old round-robin
+        // satisfied sum/idempotence/bounds and still starved the wide column,
+        // which is why those bounds alone are not the acceptance criterion.
+        let fits_naturally = natural.iter().sum::<usize>() <= available;
+        let (base, weights, budget) = if fits_naturally {
+            (natural.clone(), vec![0usize; natural.len()], 0usize)
+        } else if available >= min_word.iter().sum::<usize>() {
+            (
+                min_word.clone(),
+                (0..min_word.len())
+                    .map(|c| natural[c] - min_word[c])
+                    .collect::<Vec<usize>>(),
+                available - min_word.iter().sum::<usize>(),
+            )
+        } else {
+            (
+                vec![1usize; min_word.len()],
+                min_word.iter().map(|w| w - 1).collect::<Vec<usize>>(),
+                available - min_word.len(),
+            )
+        };
+        let total: usize = weights.iter().sum();
+        if total > 0 && budget > 0 {
+            for c in 0..first.len() {
+                let exact = base[c] + budget * weights[c] / total;
+                assert!(
+                    first[c].abs_diff(exact) <= 1,
+                    "column {c} is {} away from its proportional share {exact} \
+                     (widths {first:?}, base {base:?}, weights {weights:?}, \
+                     budget {budget}) - equal shares are not proportional ones",
+                    first[c].abs_diff(exact)
+                );
+            }
+        }
+    }
+}
+
+// Verifies: gh #384 bug 2 - **the tie-break is index-tied, and it is the
+// tie-break that makes the result deterministic.**
+//
+// Two columns with **identical weights** leave the largest-remainder sweep a
+// single leftover column to place, and both candidates have the same remainder:
+// the fractional parts are equal, so ascending index must take it. Feeding the
+// same triple twice proves nothing here - the sweep is a pure function of its
+// inputs either way, and a descending tie-break is equally reproducible. What
+// this row pins is the **orientation**, because pi's tie-break is ascending
+// index and a descending one would disagree with pi on every such table.
+//
+// (`([1,1], [2,2], 3)` is the smallest instance: both remainders are 1, so the
+// leftover goes to column 0.)
+#[test]
+fn a_largest_remainder_tie_breaks_by_ascending_column_index() {
+    assert_eq!(
+        super::tables::solve_column_widths(&[1, 1], &[2, 2], 3),
+        vec![2, 1],
+        "equal remainders go to the earlier column"
+    );
+    assert_eq!(
+        super::tables::solve_column_widths(&[1, 1], &[3, 3], 3),
+        vec![2, 1],
+        "and the same triple answers identically on a second call"
+    );
+    // Same weights through the *shrink* rule, so both sweeps are pinned, not
+    // only the grow one.
+    assert_eq!(
+        super::tables::solve_column_widths(&[2, 2], &[2, 2], 3),
+        vec![2, 1],
+        "the shrink sweep breaks the tie the same way"
+    );
+}
+
+// Verifies: gh #384 bug 2 - the allocator's invariants over **arbitrary**
+// `(min_word, natural, available)` triples, not the four samples above.
+//
+// Four properties, and the ones a hand-tuned `if` would violate:
+//
+// * every column is at least 1 wide (a 0-column is a missing column);
+// * no column exceeds its natural width, and none is below its min-word width
+//   **when the minima fit** - the case where the minima do not fit can only
+//   promise >= 1, and pretending otherwise is what the old equal-shrink did;
+// * the sum never exceeds the budget when a cell fits at all;
+// * idempotence, for every triple.
+#[cfg(test)]
+mod allocator_properties {
+    use proptest::prelude::*;
+
+    fn triple(cols: usize) -> impl Strategy<Value = (Vec<usize>, Vec<usize>, usize)> {
+        (
+            proptest::collection::vec(1usize..31, cols..=cols),
+            proptest::collection::vec(1usize..81, cols..=cols),
+            1usize..120,
+        )
+            .prop_map(|(min_word, mut natural, available)| {
+                // `natural >= min_word` is what a measurement produces; the
+                // allocator is not asked to invent order out of nonsense.
+                for (n, m) in natural.iter_mut().zip(min_word.iter()) {
+                    *n = (*n).max(*m);
+                }
+                (min_word, natural, available)
+            })
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 512, ..ProptestConfig::default() })]
+
+        #[test]
+        fn the_allocator_keeps_its_invariants(case in (1usize..4).prop_flat_map(triple)) {
+            let (min_word, natural, available) = case;
+            let widths = super::tables::solve_column_widths(&min_word, &natural, available);
+            prop_assert_eq!(widths.len(), min_word.len(), "one width per column");
+            prop_assert!(
+                widths.iter().all(|w| *w >= 1),
+                "no column is zero wide: {:?}",
+                widths
+            );
+            prop_assert!(
+                widths.iter().zip(natural.iter()).all(|(w, n)| *w <= *n),
+                "no column exceeds its natural width: {:?} vs {:?}",
+                widths,
+                natural
+            );
+            // The three rules, and the invariant each one owes:
+            if natural.iter().sum::<usize>() <= available {
+                // Rule 1: everything fits, so the widths ARE the natural widths.
+                // This is the case that must render byte-identically to the
+                // pre-cycle tree, so it is asserted as an equality, not a bound.
+                prop_assert_eq!(
+                    widths.clone(),
+                    natural.clone(),
+                    "a table that fits takes its natural widths"
+                );
+            } else if available >= min_word.iter().sum::<usize>() {
+                // Rule 3: grown from the minima by potential. Every column keeps
+                // its min-word and the budget is spent **exactly** - a column of
+                // room left unspent is a frame narrower than the terminal.
+                prop_assert!(
+                    widths.iter().zip(min_word.iter()).all(|(w, m)| *w >= *m),
+                    "when the minima fit, every column is at least min-word: {:?} vs {:?}",
+                    widths,
+                    min_word
+                );
+                prop_assert_eq!(
+                    widths.iter().sum::<usize>(),
+                    available,
+                    "and the budget is spent exactly"
+                );
+            } else {
+                // Rule 2: the minima overflow, so only >= 1 is promised.
+                prop_assert!(
+                    widths.iter().sum::<usize>() <= available.max(min_word.len()),
+                    "an over-full minima set still fits the budget (or degrades to \
+                     one cell per column): {:?} for {:?}",
+                    widths,
+                    available
+                );
+            }
+            // **The policy invariant, and the one the round-robin allocator
+            // violated.** Several width vectors satisfy every bound above - the
+            // old round-robin one did - so the invariants alone cannot tell
+            // "proportional" from "equal shares". Largest-remainder distribution
+            // is characterised by its fidelity: every column's width is within
+            // **one** of its exact proportional share. A round-robin column can
+            // be several columns off (measured: a 2-cell id got 4 where its share
+            // was 1), which is the starvation this bug is about.
+            {
+                let (base, weights, budget) = if natural.iter().sum::<usize>() <= available {
+                    // Nothing is distributed: rule 1 returns the naturals.
+                    (natural.clone(), vec![0usize; natural.len()], 0usize)
+                } else if available >= min_word.iter().sum::<usize>() {
+                    let floor_total = min_word.iter().sum::<usize>();
+                    (
+                        min_word.clone(),
+                        (0..min_word.len())
+                            .map(|c| natural[c].saturating_sub(min_word[c]))
+                            .collect::<Vec<usize>>(),
+                        available - floor_total,
+                    )
+                } else {
+                    (
+                        vec![1usize; min_word.len()],
+                        min_word.iter().map(|w| w.saturating_sub(1)).collect::<Vec<usize>>(),
+                        available.saturating_sub(min_word.len()),
+                    )
+                };
+                let total: usize = weights.iter().sum();
+                if total > 0 && budget > 0 {
+                    for c in 0..widths.len() {
+                        let exact = base[c] + budget * weights[c] / total;
+                        prop_assert!(
+                            widths[c].abs_diff(exact) <= 1,
+                            "column {c} is {} away from its proportional share {exact} \
+                             (widths {:?}, base {:?}, weights {:?}, budget {budget})",
+                    widths[c].abs_diff(exact),
+                            widths,
+                            base,
+                            weights
+                        );
+                    }
+                }
+            }
+            // Idempotence: the answer, fed back as its own target, does not move.
+            let again = super::tables::solve_column_widths(&widths, &widths, available);
+            prop_assert_eq!(again, widths, "allocating against itself changes nothing");
+        }
+    }
+}
+
 // Behavior outside tables does not move (brief §5): the paragraph and the
 // code block keep their current output.
 #[test]

@@ -123,48 +123,7 @@ pub(super) fn render_table(
         })
         .collect();
     let available = width - (cols * 3 + 1);
-    let mut widths = natural.clone();
-    let total: usize = natural.iter().sum();
-    if total > available {
-        // Start at min-word, distribute the remainder by grow potential.
-        widths = min_word.clone();
-        let mut used: usize = widths.iter().sum();
-        let mut fixup = 0;
-        while used < available && fixup < 1000 {
-            let mut progressed = false;
-            for c in 0..cols {
-                if widths[c] < natural[c] && used < available {
-                    widths[c] += 1;
-                    used += 1;
-                    progressed = true;
-                }
-            }
-            fixup += 1;
-            if !progressed {
-                break;
-            }
-        }
-        // If min-words alone overflow, shrink proportionally.
-        if used > available {
-            let mut over = used - available;
-            while over > 0 {
-                let mut progressed = false;
-                for w in widths.iter_mut() {
-                    if over == 0 {
-                        break;
-                    }
-                    if *w > 1 {
-                        *w -= 1;
-                        over -= 1;
-                        progressed = true;
-                    }
-                }
-                if !progressed {
-                    break;
-                }
-            }
-        }
-    }
+    let widths = solve_column_widths(&min_word, &natural, available);
 
     let border = |left: &str, mid: &str, right: &str| {
         let mut s = String::from(left);
@@ -227,6 +186,116 @@ pub(super) fn render_table(
         }
     }
     out.push(border("└", "┴", "┘"));
+}
+
+/// Solve one table's column widths (gh #384 bug 2).
+///
+/// pi's three rules (`packages/tui/src/components/markdown.ts`, `renderTable`),
+/// transcribed with integer arithmetic so the answer cannot depend on the
+/// platform's float rounding:
+///
+/// 1. **Fits naturally** (`sum(natural) <= available`): every column gets its
+///    natural width. Unchanged from the round-robin version, byte for byte.
+/// 2. **Minima overflow** (`sum(min_word) > available`): start every column at
+///    **1** and hand out `available - cols` by **weight** `min_word[c] - 1`,
+///    because the space a column cannot do without is exactly what
+///    `min_word` measures. Round-robin shrink here took one column from every
+///    column in turn, so a 2-character id lost as much as the prose column
+///    beside it.
+/// 3. **Between the minima and the natural widths**: distribute
+///    `available - sum(minima)` by **grow potential** `natural[c] - minima[c]`,
+///    so a column with little left to gain stops early and the prose column
+///    keeps taking space. Round-robin growth gave a 2-char id the same `+1`
+///    per pass as a 100-char description until the id hit its natural width.
+///
+/// Both distributions use the **largest-remainder** method: every column gets
+/// `floor(share)`, then the columns with the largest fractional remainders take
+/// the leftovers one at a time, **ties broken by column index**. That is what
+/// makes the layout deterministic - a pure `while remaining > 0 { … }` sweep is
+/// iteration-ordered, and a hash-ordered one would lay the same table out
+/// differently between runs.
+///
+/// Returns one width per column, always >= 1. When `available >= cols` the sum
+/// is exactly `available`; when the terminal is too narrow for one cell per
+/// column the sum is `cols` (every column at 1), because a width below 1 is not
+/// a narrower column, it is a missing one.
+pub(super) fn solve_column_widths(
+    min_word: &[usize],
+    natural: &[usize],
+    available: usize,
+) -> Vec<usize> {
+    let cols = natural.len().min(min_word.len());
+    let mut widths: Vec<usize> = natural[..cols].to_vec();
+    if widths.iter().sum::<usize>() <= available {
+        return widths;
+    }
+    let floor = min_word[..cols].to_vec();
+    if floor.iter().sum::<usize>() <= available {
+        // Rule 3: grow from the minima by potential.
+        let extra = available - floor.iter().sum::<usize>();
+        let weights: Vec<usize> = (0..cols)
+            .map(|c| natural[c].saturating_sub(floor[c]))
+            .collect();
+        return distribute(floor, &weights, extra, &natural[..cols]);
+    }
+    // Rule 2: shrink to 1 each and share what is left by min-word weight.
+    let mut base = vec![1usize; cols];
+    let remaining = available.saturating_sub(cols);
+    if remaining > 0 {
+        let weights: Vec<usize> = floor.iter().map(|w| w.saturating_sub(1)).collect();
+        base = distribute(base, &weights, remaining, &natural[..cols]);
+        // The weight sweep may have handed a column more than it needs; give it
+        // back to whoever still wants it, and if nobody does the table simply
+        // renders narrower than the budget rather than wider.
+        for c in 0..cols {
+            base[c] = base[c].min(natural[c].max(1));
+        }
+    }
+    widths = base;
+    widths
+}
+
+/// Largest-remainder distribution of `budget` over `weights`, added to `base`.
+///
+/// `floor(share)` per column, then the leftovers to the largest remainders,
+/// tie-broken by column index. A column is never pushed past its `cap`; space
+/// that cannot be placed anywhere stays unplaced, which is honest (the frame is
+/// narrower than the budget) rather than borrowed from a neighbour.
+fn distribute(mut base: Vec<usize>, weights: &[usize], budget: usize, cap: &[usize]) -> Vec<usize> {
+    let cols = base.len();
+    if budget == 0 || cols == 0 {
+        return base;
+    }
+    let total: usize = weights.iter().sum();
+    if total == 0 {
+        // No column has weight: the budget cannot be justified anywhere, so it
+        // stays unspent. (Round-robin would have spent it on column 0 first.)
+        return base;
+    }
+    let mut leftover = budget;
+    let mut remainders: Vec<(usize, usize)> = Vec::with_capacity(cols);
+    for c in 0..cols {
+        let product = budget.saturating_mul(weights[c]);
+        let share = product / total;
+        let room = cap[c].saturating_sub(base[c]);
+        let placed = share.min(room);
+        base[c] += placed;
+        leftover -= placed;
+        remainders.push((product % total, c));
+    }
+    // Largest remainder first, column index ascending on a tie: deterministic by
+    // construction, not by iteration order.
+    remainders.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    for (_, c) in remainders {
+        if leftover == 0 {
+            break;
+        }
+        if base[c] < cap[c] {
+            base[c] += 1;
+            leftover -= 1;
+        }
+    }
+    base
 }
 
 fn pad_or_truncate(text: &str, width: usize) -> String {
