@@ -178,7 +178,7 @@ The TUI does not let extensions write escape sequences. An extension returns a w
 
 This costs flexibility. It buys two things. Extensions cannot inject escape sequences to spoof output or hide text. The renderer can change without breaking extensions.
 
-Rendering itself is the project's own engine (ADR-0037). Every component renders to line strings at a width, and a renderer diffs those against the screen: the default alt-screen renderer, which owns text selection and verified copy, or the main-screen renderer, which appends the transcript to the terminal's own scrollback and can be switched at runtime. Input is parsed from the terminal's raw byte stream into one key vocabulary that flows end-to-end to the editor and the keybindings. `docs/platform-notes.md` carries the terminal-protocol quirks that this parsing exists to absorb.
+Rendering itself is the project's own engine (ADR-0037). Every component renders to line strings at a width, and a renderer diffs those against the screen: the **main-screen** renderer, which is the default and appends the transcript to the terminal's own scrollback (so native selection and the terminal's scrollbar work by construction), or the alt-screen renderer, which owns text selection and verified copy and is the opt-in (`/fullscreen`, FR-UI-21; ADR-0037's 2026-10-02 annotation). Input is parsed from the terminal's raw byte stream into one key vocabulary that flows end-to-end to the editor and the keybindings. `docs/platform-notes.md` carries the terminal-protocol quirks that this parsing exists to absorb.
 
 ## Interfaces
 
