@@ -192,8 +192,8 @@ fn the_windows_remap_is_a_delta_over_the_one_table() {
             continue;
         }
         assert_ne!(
-            windows.keys(*action),
-            unix.keys(*action),
+            windows.keys(action),
+            unix.keys(action),
             "{action} is in the delta but resolves identically in both families"
         );
         moved += 1;
