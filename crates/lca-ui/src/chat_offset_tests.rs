@@ -449,10 +449,16 @@ fn a_tooltip_names_the_entry_painted_on_that_row_and_not_the_one_above() {
     };
     let thinking = row_painting("thinking about it");
     let header = row_painting("bash");
-    assert_eq!(
-        chat.tooltip_at(4, thinking, w, h, 0).as_deref(),
-        Some("Cycle thinking · alt+t"),
-        "the reasoning row names its own run"
+    // **The action, not the modifier.** The binding's display text is
+    // platform-dependent (`alt+t` here, `option+t` on macOS), which CI's macOS
+    // leg caught on this row's first run. What the offset has to get right is
+    // *which entry* the row names; the chord after the separator is the
+    // keybindings manager's business and has its own rows.
+    let tip = chat.tooltip_at(4, thinking, w, h, 0);
+    assert!(
+        tip.as_deref()
+            .is_some_and(|tip| tip.starts_with("Cycle thinking · ")),
+        "the reasoning row names its own run, got {tip:?}"
     );
     assert_eq!(
         chat.tooltip_at(4, header, w, h, 0).as_deref(),
