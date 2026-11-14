@@ -468,8 +468,36 @@ pub fn image_cell_size_for_test(info: &ImageInfo, max_width: usize) -> (u32, u32
     image_cell_size(info, max_width)
 }
 
+/// The kitty `f=` code for one media type, or `None` when this build cannot send
+/// those bytes honestly.
+///
+/// **The spec's three formats** (`sw.kovidgoyal.net/kitty/graphics-protocol`):
+/// a terminal "must understand pixel data in three formats, 24-bit RGB, 32-bit RGBA
+/// and PNG", selected by `f` - `f=32` RGBA (the default), `f=24` RGB, `f=100` PNG.
+/// There is **no JPEG code**: JPEG is not one of the formats the protocol
+/// requires, so a client holding a JPEG must decode it or refuse. `f=100` is the
+/// PNG code, and it is what this encoder used to say unconditionally - which
+/// made a JPEG-backed image a claim the terminal would act on by throwing the
+/// decode away (gh #598).
+///
+/// Returning `None` is the refusal: [`render_image`] then takes the placeholder
+/// path, which names the media type instead of pretending to draw it. A webp/gif
+/// reaches that path for the same reason - there is no code for it either - and
+/// **that is the honest answer**, not a fallback to `f=100`.
+#[must_use]
+pub fn kitty_format_for(media_type: &str) -> Option<u32> {
+    match media_type {
+        "image/png" => Some(100),
+        _ => None,
+    }
+}
+
 /// Encode an image with the kitty graphics protocol (4096-char chunks).
-pub fn encode_kitty(bytes: &[u8], columns: u32, rows: u32, image_id: u32) -> String {
+///
+/// `format` is the `f=` code the caller selected with [`kitty_format_for`]; the
+/// encoder no longer decides, because it does not have the media type and a
+/// hard-coded claim is exactly the defect gh #598 fixed.
+pub fn encode_kitty(bytes: &[u8], columns: u32, rows: u32, image_id: u32, format: u32) -> String {
     let encoded = base64_encode(bytes);
     let chunks: Vec<&[u8]> = encoded.as_bytes().chunks(4096).collect();
     let mut out = String::new();
@@ -480,7 +508,7 @@ pub fn encode_kitty(bytes: &[u8], columns: u32, rows: u32, image_id: u32) -> Str
             // id, and `m=1` when more follows.
             let more = usize::from(chunks.len() > 1);
             out.push_str(&format!(
-                "\x1b_Ga=T,f=100,q=2,C=1,c={columns},r={rows},i={image_id},m={more};{text}\x1b\\"
+                "\x1b_Ga=T,f={format},q=2,C=1,c={columns},r={rows},i={image_id},m={more};{text}\x1b\\"
             ));
         } else {
             // A continuation is a **bare** chunk: `m=1` while more follow, `m=0` on
@@ -517,10 +545,21 @@ pub fn render_image(
     match protocol {
         // Kitty is told `C=1`, so the sequence leaves the cursor on the block's
         // first row and the blanks after it are what the host writes there.
+        //
+        // Gh #598: **the format is decided here, from the media type the caller
+        // carried, and a media type kitty cannot transmit takes the placeholder.**
+        // A JPEG is the case that made this visible: the resize path emits one, kitty
+        // has no code for it, and this encoder used to claim `f=100` (PNG) anyway -
+        // so the terminal dropped the decode and drew nothing. Refusing is the honest
+        // answer, and it is the same shape as the `ImageProtocol::None` arm one line
+        // down.
         ImageProtocol::Kitty => {
+            let Some(format) = kitty_format_for(&info.media_type) else {
+                return render_image_placeholder(info, max_width);
+            };
             let id = kitty_image_id(bytes, cols, rows);
             let mut lines = Vec::with_capacity(rows as usize);
-            lines.push(encode_kitty(bytes, cols, rows, id));
+            lines.push(encode_kitty(bytes, cols, rows, id, format));
             lines.resize(rows as usize, String::new());
             lines
         }
@@ -587,7 +626,24 @@ pub fn kitty_placement(line: &str) -> Option<String> {
 /// the cache buys smoothness, never correctness.
 pub fn kitty_upload(bytes: &[u8], line: &str) -> Option<String> {
     let (id, cols, rows) = kitty_image_control(line)?;
-    Some(encode_kitty(bytes, cols, rows, id))
+    // The re-upload keeps the line's own `f=`: it is the same bytes and the same
+    // claim, and re-deriving it from a media type this function does not have would
+    // be a second place the format is decided.
+    let format = kitty_format_of(line)?;
+    Some(encode_kitty(bytes, cols, rows, id, format))
+}
+
+/// The `f=` a kitty line carries, defaulting to 32 (kitty's own default) when it
+/// names none.
+fn kitty_format_of(line: &str) -> Option<u32> {
+    let params = kitty_params(line)?;
+    let mut format = 32;
+    for param in params.split(',') {
+        if let Some(value) = param.strip_prefix("f=") {
+            format = value.parse().ok()?;
+        }
+    }
+    Some(format)
 }
 
 /// Read `(id, columns, rows)` back out of a kitty line.
@@ -862,9 +918,42 @@ mod tests {
     // Verifies: R5 - the kitty encoder emits a complete chunk with its id.
     #[test]
     fn the_kitty_encoder_carries_the_id_and_closes() {
-        let out = encode_kitty(&[0u8; 8], 4, 2, 7);
+        let out = encode_kitty(&[0u8; 8], 4, 2, 7, 100);
         assert!(out.starts_with("\x1b_Ga=T,f=100,q=2,C=1,c=4,r=2,i=7,m=0;"));
         assert!(out.ends_with("\x1b\\"));
+    }
+
+    // Verifies: gh #598 - **iTerm2 carries no format claim, which is why a JPEG
+    // already displays there.**
+    //
+    // The asymmetry the issue asked to measure: kitty must be told a format code (and
+    // has none for JPEG), so it was lying; iTerm2's protocol carries `inline=1`, the
+    // size, the box and the name - and **no format at all**, so the terminal sniffs the
+    // payload and a JPEG works. Nothing here should ever gain an `f=`-shaped claim:
+    // a "helpful" format key would turn a working path into the same bug.
+    #[test]
+    fn the_iterm2_encoder_makes_no_format_claim() {
+        let mut jpeg = b"\xff\xd8\xff\xe0".to_vec();
+        jpeg.extend_from_slice(&[0u8; 40]);
+        let out = encode_iterm2(&jpeg, 12, 6);
+        for claim in ["inline=", "size=", "width=", "height=", "name="] {
+            assert!(
+                out.contains(claim),
+                "the fields it does carry: {claim} {out:?}"
+            );
+        }
+        for forbidden in ["f=", "format=", "type=", "mime="] {
+            assert!(
+                !out.contains(forbidden),
+                "iTerm2's protocol has no format field, and adding one would claim \
+                 what the terminal infers: `{forbidden}` in {out:?}"
+            );
+        }
+        // The payload is the JPEG's own base64, untouched.
+        assert!(
+            out.contains(&base64_encode(&jpeg)),
+            "the bytes ride through unchanged: {out:?}"
+        );
     }
 
     // Verifies: R5 - the iTerm2 encoder sizes the inline file.
@@ -905,7 +994,7 @@ mod tests {
     #[test]
     fn the_chunked_upload_matches_pi_shape() {
         let big = vec![7u8; 7000];
-        let seq = encode_kitty(&big, 40, 20, 99);
+        let seq = encode_kitty(&big, 40, 20, 99, 100);
         let parts: Vec<&str> = seq.split("\x1b\\").filter(|p| !p.is_empty()).collect();
         assert_eq!(parts.len(), 3, "7000 bytes base64 into 4096-char chunks");
         assert!(
@@ -1022,7 +1111,7 @@ mod tests {
     // scrolling back over an image costs bytes rather than a re-upload.
     #[test]
     fn the_placement_form_drops_the_payload_and_keeps_the_id_and_box() {
-        let upload = encode_kitty(&[7u8; 64], 12, 6, 4242);
+        let upload = encode_kitty(&[7u8; 64], 12, 6, 4242, 100);
         let placement = kitty_placement(&upload).expect("a placement");
         // pi's exact bytes for the same image (`getKittyImagePlacement`, measured
         // with node against `~/gits/pi`): parameter order is free in the protocol,
@@ -1039,7 +1128,7 @@ mod tests {
             !placement.contains(&payload),
             "the base64 body is not in a placement"
         );
-        let big = encode_kitty(&[7u8; 8192], 12, 6, 4242);
+        let big = encode_kitty(&[7u8; 8192], 12, 6, 4242, 100);
         assert!(
             kitty_placement(&big).is_some_and(|p| p.len() * 100 < big.len()),
             "at transcript sizes a placement is a tiny fraction of an upload"

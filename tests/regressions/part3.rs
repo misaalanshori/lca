@@ -583,6 +583,13 @@ mod mcp_list_window;
 #[path = "405-stream-chunk-boundaries.rs"]
 mod stream_chunk_boundaries;
 
+// Gh #598: the kitty encoder must not claim a format it was not handed. A JPEG
+// arriving through a tool result (the resize path emits one) used to be transmitted as
+// `f=100`, the protocol's PNG code, so the terminal dropped the decode and drew
+// nothing. These rows drive the **frame**, not the encoder.
+#[path = "598-kitty-does-not-claim-png.rs"]
+mod kitty_does_not_claim_png;
+
 // Gh #405 gaps 1 and 3: the apostrophe is a code point (so the French screenshot
 // stem needs both spellings as *separate candidates*, never a substitution), and the
 // Windows/WSL keymap is a **delta** over the one table with a predicate over

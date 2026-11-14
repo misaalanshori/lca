@@ -199,50 +199,89 @@ fn every_distinct_rendered_width_is_a_distinct_texture_id() {
     );
 }
 
-// Verifies: gh #324 item 3 - **a non-PNG image really does reach the kitty
-// encoder**, which is why "the transcode cache is unnecessary because `lca-tui`
-// never sees a JPEG" is **false**, and why this item stops here instead of
-// adding a decoder.
+// Verifies: gh #598 - **the kitty encoder no longer claims PNG for bytes that are
+// not PNG, and a format kitty cannot send takes the placeholder.**
 //
-// The call path, all of it in this tree:
+// This row **retires** the pin gh #324 item 3 left behind (`a_jpeg_reaches_the_kitty_
+// encoder_and_is_claimed_as_png`), which asserted the defect - `f=100` for JPEG bytes
+// - so the two-way assertion it was is now the fixed assertion. Rewritten rather
+// than inverted: inverting it ("does not claim PNG") would pass for any wrong answer,
+// including a silent drop, and what the fix owes is a **named outcome** for each media
+// type.
 //
-//   `lca_tools::image::downscale_image` re-encodes a vision model's resize *as
-//   JPEG* (`image::codecs::jpeg::JpegEncoder`, `media_type: "image/jpeg"`) and
-//   pushes it onto `ToolResult::images`;
-//   `lca_core` stores those bytes content-addressed (no conversion);
-//   `lca_ui::chat_turn_events` and `replay_records` build `ImageInfo` from the
-//   carried `media_type` and push them into the transcript;
-//   `render_image` hands the bytes to `encode_kitty`, which always says `f=100`
-//   - and `f=100` is PNG. The kitty path has no transcode and no error.
-//
-// An MCP server's `image/*` blob takes the same path with whatever mime the
-// server declares, so JPEG is not a corner: it is the default for any vision
-// model with a resize profile. So the item is **not** declined as unnecessary -
-// it needs a decoder or a staging-layer normalisation, and both are out of this
-// cycle's boundary by the brief's own rule (a codec in `lca-tui` is an ADR).
-// This row pins the measurement so the next cycle starts from the call path
-// rather than re-deriving it: it fails if the kitty encoder ever stops being
-// PNG-only, which is exactly when the transcode stops being needed.
+// The spec is the authority (`sw.kovidgoyal.net/kitty/graphics-protocol`): "the
+// terminal emulator must understand pixel data in three formats, 24-bit RGB, 32-bit
+// RGBA and PNG", selected by `f` - `f=24` RGB, `f=32` RGBA (the default), `f=100`
+// PNG. **There is no JPEG code**, so the honest answers are PNG-today and
+// placeholder-for-everything-else; the second call is what keeps a future path from
+// lying again.
 #[test]
-fn a_jpeg_reaches_the_kitty_encoder_and_is_claimed_as_png() {
+fn a_non_png_image_is_refused_rather_than_labelled_png() {
     let mut jpeg = b"\xff\xd8\xff\xe0".to_vec();
     jpeg.extend_from_slice(&[0u8; 40]);
     let info = ImageInfo::new("image/jpeg", &jpeg);
-    // A JPEG can be sniffed and sized, so nothing upstream refuses it.
     assert_eq!(
         lca_protocol::sniff_image_media_type(&jpeg),
         Some("image/jpeg"),
-        "the host recognises the payload as a JPEG"
+        "the host still recognises the payload as a JPEG"
     );
     let rows = render_image(&info, &jpeg, ImageProtocol::Kitty, 60);
     assert!(
-        rows[0].contains("f=100"),
-        "and the kitty transmission claims PNG for those bytes: {:?}",
+        !rows[0].contains("\x1b_G"),
+        "a JPEG is not transmitted under any format code: {:?}",
         rows[0]
     );
     assert!(
-        !rows[0].starts_with("\x1b_Ga=T,f=24") && !rows[0].starts_with("\x1b_Ga=T,f=32"),
-        "kitty's own JPEG/PNG codes are not used: {:?}",
+        rows[0].contains("[image image/jpeg"),
+        "it takes the placeholder, which names the media type it could not send: {:?}",
         rows[0]
     );
+
+    // PNG keeps working, and keeps the legacy code: `f=100` is the PNG code the
+    // spec names and what every kitty build accepts, so there is nothing to gain
+    // from `f=24`/`f=32` (which would need the pixels, i.e. a decoder).
+    let png = png(90, 180);
+    let info = ImageInfo::new("image/png", &png);
+    let rows = render_image(&info, &png, ImageProtocol::Kitty, 60);
+    assert!(
+        rows[0].starts_with("\x1b_Ga=T,f=100,"),
+        "PNG still transmits as PNG: {:?}",
+        rows[0]
+    );
+}
+
+// Verifies: gh #598 - **webp and gif are refused for the same reason, and the
+// refusal is not a silent drop.** Kitty has no code for either, so the alternative
+// to "claim PNG" is the placeholder - which also keeps the dimensions the sniffer
+// read, so the row still tells the reader something true.
+#[test]
+fn webp_and_gif_take_the_placeholder_and_keep_their_dimensions() {
+    // (The fixtures are built inline: a 3x4-byte canvas for WebP, a GIF89a header.)
+    let mut webp = vec![0u8; 30];
+    webp[..4].copy_from_slice(b"RIFF");
+    webp[8..12].copy_from_slice(b"WEBP");
+    webp[12..16].copy_from_slice(b"VP8X");
+    webp[24..27].copy_from_slice(&[0x2f, 0x01, 0x00]); // 560-1
+    webp[27..30].copy_from_slice(&[0x8f, 0x01, 0x00]); // 400-1
+    let mut gif = b"GIF89a".to_vec();
+    gif.extend_from_slice(&320u16.to_le_bytes());
+    gif.extend_from_slice(&200u16.to_le_bytes());
+    for (media_type, bytes) in [("image/webp", webp), ("image/gif", gif)] {
+        let info = ImageInfo::new(media_type, &bytes);
+        let rows = render_image(&info, &bytes, ImageProtocol::Kitty, 60);
+        assert!(
+            !rows[0].contains("\x1b_G"),
+            "{media_type} must not be transmitted: {:?}",
+            rows[0]
+        );
+        assert!(
+            rows[0].contains(media_type),
+            "the placeholder names the type: {:?}",
+            rows[0]
+        );
+        assert!(
+            info.width.is_some() && info.height.is_some(),
+            "{media_type}: the header was readable, so the placeholder can be specific"
+        );
+    }
 }
