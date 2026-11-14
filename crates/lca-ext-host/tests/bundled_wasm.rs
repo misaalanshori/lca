@@ -42,7 +42,11 @@
 //! which command produces it, and what therefore went unverified - and
 //! `LCA_REQUIRE_WASM=1` turns that skip into a failure, exactly as
 //! `LCA_REQUIRE_TMUX` does for the terminal suite (`docs/testing-plan.md`
-//! section 14's house rule, applied here).
+//! section 14's house rule, applied here). The flag is set in the one CI job
+//! where the artifact is guaranteed to exist (`extension components build`,
+//! immediately after `wasm-check.sh`), so a cold checkout there fails; in the
+//! `engines` test-split group the rows skip and their log says which artifact
+//! and which command would have verified them.
 //!
 //! Verifies: gh #351 finding 3, NFR-25's substance for a *bundled* component,
 //! `docs/testing-plan.md` section 13.
@@ -214,33 +218,34 @@ fn fresh_artifact() -> Option<PathBuf> {
 }
 
 /// The house rule for a harness that is not present: **skip by name**, never
-/// pass silently, and let an env flag turn it into a failure (`LCA_REQUIRE_TMUX`
-/// is the precedent).
+/// pass silently, and let an env flag turn it into a failure.
 ///
-/// A row that reports "ok" while exercising nothing is the defect class
-/// `docs/testing-plan.md` keeps naming, so the reason says which artifact is
-/// missing, what builds it, and what therefore went unverified.
-fn skip_without_artifact(row: &str) -> ! {
-    let reason = format!(
-        "{row}: the fresh `{NAME}` component build is absent, so the bundled-WASM \
-         path went UNVERIFIED here. `scripts/wasm-check.sh` (or `cargo build --release \
-         --target wasm32-wasip2 -p {NAME}`) produces \
-         `target/wasm32-wasip2/release/{}.wasm`, which this row reads rather than \
-         building (a nested cargo call inside a test is a build-system dependency \
-         this suite deliberately does not have).",
-        NAME.replace('-', "_")
-    );
-    if std::env::var("LCA_REQUIRE_WASM").is_ok() {
-        panic!("LCA_REQUIRE_WASM is set and {reason}");
+/// `LCA_REQUIRE_TMUX` is the precedent (`crates/lca-cli/tests/common/mod.rs`): a
+/// row whose harness is absent prints what went unverified and returns, and CI
+/// sets the flag on the leg that owns the harness. nextest has no runtime skip -
+/// `#[ignore]` is a compile-time decision and this artifact's presence is not -
+/// so the printed line **is** the skip, and what keeps it honest is that CI's
+/// `extension components build` job runs this suite with `LCA_REQUIRE_WASM=1`
+/// right after it has built the artifact (so a cold checkout there is a failure,
+/// not a green row that exercised nothing).
+fn artifact_or_skip(row: &str) -> Option<PathBuf> {
+    let artifact = fresh_artifact();
+    if artifact.is_none() {
+        let reason = format!(
+            "{row}: the fresh `{NAME}` component build is absent, so the bundled-WASM \
+             path went UNVERIFIED here. `scripts/wasm-check.sh` (or `cargo build --release \
+             --target wasm32-wasip2 -p {NAME}`) produces \
+             `target/wasm32-wasip2/release/{}.wasm`, which this row reads rather than \
+             building (a nested cargo call inside a test is a build-system dependency \
+             this suite deliberately does not have).",
+            NAME.replace('-', "_")
+        );
+        if std::env::var("LCA_REQUIRE_WASM").is_ok() {
+            panic!("LCA_REQUIRE_WASM is set and {reason}");
+        }
+        eprintln!("skip: {reason}");
     }
-    eprintln!("skip: {reason}");
-    // The row must not continue past its own skip: returning normally would let
-    // the assertions below run against an artifact that is not there, which is
-    // the "reports success while exercising nothing" shape this exists against.
-    // `panic_any` rather than `process::exit` so nextest records it as a skip-like
-    // outcome with the reason, and a mutation that removes this line reddens the
-    // row below.
-    unreachable!("the skip path returns by failing the row, never by passing it");
+    artifact
 }
 
 // Verifies: gh #351 finding 3 - **the headline.** A bundled extension compiled
@@ -254,10 +259,10 @@ fn skip_without_artifact(row: &str) -> ! {
 // answers, because this class is a **divergence**, never a crash.
 #[tokio::test]
 async fn a_bundled_extension_built_for_the_component_target_answers_like_its_native_twin() {
-    let Some(artifact) = fresh_artifact() else {
-        skip_without_artifact(
-            "a_bundled_extension_built_for_the_component_target_answers_like_its_native_twin",
-        );
+    let Some(artifact) = artifact_or_skip(
+        "a_bundled_extension_built_for_the_component_target_answers_like_its_native_twin",
+    ) else {
+        return;
     };
     let bytes = std::fs::read(&artifact)
         .unwrap_or_else(|err| panic!("read the fresh build {}: {err}", artifact.display()));
@@ -376,8 +381,10 @@ async fn a_bundled_extension_built_for_the_component_target_answers_like_its_nat
 // would answer differently from the tree they read.
 #[tokio::test]
 async fn the_committed_component_and_a_fresh_build_answer_identically() {
-    let Some(artifact) = fresh_artifact() else {
-        skip_without_artifact("the_committed_component_and_a_fresh_build_answer_identically");
+    let Some(artifact) =
+        artifact_or_skip("the_committed_component_and_a_fresh_build_answer_identically")
+    else {
+        return;
     };
     let fresh = std::fs::read(&artifact)
         .unwrap_or_else(|err| panic!("read the fresh build {}: {err}", artifact.display()));
@@ -477,14 +484,18 @@ fn the_absence_path_skips_by_name_and_the_require_flag_makes_it_fail() {
         "LCA_REQUIRE_WASM turns the skip into a named failure (as LCA_REQUIRE_TMUX does)"
     );
     // And no row may return quietly on a missing artifact: both artifact rows
-    // reach the helper *before* their first assertion.
-    // Counted by the *call* shape - a line that begins with the call - which the
-    // definition (`fn ...`) and this assertion's own text cannot match. Counting
-    // the bare name would count the definition and this row itself.
-    let call_sites = source
-        .lines()
-        .filter(|line| line.trim_start().starts_with("skip_without_artifact("))
-        .count();
+    // consult the helper before their first assertion, so a row that lost its
+    // call would be one that runs on an absent artifact.
+    //
+    // Counted over the source *above this row* - the scan itself writes the
+    // name, so including this point would count its own text (that trap bit the
+    // first version once already).
+    let rows_only = source
+        .split("fn the_absence_path_skips_by_name")
+        .next()
+        .unwrap_or_default();
+    let call_sites = rows_only.matches("artifact_or_skip(").count()
+        - rows_only.matches("fn artifact_or_skip(").count();
     assert_eq!(
         call_sites, 2,
         "exactly two rows consult the skip path: a third would be a row whose \

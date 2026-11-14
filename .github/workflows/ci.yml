@@ -402,6 +402,22 @@ jobs:
       - name: Every extension component compiles
         shell: bash
         run: bash scripts/wasm-check.sh
+      # Gh #351 finding 3: the artifact above is what a *bundled* extension's
+      # sandboxed path is diffed against - the native twin, and the committed
+      # component versus a fresh build of today's source. This is the one job
+      # where the fresh artifact is guaranteed to exist, so it is the leg that
+      # passes `LCA_REQUIRE_WASM`: a cold tree here is a failure rather than a
+      # row that skipped and reported success. It stays in this job instead of
+      # `test-split`'s `engines` group for the same reason - there, the artifact
+      # is absent and the rows skip by name, which is honest but tests nothing.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - name: A bundled extension's WASM build answers like its native twin
+        shell: bash
+        env:
+          LCA_REQUIRE_WASM: "1"
+        run: cargo nextest run -p lca-ext-host --test bundled_wasm --failure-output immediate
 
   # Verifies: docs/release-policy.md (the artifact matrix), NFR-8, NFR-9,
   # NFR-10; docs/testing-plan.md section 13. The six release targets were
