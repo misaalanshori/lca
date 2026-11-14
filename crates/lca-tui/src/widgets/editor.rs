@@ -86,6 +86,15 @@ pub struct Editor {
     /// One-shot input to the kill helpers: whether this key continues a
     /// kill run (captured before `last_kill` is cleared for the next key).
     kill_run: bool,
+    /// Whether the previous key was a yank (gh #383 gap 2): `Alt+Y` only means
+    /// "pop" when it follows one, which is the state `last_kill` already carries
+    /// for kills. Captured at the top of `handle_key` and cleared there, so a
+    /// direct `yank_pop()` call (a test, an embedder) can still consult it.
+    last_yank: bool,
+    /// How far the last yank inserted, so a pop can remove exactly that block
+    /// (`deleteYankedText`'s peeked extents, pi's `editor.ts:2078`). `(line, col)`
+    /// at the start of the insertion, plus the inserted line count.
+    yank_anchor: Option<(usize, usize)>,
     /// lines (pi's sticky column, `editor.md` §4; R7). It is the column
     /// *within a rendered row*, so a move across a wrap or into a
     /// neighbouring logical line lands on the same screen column (gh #28).
@@ -138,6 +147,8 @@ impl Editor {
             coalesce_undo: false,
             last_kill: false,
             kill_run: false,
+            last_yank: false,
+            yank_anchor: None,
             preferred_col: None,
             jump_pending: None,
             last_width: Cell::new(0),
@@ -262,25 +273,6 @@ impl Editor {
         self.suggestion_index = 0;
     }
 
-    /// Record one kill, accumulating into the previous entry when the
-    /// previous key was also a kill (pi's `accumulate`).
-    fn kill(&mut self, text: String, prepend: bool) {
-        // `kill_run` carries the key handler's captured state; `last_kill`
-        // covers a direct API call (a test, or a future non-key caller).
-        if (self.kill_run || self.last_kill)
-            && let Some(last) = self.kill_ring.last_mut()
-        {
-            if prepend {
-                last.insert_str(0, &text);
-            } else {
-                last.push_str(&text);
-            }
-        } else {
-            self.kill_ring.push(text);
-        }
-        self.last_kill = true;
-    }
-
     fn snapshot(&mut self) {
         self.push_undo(None);
     }
@@ -334,10 +326,30 @@ impl Editor {
     /// character into a single undo unit (pi's fish-style coalescing).
     fn insert_typed(&mut self, text: &str, continues: bool) {
         let word = is_undo_word_char(text);
-        if !(continues && word) {
+        // Gh #383 gap 4: **a space captures the state before itself and then
+        // coalesces the word that follows it.** pi's rule is
+        // "push-before-space, coalesce=true" (`editor.ts:1210`: a whitespace char
+        // always snapshots, and `lastAction` is set to `type-word` afterwards), so
+        // `"hello world"` is two undo units - `" world"` and then `"hello"`.
+        //
+        // Before this, a space merely ended the run (`coalesce_undo = word` with
+        // `word == false`), so typing `"hello world"` snapshotted *before the space*
+        // and *again before `w`* - one keystroke-shape as two units, with the space
+        // landing in the first one. Measured: three undos took the buffer
+        // `"hello world"` → `"hello "` → `"hello"` → `""`, where pi takes two.
+        //
+        // **A second space still snapshots** (`is_undo_word_char(" ")` is false, so
+        // `continues` is false when the previous key was a space): that is what keeps
+        // `"a  b"` three units rather than one, which is the trap the issue names.
+        let space = text == " ";
+        // pi's condition is `isWhitespaceChar(char) || lastAction !== "type-word"`:
+        // a space **always** snapshots, and then arms the coalescing so the word
+        // after it joins that unit. Two spaces therefore snapshot twice - which is
+        // what keeps `"a  b"` three units instead of one.
+        if space || !(continues && word) {
             self.snapshot();
         }
-        self.coalesce_undo = word;
+        self.coalesce_undo = word || space;
         self.insert_at_cursor(text);
     }
 
@@ -460,55 +472,6 @@ impl Editor {
             self.current_mut().push_str(&next);
         }
         self.refresh_suggestions(false);
-    }
-
-    /// Delete the word before the cursor (gh #383 gap 1).
-    ///
-    /// The span is exactly what [`Self::cursor_word_left`] would cross - one shared
-    /// classifier, so the two cannot disagree. On `foo.bar(baz_qux)` that is `baz_qux`,
-    /// then `(`, then `bar`, then `.`, then `foo`; on a path it is one path segment.
-    pub fn delete_word_backward(&mut self) {
-        self.preferred_col = None;
-        self.snapshot();
-        let chars: Vec<char> = self.current().chars().collect();
-        let col = crate::engine::text::word_start_before(&chars, self.cursor_col);
-        let start = self.char_to_byte(col);
-        let end = self.char_to_byte(self.cursor_col);
-        let killed = self.current()[start..end].to_string();
-        self.current_mut().replace_range(start..end, "");
-        self.cursor_col = col;
-        self.kill(killed, true); // backward kill prepends
-        self.refresh_suggestions(false);
-    }
-
-    /// Delete from the cursor to the end of the line (kill).
-    pub fn delete_to_line_end(&mut self) {
-        self.preferred_col = None;
-        self.snapshot();
-        let byte = self.char_to_byte(self.cursor_col);
-        let killed = self.current()[byte..].to_string();
-        self.current_mut().truncate(byte);
-        self.kill(killed, false); // forward kill appends
-    }
-
-    /// Delete from the line start to the cursor (kill).
-    pub fn delete_to_line_start(&mut self) {
-        self.preferred_col = None;
-        self.snapshot();
-        let byte = self.char_to_byte(self.cursor_col);
-        let killed = self.current()[..byte].to_string();
-        let rest = self.current()[byte..].to_string();
-        *self.current_mut() = rest;
-        self.cursor_col = 0;
-        self.kill(killed, true);
-    }
-
-    /// Yank the most recent kill.
-    pub fn yank(&mut self) {
-        self.preferred_col = None;
-        if let Some(k) = self.kill_ring.last().cloned() {
-            self.insert_str(&k);
-        }
     }
 
     /// Undo the last change.
@@ -726,6 +689,10 @@ impl Editor {
         // re-arms it (pi coalesces consecutive word characters).
         let continues_undo = self.coalesce_undo;
         self.coalesce_undo = false;
+        // Gh #383 gap 2: the yank state is captured here and cleared, exactly like
+        // `kill_run` below, so a pop knows whether it follows a yank.
+        let continues_yank = self.last_yank;
+        self.last_yank = false;
         // A kill run is the previous key's state; the kill helpers consume
         // it through `kill_run` and re-arm `last_kill` for the next key.
         self.kill_run = self.last_kill;
@@ -857,6 +824,16 @@ impl Editor {
             self.delete_to_line_start();
             return EditorEvent::Changed;
         }
+        if kb.matches(data, "tui.editor.deleteWordForward") {
+            self.delete_word_forward();
+            return EditorEvent::Changed;
+        }
+        if kb.matches(data, "tui.editor.yankPop") {
+            // The captured fact is what makes it a pop rather than a second yank.
+            self.last_yank = continues_yank;
+            self.yank_pop();
+            return EditorEvent::Changed;
+        }
         if kb.matches(data, "tui.editor.yank") {
             self.yank();
             return EditorEvent::Changed;
@@ -897,6 +874,13 @@ impl Editor {
             self.cursor_word_right();
             return EditorEvent::Changed;
         }
+        // Gh #383 gap 3: **a re-press already cancels**, and the mechanism is the
+        // jump-mode arm above, not this one: with `jump_pending` set, the next key is
+        // consumed there, and a non-printable key (the hotkey itself) leaves the mode
+        // abandoned (`jump_pending = None` with nothing inserted). So the arms below
+        // only ever *arm* the mode; adding a second "cancel" here was dead code
+        // (mutant-verified: reverting it left the row green, because the mode arm
+        // had already cleared the flag).
         if kb.matches(data, "tui.editor.jumpForward") {
             self.jump_pending = Some(true);
             return EditorEvent::Changed;
@@ -922,31 +906,6 @@ impl Editor {
             }
         }
         EditorEvent::None
-    }
-
-    /// Move the cursor to the next (or previous) occurrence of `target`,
-    /// searching the whole buffer from the cursor (pi's `jumpToChar`, R7).
-    fn jump_to_char(&mut self, target: char, forward: bool) {
-        let mut positions: Vec<(usize, usize)> = Vec::new();
-        for (line_index, line) in self.lines.iter().enumerate() {
-            for (col, ch) in line.chars().enumerate() {
-                if ch == target {
-                    positions.push((line_index, col));
-                }
-            }
-        }
-        let current = (self.cursor_line, self.cursor_col);
-        let next = if forward {
-            positions.iter().find(|p| **p > current)
-        } else {
-            positions.iter().rev().find(|p| **p < current)
-        };
-        if let Some((line, col)) = next {
-            self.cursor_line = *line;
-            self.cursor_col = *col;
-            self.preferred_col = None;
-            self.clear_suggestions();
-        }
     }
 
     /// Render the buffer at a width. The caret is *painted into the row*
@@ -1148,6 +1107,12 @@ mod atomic_tests;
 #[cfg(test)]
 #[path = "editor_seams_tests.rs"]
 mod seams_tests;
+// Gh #383 gaps 2/4: the kill ring and its forward half (gate 11's ceiling).
+#[path = "editor_kill.rs"]
+mod kill_ring;
+// Gh #383 gap 3: jump mode's search (same ceiling, same reason).
+#[path = "editor_jump.rs"]
+mod jump;
 #[path = "editor_suggestions.rs"]
 mod suggestions;
 #[cfg(test)]

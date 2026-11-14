@@ -41,6 +41,21 @@ Dates are UTC.
   is `/paste` and the right-button handler.
 
 ### Fixed
+- **The editor's kill ring finishes its forward half, and `Alt+D`/`Alt+Y` finally
+  do something** (gh #383 gap 2, interface). `tui.editor.deleteWordForward` (`alt+d`,
+  `alt+delete`) and `tui.editor.yankPop` (`alt+y`) had been in the binding table since
+  it was written and were **matched by nothing** — two keys a user could press for no
+  effect. `Alt+D` now deletes the segment `Alt+Right` crosses; `Alt+Y` takes back the
+  block the last yank inserted and substitutes the kill ring's previous entry. And
+  `Ctrl+K` at end-of-line now joins the next line down (killing the newline) instead of
+  doing nothing, with `Ctrl+U` at column 0 joining upward — the boundary cases where
+  the killed slice was empty.
+- **A space no longer splits one undo unit in two** (gh #383 gap 4, interface). Typing
+  `hello world` used to take three `Ctrl+-` presses to clear (`hello world` → `hello `
+  → `hello` → empty) because the space snapshotted before itself *and* again before
+  `w`. A space now captures the state before itself and coalesces the word that
+  follows, so the run is two units — while **each space stays separately undoable**,
+  which is what keeps `a  b` three.
 - **A local Mac trackpad scrolls one line per notch instead of six** (gh #375 gap
  1, interface). macOS terminals hand the process wheel deltas the OS has already
   accelerated, roughly one event per line, and the `auto` wheel setting applied LCA's

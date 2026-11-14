@@ -182,8 +182,19 @@ fn undo_restores_the_previous_buffer() {
     assert_eq!(e.text(), "hello");
 }
 
-// pi's fish-style coalescing: a typed word is one undo unit, and a
-// space starts the next one; an atomic insert is always its own unit.
+// pi's fish-style coalescing: a typed word is one undo unit, and a space
+// **captures the state before itself** so the word after it joins that unit; an
+// atomic insert is always its own unit.
+//
+// **Sanctioned change (gh #383 gap 4)**: this row used to assert *three* undos
+// (`"hello world"` → `"hello "` → `"hello"` → `""`), which was the pre-fix shape - a
+// space ended the run instead of coalescing the word after it, so the buffer
+// snapshotted before the space *and* again before `w`. pi's rule is
+// "push-before-space, coalesce=true" (`editor.ts:1210`), which makes it **two**:
+// one undo removes `" world"`, the next removes `"hello"`. The old assertion was
+// pinning the defect, so it changed with the fix rather than being loosened; the
+// word-coalescing half (`"hell"` + `"o"` staying one unit) is unchanged and still
+// asserted by `an_atomic_insert_is_one_undo_unit` and the undo pair below.
 #[test]
 fn typing_coalesces_into_word_sized_undo_units() {
     let mut e = Editor::new();
@@ -192,11 +203,9 @@ fn typing_coalesces_into_word_sized_undo_units() {
     }
     assert_eq!(e.text(), "hello world");
     e.undo();
-    assert_eq!(e.text(), "hello ");
+    assert_eq!(e.text(), "hello", "one undo removes the space and the word");
     e.undo();
-    assert_eq!(e.text(), "hello");
-    e.undo();
-    assert_eq!(e.text(), "");
+    assert_eq!(e.text(), "", "and the next removes the first word");
 }
 
 // pi accumulates consecutive kills into one ring entry: a forward kill
@@ -1129,3 +1138,8 @@ fn the_backslash_workaround_still_works_under_the_policy() {
         "the backslash is consumed and a newline inserted"
     );
 }
+
+// Gh #383 gaps 2-4: the kill ring's forward half, jump mode, and the space's undo
+// unit (split here at gate 11, gh #574).
+#[path = "editor_kill_tests.rs"]
+mod kill_tests;

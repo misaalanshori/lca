@@ -29,8 +29,20 @@ fn strip_tests(source: &str) -> String {
     }
 }
 
+/// The editor's **source after gh #383's gate-11 split**: the subject this file pins
+/// lives in three files now (`editor.rs` plus `editor_kill.rs`/`editor_jump.rs`), so the
+/// guard reads the concatenation rather than one filename. A split that moves a
+/// function between sibling `impl` blocks is not a change to the property.
 fn editor_source() -> String {
-    strip_tests(&read("crates/lca-tui/src/widgets/editor.rs"))
+    [
+        "crates/lca-tui/src/widgets/editor.rs",
+        "crates/lca-tui/src/widgets/editor_kill.rs",
+        "crates/lca-tui/src/widgets/editor_jump.rs",
+    ]
+    .iter()
+    .map(|path| strip_tests(&read(path)))
+    .collect::<Vec<_>>()
+    .join("\n")
 }
 
 fn word_source() -> String {
