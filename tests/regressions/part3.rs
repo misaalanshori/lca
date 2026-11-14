@@ -583,6 +583,13 @@ mod mcp_list_window;
 #[path = "405-stream-chunk-boundaries.rs"]
 mod stream_chunk_boundaries;
 
+// Gh #405 gaps 1 and 3: the apostrophe is a code point (so the French screenshot
+// stem needs both spellings as *separate candidates*, never a substitution), and the
+// Windows/WSL keymap is a **delta** over the one table with a predicate over
+// environment facts. These pin the structure the behavioural rows depend on.
+#[path = "405-gap1-apostrophe-and-gap3-keymap.rs"]
+mod apostrophe_and_keymap;
+
 // Gh #535: a pty's post-exit drain gave a late tail one 4 ms window, and macOS CI
 // lost `echo pty-ok` twice in a fortnight (`exit 0` with an empty result). The row
 // that failed was not sampling - the conformance guest loops until end-of-stream - so

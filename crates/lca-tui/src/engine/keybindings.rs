@@ -444,7 +444,8 @@ impl HostFamily {
 /// a question about a key this product never bound. Adding one to match the delta
 /// would be a new feature riding on a keymap fix, which is the scope creep the brief
 /// warns about; the report records it as the one pi default deliberately not
-/// transcribed.
+/// transcribed. Attaching the paste default is a product decision, not a parity
+/// one.
 fn windows_or_wsl_defaults() -> &'static [(&'static str, &'static [&'static str])] {
     // A `const`, not a returned `&[...]`: the undo row's key depends on
     // `cfg!(target_os)`, and a `const` evaluates that at compile time (a
