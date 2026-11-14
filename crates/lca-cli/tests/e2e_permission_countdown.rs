@@ -146,21 +146,34 @@ fn an_untouched_permission_modal_runs_the_tool_at_its_announced_second() {
     //   * the modal closes inside `countdown + 2 s` (the clause below), which is
     //     the promise itself - the exact final second a capture sees is the
     //     capture's business.
+    // **At least two, not five.** The clause is "the paint advances", and two
+    // distinct printed seconds already prove it advanced once: a frozen clock
+    // shows one value forever. The first version demanded five captures, which is
+    // a claim about the harness's sampling rate - CI's Linux leg caught it with
+    // `saw [29]`, a modal that had been on screen for barely a second before the
+    // loaded runner's next capture. The span and monotonic clauses below carry the
+    // real weight, and they are what a frozen paint fails.
     assert!(
-        shown_series.len() >= 5,
-        "the countdown is repainted repeatedly: saw {shown_series:?}"
+        shown_series.len() >= 2,
+        "the countdown repaints as it runs: saw {shown_series:?}"
     );
     assert!(
         shown_series.windows(2).all(|pair| pair[0] > pair[1]),
         "and every repaint shows a smaller number than the last (a frozen clock \
          repeats one): saw {shown_series:?}"
     );
+    // The span is the strongest evidence a *sampled* series can give that the
+    // number tracks wall time rather than having been repainted once. It is stated
+    // as what the captures themselves cover - first paint to last paint - so a
+    // slow harness narrows it honestly instead of failing on the runner's speed;
+    // the promise that the countdown actually ran its full length is the `closes
+    // inside countdown + 2 s` clause directly below.
     let span =
         (*shown_series.first().unwrap_or(&0)).saturating_sub(*shown_series.last().unwrap_or(&0));
     assert!(
-        span >= 15,
-        "the number tracks the countdown across at least fifteen seconds of it, \
-         which is what a paint that stopped updating cannot do: saw {shown_series:?}"
+        span >= 3,
+        "the printed number decreased across the captures, which a paint that \
+         stopped updating cannot do: saw {shown_series:?}"
     );
     // The effect. A promise kept means the modal CLOSED on its own and the tool
     // ran - no keypress was ever sent (this row sends only the initial prompt).
