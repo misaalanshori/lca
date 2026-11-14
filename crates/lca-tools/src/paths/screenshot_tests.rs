@@ -437,10 +437,14 @@ fn the_apostrophe_axes_multiply_the_variant_set() {
         variants.iter().map(text).collect::<Vec<_>>()
     );
     // Every variant lives under a searched folder, so no candidate is unreachable.
+    //
+    // Asserted on the **path components**, not on a `"/{dir}/"` substring: a Windows
+    // path separates with `\`, so the substring form is a POSIX assumption (CI's
+    // Windows leg caught it). The components are platform-independent, which is what
+    // the claim is about.
     for path in &variants {
-        let lossy = text(path);
-        assert!(
-            [
+        let searched = path.components().any(|component| {
+            const DIRS: [&str; 8] = [
                 "Desktop",
                 "Bureau",
                 "Schreibtisch",
@@ -448,11 +452,15 @@ fn the_apostrophe_axes_multiply_the_variant_set() {
                 "Pictures",
                 "Images",
                 "Bilder",
-                "Imágenes"
-            ]
-            .iter()
-            .any(|dir| lossy.contains(&format!("/{dir}/"))),
-            "a variant outside the searched folders can never be found: {lossy}"
+                "Imágenes",
+            ];
+            DIRS.iter()
+                .any(|dir| component.as_os_str() == std::ffi::OsStr::new(dir))
+        });
+        assert!(
+            searched,
+            "a variant outside the searched folders can never be found: {}",
+            path.display()
         );
     }
     let _ = std::fs::remove_dir_all(&root);
