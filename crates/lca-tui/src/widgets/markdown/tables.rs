@@ -215,6 +215,22 @@ pub(super) fn render_table(
 /// iteration-ordered, and a hash-ordered one would lay the same table out
 /// differently between runs.
 ///
+/// **Measured divergence from pi's source, and the reason this is the chosen
+/// rule.** `markdown.ts` floors the shares and then hands the leftover to the
+/// first columns that still have room, in index order - not to the largest
+/// remainders. The two agree whenever the remainders tie (which is the case the
+/// `a_largest_remainder_tie_breaks_by_ascending_column_index` row pins), and
+/// they part company when they do not: for `min_word [2,7]`, `natural [3,45]`,
+/// budget 11, pi's own pane paints `[3,8]` while this returns `[2,9]` (measured
+/// side by side in a 20-column tmux pane against `pi` 1.3.0; pi's frame reserves
+/// two columns of width, so its cell budget is 11 where LCA's is 13 - the two
+/// numbers here are at a *matched* budget). Largest-remainder is the phi-by-
+/// potential rule the brief specifies, it keeps "every width within one of its
+/// exact proportional share" true for **every** input rather than for the inputs
+/// pi happens to hit, and both are deterministic. The difference is a table cell
+/// at most, one column each, on tables that do not fit; it is recorded here
+/// rather than left for someone to discover from a screenshot.
+///
 /// Returns one width per column, always >= 1. When `available >= cols` the sum
 /// is exactly `available`; when the terminal is too narrow for one cell per
 /// column the sum is `cols` (every column at 1), because a width below 1 is not
