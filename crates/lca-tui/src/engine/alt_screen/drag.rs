@@ -15,8 +15,16 @@ impl AltScreenRenderer {
     /// rides a parameter so tests fake time.
     pub(crate) fn wheel_step(&mut self, direction: i8, alt: bool, now_ms: u64) -> u16 {
         const ALT_WHEEL_SCROLL_MULTIPLIER: u16 = 5;
+        // Gh #375 gap 1: **`auto` on a host whose terminal already accelerates is one
+        // line**, pi's `accelerate = false` constructor - otherwise a local Mac
+        // trackpad gets the OS's acceleration and ours. The *fixed* setting never
+        // consults this: a user who asked for five lines gets five everywhere.
         let base = if self.wheel_auto {
-            self.wheel_accel.next(direction, now_ms)
+            if self.wheel_accelerate {
+                self.wheel_accel.next(direction, now_ms)
+            } else {
+                1
+            }
         } else {
             u16::from(self.wheel_lines.max(1))
         };

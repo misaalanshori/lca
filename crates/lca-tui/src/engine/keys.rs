@@ -240,8 +240,52 @@ pub fn enter_is_ambiguous_on(
 /// Whether this session is local, so the local keyboard's modifier state would be
 /// meaningful (gh #367). Over SSH the client's keyboard is what matters and this
 /// process cannot see it.
-fn is_local_session() -> bool {
-    !env_set("SSH_CONNECTION") && !env_set("SSH_CLIENT") && !env_set("SSH_TTY")
+///
+/// `pub(crate)` since gh #375 gap 1: the wheel's accelerate guard asks the same
+/// question, and a second SSH reader in `alt_screen` would be two answers to one fact.
+pub(crate) fn is_local_session() -> bool {
+    is_local_session_with(|key| std::env::var_os(key).map(|v| v.to_string_lossy().into_owned()))
+}
+
+/// [`is_local_session`] with the environment injected, so the "an empty variable is
+/// not SSH" rule is testable without mutating the process's env.
+fn is_local_session_with(env: impl Fn(&str) -> Option<String>) -> bool {
+    let set = |key: &str| env(key).is_some_and(|value| !value.is_empty());
+    !set("SSH_CONNECTION") && !set("SSH_CLIENT") && !set("SSH_TTY")
+}
+
+/// Whether a mouse-wheel event should run this build's own velocity curve (gh #375
+/// gap 1).
+///
+/// **The fact, as a pure function.** pi's rule (`wheel-scroll.ts`'s
+/// `terminalAcceleratesWheel`): a **local macOS** terminal already receives wheel and
+/// trackpad deltas the OS accelerated and emits one event per line, so `"auto"` must
+/// be one line there - applying our curve on top double-accelerates. Everywhere else
+/// (any other platform, and any SSH session, where the client's platform is unknown)
+/// the terminal sends one event per notch and the curve is what makes a fast spin
+/// scroll.
+///
+/// `on_macos` and `local` are **parameters**, not reads, for the reason
+/// [`enter_is_ambiguous_with`] takes them: this box is Linux and the branch that
+/// matters runs on a Mac, so the row has to be able to drive both. `LCA_WHEEL_ACCEL=1|0`
+/// forces the answer, in `LCA_SHIFT_ENTER`'s shape - it is how a receipt demonstrates
+/// either behaviour on a machine that is not a Mac.
+pub fn wheel_accelerates(on_macos: bool, local: bool) -> bool {
+    wheel_accelerates_with(on_macos, local, |key| std::env::var(key).ok())
+}
+
+/// [`wheel_accelerates`] with the environment injected.
+pub fn wheel_accelerates_with(
+    on_macos: bool,
+    local: bool,
+    env: impl Fn(&str) -> Option<String>,
+) -> bool {
+    match env("LCA_WHEEL_ACCEL").as_deref() {
+        Some("1") => return true,
+        Some("0") => return false,
+        _ => {}
+    }
+    !(on_macos && local)
 }
 
 fn matches_raw_backspace(data: &str, expected_modifier: u32) -> bool {
@@ -933,6 +977,90 @@ pub fn decode_printable_key(data: &str) -> Option<String> {
 #[cfg(test)]
 #[path = "keys_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod wheel_accel_tests {
+    use super::wheel_accelerates_with;
+
+    fn env_of(pairs: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
+        move |key| {
+            pairs
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| (*v).to_string())
+        }
+    }
+
+    // Verifies: gh #375 gap 1 - **pi's rule, as a truth table over platform x
+    // locality.** A *local macOS* session is the only combination whose terminal
+    // already accelerates the wheel, so it is the only one where our curve must stay
+    // out of the way. Every other combination keeps the curve (that is the gap-1
+    // half that must not regress: a Linux box, and any SSH session at all, gets the
+    // velocity behaviour gh #206 shipped).
+    //
+    // The four platform cases plus both locality halves are driven here, on Linux,
+    // because the fact travels as parameters - a `cfg!` read would make the branch
+    // that matters unrunnable on the box that has to test it.
+    #[test]
+    fn the_truth_table_is_local_macos_only() {
+        for (on_macos, local, expected) in [
+            (true, true, false),  // local Mac: the terminal accelerated it
+            (true, false, true),  // Mac over SSH: the client's platform is unknown
+            (false, true, true),  // Linux, Windows: one event per notch
+            (false, false, true), // non-Mac over SSH
+        ] {
+            assert_eq!(
+                wheel_accelerates_with(on_macos, local, env_of(&[])),
+                expected,
+                "on_macos={on_macos} local={local}"
+            );
+        }
+    }
+
+    // Verifies: gh #375 gap 1 - the escape hatch, in `LCA_SHIFT_ENTER`'s shape. A
+    // user on a Mac whose terminal does *not* accelerate (or an SSH session whose
+    // client does) can force either answer, and that is also how a receipt
+    // demonstrates the local-Mac behaviour on a machine that is not a Mac.
+    #[test]
+    fn the_override_forces_either_answer() {
+        assert!(
+            wheel_accelerates_with(true, true, env_of(&[("LCA_WHEEL_ACCEL", "1")])),
+            "forcing on beats the local-Mac rule"
+        );
+        assert!(
+            !wheel_accelerates_with(false, true, env_of(&[("LCA_WHEEL_ACCEL", "0")])),
+            "forcing off beats every platform"
+        );
+        // An unrecognised value is not an override: the rule still answers, which on
+        // a local Mac is `false`.
+        assert!(
+            !wheel_accelerates_with(true, true, env_of(&[("LCA_WHEEL_ACCEL", "yes")])),
+            "only `1`/`0` force the answer; anything else falls through to the rule"
+        );
+    }
+
+    // Verifies: gh #375 gap 1 - **an empty variable is not SSH**, which is the same
+    // fact `enter_is_ambiguous` rests on: `SSH_CONNECTION=` exported empty by a shell
+    // must not make a local session look remote.
+    #[test]
+    fn an_empty_ssh_variable_is_not_ssh() {
+        let empty = || env_of(&[("SSH_CONNECTION", ""), ("SSH_CLIENT", "")]);
+        assert!(
+            super::is_local_session_with(empty()),
+            "an empty SSH_CONNECTION/SSH_CLIENT is still a local session"
+        );
+        let real = env_of(&[("SSH_CONNECTION", "10.0.0.1 22 10.0.0.2 51000")]);
+        assert!(
+            !super::is_local_session_with(real),
+            "a real SSH_CONNECTION is remote"
+        );
+        // And the guard composes with it: a local Mac *is* handled by the rule.
+        assert!(
+            !wheel_accelerates_with(true, super::is_local_session_with(empty()), env_of(&[])),
+            "the two halves agree: local Mac -> no curve"
+        );
+    }
+}
 
 #[cfg(test)]
 mod enter_ambiguity_tests {

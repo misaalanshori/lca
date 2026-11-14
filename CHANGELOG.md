@@ -41,6 +41,15 @@ Dates are UTC.
   is `/paste` and the right-button handler.
 
 ### Fixed
+- **A local Mac trackpad scrolls one line per notch instead of six** (gh #375 gap
+ 1, interface). macOS terminals hand the process wheel deltas the OS has already
+  accelerated, roughly one event per line, and the `auto` wheel setting applied LCA's
+  own velocity curve on top — so a single trackpad notch moved several lines. `auto`
+  now resolves to one line on a local macOS session (pi's rule: `darwin` and not
+  `SSH_CONNECTION`/`SSH_CLIENT`/`SSH_TTY`) and keeps the velocity curve everywhere
+  else, including a Mac over SSH, where the client's platform is unknown. A
+  **numeric** setting is unchanged on every platform — a user who asked for `5` gets
+  5 on a Mac too — and `LCA_WHEEL_ACCEL=1`/`0` forces either answer.
 - **An image a vision model resized now displays instead of vanishing** (gh #598,
   interface). The resize path re-encodes the picture as JPEG and carries that media
   type all the way to the renderer, but the kitty graphics encoder sent `f=100` — the

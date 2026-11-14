@@ -70,6 +70,15 @@ pub struct AltScreenRenderer {
     /// six. The host syncs this from the setting and resets the
     /// accelerator whenever it changes.
     pub wheel_auto: bool,
+    /// Whether this host should run the velocity curve at all (gh #375 gap 1).
+    ///
+    /// `true` on every platform except a **local macOS** session, where the terminal
+    /// has already accelerated the deltas: applying our curve there is the
+    /// double-fire. Set once at construction (the fact is about the host, not the
+    /// frame) and overridable in tests, which is why it is a field rather than a call
+    /// inside `wheel_step` - `wheel_accelerates` is the pure rule and it takes the
+    /// platform as a parameter precisely so this box can exercise both branches.
+    pub wheel_accelerate: bool,
     /// The velocity state for `wheel_auto` (gh #206).
     wheel_accel: WheelAccel,
     /// The clock `wheel_auto` measures gaps against (gh #206); the first event
@@ -128,6 +137,10 @@ impl AltScreenRenderer {
             copy_on_select: true,
             wheel_lines: 1,
             wheel_auto: false,
+            wheel_accelerate: crate::engine::keys::wheel_accelerates(
+                cfg!(target_os = "macos"),
+                crate::engine::keys::is_local_session(),
+            ),
             wheel_accel: WheelAccel::new(),
             wheel_epoch: None,
             last_click: None,
@@ -470,6 +483,70 @@ mod wheel_tests {
         );
         assert_eq!(renderer.wheel_step(-1, false, 2050), 2, "auto accelerates");
         assert_eq!(renderer.wheel_step(-1, true, 2100), 10, "auto Alt ×5");
+    }
+
+    // Verifies: gh #375 gap 1 - **the row that would have caught the double-fire.**
+    //
+    // A local macOS terminal hands the process deltas the *OS* already accelerated - one
+    // event per line - so `auto` there must be one line. This drives the renderer the
+    // way the loop does (the same burst of events that makes the curve climb to six) with
+    // the accelerate fact `false`, and asserts the burst stays at one. Without the guard
+    // the same burst returns 2, 5, 6 - measured, which is why the assertion prints the
+    // series rather than only the last number.
+    #[test]
+    fn a_host_whose_terminal_accelerates_wheels_one_line_per_event() {
+        let mut renderer = AltScreenRenderer::new();
+        renderer.wheel_auto = true;
+        // The fact a local Mac sets, injected here so this Linux box can drive it.
+        renderer.wheel_accelerate = false;
+        let series: Vec<u16> = (0..6)
+            .map(|i| renderer.wheel_step(-1, false, 1000 + i * 10))
+            .collect();
+        assert_eq!(
+            series,
+            vec![1, 1, 1, 1, 1, 1],
+            "the terminal's own acceleration is not doubled: {series:?}"
+        );
+        // And the curve still exists for every host that does not accelerate: the same
+        // burst with the fact `true` climbs, so the guard is a fork and not a removal.
+        let mut accelerating = AltScreenRenderer::new();
+        accelerating.wheel_auto = true;
+        accelerating.wheel_accelerate = true;
+        // (Times are 20 ms apart: 10 ms gaps sit inside pi's BURST_GAP_MS - several
+        // events that close belong to one physical notch and move one line each - so a
+        // 10 ms series climbs to the cap immediately and would assert the burst rule,
+        // not the curve.)
+        let series: Vec<u16> = (0..6)
+            .map(|i| accelerating.wheel_step(-1, false, 1000 + i * 20))
+            .collect();
+        assert_eq!(
+            series,
+            vec![1, 5, 5, 5, 5, 5],
+            "the velocity curve is unchanged where the terminal does not accelerate: \
+             {series:?}"
+        );
+    }
+
+    // Verifies: gh #375 gap 1 - **a fixed setting is never suppressed by the guard.**
+    // A user who asked for five lines gets five on every platform, including a local
+    // Mac: the guard is about a setting this build chose (`auto`), not about the user's
+    // number. A guard that also clamped the fixed path would be a second bug.
+    #[test]
+    fn a_fixed_wheel_setting_is_the_same_on_a_local_mac() {
+        let mut renderer = AltScreenRenderer::new();
+        renderer.wheel_auto = false;
+        renderer.wheel_lines = 5;
+        renderer.wheel_accelerate = false;
+        assert_eq!(
+            renderer.wheel_step(-1, false, 1000),
+            5,
+            "the user's own number, not the auto floor"
+        );
+        assert_eq!(
+            renderer.wheel_step(-1, false, 1010),
+            5,
+            "and it does not decay"
+        );
     }
 }
 
