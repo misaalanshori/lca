@@ -267,6 +267,170 @@ fn an_accented_name_resolves_in_either_normalisation() {
     let _ = std::fs::remove_dir_all(&root2);
 }
 
+// Verifies: gh #405 gap 1 - **the typographic apostrophe.** A real French macOS
+// name is `Capture d'écran 2024-…` with U+2019 (the curly one Finders and
+// macOS's own localisation produce), while the resolver's stem shipped with
+// ASCII `'`. **NFC normalisation does not turn one into the other** - both are
+// already NFC - so before this fix a curly name failed the shape test outright
+// and resolved to nothing.
+//
+// Both directions are asserted, because the spelling can differ on either side:
+// the user's paste may be curly while the disk holds ASCII, or the reverse.
+#[test]
+fn the_typographic_apostrophe_in_the_french_stem_resolves() {
+    let ascii = "Capture d'écran 2024-01-01 at 10.00.00.png";
+    let curly = "Capture d\u{2019}écran 2024-01-01 at 10.00.00.png";
+
+    // Curly typed, ASCII on disk.
+    let root = home("lca-405-apostrophe-a", &["Desktop"]);
+    let real = touch(&root.join("Desktop").join(ascii));
+    let lookup = ScreenshotLookup::new(&root);
+    let found = lookup
+        .resolve(Path::new(&format!("~/Desktop/{curly}")))
+        .unwrap_or_else(|| panic!("the U+2019 spelling must find the {ascii:?} file"));
+    assert_eq!(found, real, "and it is the file that exists");
+    assert_eq!(std::fs::read(&found).expect("read"), b"png");
+
+    // ASCII typed, curly on disk - the other direction.
+    let root2 = home("lca-405-apostrophe-b", &["Desktop"]);
+    let real2 = touch(&root2.join("Desktop").join(curly));
+    let lookup2 = ScreenshotLookup::new(&root2);
+    let found2 = lookup2
+        .resolve(Path::new(&format!("~/Desktop/{ascii}")))
+        .unwrap_or_else(|| panic!("the ASCII spelling must find the {curly:?} file"));
+    assert_eq!(found2, real2, "and it is the file that exists");
+
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&root2);
+}
+
+// Verifies: gh #405 gap 1 - **the two apostrophes are separate candidates, and
+// the accent's two normalisations compose with them.** Four spellings of one
+// name (ASCII/U+2019 × NFC/NFD) must all reach one file, which is what a real
+// French directory can require: the Finder writes U+2019 in NFD, and every paste
+// is some other combination.
+#[test]
+fn every_apostrophe_and_normalisation_spelling_reaches_one_file() {
+    // The one file on disk: curly apostrophe, NFD accent (what macOS writes).
+    let on_disk = "Capture d\u{2019}e\u{301}cran 2024-01-01 at 10.00.00.png";
+    let root = home("lca-405-apostrophe-matrix", &["Desktop"]);
+    let real = touch(&root.join("Desktop").join(on_disk));
+    let lookup = ScreenshotLookup::new(&root);
+    for (label, typed) in [
+        (
+            "curly+NFD",
+            "Capture d\u{2019}e\u{301}cran 2024-01-01 at 10.00.00.png",
+        ),
+        (
+            "curly+NFC",
+            "Capture d\u{2019}\u{e9}cran 2024-01-01 at 10.00.00.png",
+        ),
+        (
+            "ascii+NFD",
+            "Capture d'e\u{301}cran 2024-01-01 at 10.00.00.png",
+        ),
+        (
+            "ascii+NFC",
+            "Capture d'\u{e9}cran 2024-01-01 at 10.00.00.png",
+        ),
+    ] {
+        let found = lookup
+            .resolve(Path::new(&format!("~/Desktop/{typed}")))
+            .unwrap_or_else(|| panic!("{label} must resolve to the file on disk"));
+        assert_eq!(found, real, "{label} resolved to the wrong path");
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// Verifies: gh #405 gap 1 - **the candidate set carries both apostrophes, and
+// does not repeat itself.** The set is what a miss list prints, so a duplicate
+// makes the error look like a resolver bug, and a missing spelling is the hole
+// this fix closed.
+#[test]
+fn the_candidate_set_carries_both_apostrophe_spellings_once() {
+    let names = screenshot_candidates("2024-01-01", "10.00.00", "png");
+    let count = |needle: &str| names.iter().filter(|name| name.contains(needle)).count();
+    assert_eq!(
+        count("d'écran"),
+        3,
+        "every join, once, for the ASCII spelling: {names:?}"
+    );
+    assert_eq!(
+        count("d\u{2019}écran"),
+        3,
+        "and every join, once, for the typographic one: {names:?}"
+    );
+    // Uniqueness is a count, not an order: the set's order is the search order
+    // (Desktop before Pictures, and joins in the order they are tried), which a
+    // sort would destroy.
+    let unique: std::collections::BTreeSet<&String> = names.iter().collect();
+    assert_eq!(
+        unique.len(),
+        names.len(),
+        "no candidate is listed twice (a repeated miss reads as a bug): {names:?}"
+    );
+}
+
+// Verifies: gh #405 gap 1's other half - **the accent's two normalisations are
+// separate candidates per stem spelling, not one candidate normalised once.**
+//
+// Measured before this cycle: `name.nfd()`/`nfc()` were applied to the *joined*
+// candidate (stem + date + time + ext), which is equivalent for a pure accent but
+// not for the apostrophe: NFC of `d\u{2019}écran` is itself, so a file written
+// with U+0027 was never reached from a U+2019 typing. With both stems enumerated
+// and both normalisations applied to each, four spellings reach one file - which
+// is the state macOS actually produces, because the Finder writes NFD and a paste
+// is usually NFC.
+//
+// The variant *set* is asserted too, not only the winner: a resolver that reached
+// the file by accident (say, because it happened to try the exact typed spelling
+// first) would pass a resolve-only row.
+#[test]
+fn the_apostrophe_axes_multiply_the_variant_set() {
+    let root = home("lca-405-variant-count", &[]);
+    let lookup = ScreenshotLookup::new(&root);
+    let variants = lookup
+        .variants(Path::new(
+            "~/Desktop/Capture d\u{2019}écran 2024-01-01 at 10.00.00.png",
+        ))
+        .expect("the French shape is recognised");
+    let text = |p: &PathBuf| p.to_string_lossy().into_owned();
+    let joined = |needle: &str| variants.iter().filter(|p| text(p).contains(needle)).count();
+    // Four stem spellings (ASCII/U+2019 × typed/other) × the NFD variant of the
+    // accented ones; the exact ASCII ones have no NFD twin, so the count is what
+    // the candidate set is, not a formula the row recomputes.
+    assert!(
+        joined("d\u{2019}") >= 4,
+        "the typographic spelling is enumerated in both normalisations: {:?}",
+        variants.iter().map(text).collect::<Vec<_>>()
+    );
+    assert!(
+        joined("d'") >= 4,
+        "and the ASCII one too, since a disk can hold either: {:?}",
+        variants.iter().map(text).collect::<Vec<_>>()
+    );
+    // Every variant lives under a searched folder, so no candidate is unreachable.
+    for path in &variants {
+        let lossy = text(path);
+        assert!(
+            [
+                "Desktop",
+                "Bureau",
+                "Schreibtisch",
+                "Escritorio",
+                "Pictures",
+                "Images",
+                "Bilder",
+                "Imágenes"
+            ]
+            .iter()
+            .any(|dir| lossy.contains(&format!("/{dir}/"))),
+            "a variant outside the searched folders can never be found: {lossy}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 // Verifies: gh #405 gap 1 - **the end-to-end wiring.** `screenshot_or_literal` is
 // what the read op calls; this drives it against a real tree so the resolver and its
 // caller agree about the contract (existing path as-is, missing path by shape, miss

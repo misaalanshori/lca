@@ -72,26 +72,62 @@ const PICTURES_DIRS: &[&str] = &["Pictures", "Images", "Bilder", "Imágenes"];
 ///
 /// The `stem` is `"Screen Shot"`, `"Screenshot"`, `"Screen Recording"`, or
 /// `"Capture d'écran"`; each is combined with the two date/time joins.
+///
+/// Gh #405 gap 1's last hole: the French stem shipped with an ASCII apostrophe
+/// (`U+0027`) while a real macOS Finder name carries the typographic one
+/// (`U+2019`), and **NFC normalisation does not change one into the other** -
+/// they are different code points, both already normalised. So the typographic
+/// spelling is a **second candidate**, not a substitution: rewriting the typed
+/// name would make the miss list report a filename that is not on disk, which is
+/// the one thing this resolver's error refuses to do.
 const SHOT_STEMS: &[&str] = &[
     "Screen Shot",
     "Screenshot",
     "Screen Recording",
     "ScreenRecording",
     "Capture d'écran",
+    "Capture d\u{2019}écran",
 ];
+
+/// The stem's other apostrophe spelling, when it has one.
+///
+/// `U+0027` and `U+2019` are distinct characters that mean the same thing in a
+/// filename, so a typed name in one spelling must reach a file in the other. The
+/// substitution is confined to **candidate generation** - every path this
+/// produces really is one a file could be at - and never applied to what the user
+/// typed.
+fn other_apostrophe(stem: &str) -> Option<String> {
+    if stem.contains('\u{2019}') {
+        Some(stem.replace('\u{2019}', "'"))
+    } else if stem.contains('\'') {
+        Some(stem.replace('\'', "\u{2019}"))
+    } else {
+        None
+    }
+}
 
 /// Every filename the given `stem`/`date`/`time`/`ext` could plausibly have.
 ///
 /// Public for the row that asserts the set is enumerated rather than derived.
+///
+/// A stem carrying an apostrophe yields **both** spellings for every join (gh #405
+/// gap 1): the two are different code points, so a typed name in one must be able
+/// to reach a file in the other.
 #[must_use]
 pub fn shot_name_candidates(stem: &str, date: &str, time: &str, ext: &str) -> Vec<String> {
-    vec![
-        format!("{stem} {date} at {time}.{ext}"),
-        format!("{stem} {date} {time}.{ext}"),
+    let mut stems: Vec<String> = vec![stem.to_string()];
+    if let Some(other) = other_apostrophe(stem) {
+        stems.push(other);
+    }
+    let mut out = Vec::new();
+    for stem in &stems {
+        out.push(format!("{stem} {date} at {time}.{ext}"));
+        out.push(format!("{stem} {date} {time}.{ext}"));
         // macOS also writes the time with a narrow no-break space (U+202F) before
         // AM/PM, and some releases omit the extension separator difference.
-        format!("{stem} {date} at {time}\u{202f}.{ext}"),
-    ]
+        out.push(format!("{stem} {date} at {time}\u{202f}.{ext}"));
+    }
+    out
 }
 
 /// The full candidate filename set for one date/time pair across every known
@@ -100,7 +136,14 @@ pub fn shot_name_candidates(stem: &str, date: &str, time: &str, ext: &str) -> Ve
 pub fn screenshot_candidates(date: &str, time: &str, ext: &str) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
     for stem in SHOT_STEMS {
-        names.extend(shot_name_candidates(stem, date, time, ext));
+        for name in shot_name_candidates(stem, date, time, ext) {
+            // Both apostrophe spellings are in `SHOT_STEMS` *and* both are emitted
+            // per stem, so a name arrives twice; a miss list that repeats itself
+            // reads as a bug in the caller's eyes.
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
     }
     names
 }
