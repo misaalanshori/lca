@@ -20,6 +20,7 @@
 
 use super::Chat;
 use super::tests::{options, strip};
+use crate::state::UiOptions;
 use lca_tui::engine::keybindings::KeybindingsManager;
 use std::sync::Arc;
 
@@ -31,6 +32,13 @@ use std::sync::Arc;
 fn tabbed(theme_plain: bool) -> Chat {
     let mut opts = options();
     opts.plain = theme_plain;
+    tabbed_with(opts)
+}
+
+/// [`tabbed`] over a caller-supplied options set (the panel fixture below
+/// needs a registered region; everything else about the bar is identical).
+fn tabbed_with(opts: UiOptions) -> Chat {
+    let mut opts = opts;
     let minted = Arc::new(std::sync::Mutex::new(3u32));
     let next = minted.clone();
     opts.hooks.new_session = Some(Arc::new(move || {
@@ -262,6 +270,206 @@ fn a_tooltip_over_a_tool_header_names_that_header() {
         chat.tooltip_at(4, 0, w, h, 0),
         None,
         "the tab row is not a tool header"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Gh #351 finding 5: the same tab-bar offset, in the three readers that had no
+// row of their own.
+//
+// Gh #331 fixed the offset in `click_at`, `tooltip_at`, `window_height` and
+// `clamp_scroll`, and the rows above pin each of those. Three more readers
+// subtract it and nothing asserted the subtraction: `scrollbar_hit`,
+// `scrollbar_drag_scroll` and `drawer_rect`. Measured on `2be845bb` - deleting
+// each subtraction in turn left the whole 1,085-row suite green, three times
+// over. The defect they would have shipped is the same one row of vertical
+// offset: a click on a `▲` the reader can see answering as a track drag, a
+// drag from the track's first row landing one prompt short of the top, and the
+// drawer handle painted over the session tabs.
+// ---------------------------------------------------------------------------
+
+/// A fullscreen chat with a registered panel, so the drawer tab paints *and*
+/// the tab bar shows - the only shape where the two decorations can collide.
+fn tabbed_with_panel() -> Chat {
+    let mut opts = options();
+    opts.plain = true;
+    opts.render_regions = Some(Arc::new(|region: &str| {
+        if region != "panel" {
+            return Vec::new();
+        }
+        vec![(
+            "drawer-demo".to_string(),
+            lca_protocol::WidgetTree {
+                nodes: vec![lca_protocol::Widget::Text {
+                    content: "panel body".to_string(),
+                    role: "default".to_string(),
+                }],
+            },
+        )]
+    }));
+    tabbed_with(opts)
+}
+
+#[test]
+fn a_scrollbar_click_below_the_tab_bar_addresses_the_transcript_row() {
+    // The frame paints `▲` on the transcript window's first row, which is
+    // terminal row `tab_top` - not row 0. Without the subtraction the first
+    // *transcript* row is read as the frame's row 0, which is a track row, so
+    // the stepper the reader is looking at answers as a drag and nothing jumps.
+    let (w, h) = (80u16, 24u16);
+    let mut chat = with_a_tool_card(tabbed(true));
+    for index in 0..40 {
+        chat.transcript.push_user(format!("line {index}"));
+    }
+    let (content, window) = chat.scroll_extent(w, h);
+    assert!(content > window, "the fixture overflows so a bar paints");
+    let geometry = chat
+        .scrollbar_for_frame(w, h, 0)
+        .expect("an overflowing transcript paints a scrollbar");
+    let tab = chat.tab_top(w);
+    assert!(tab > 0, "the fixture must show the tab bar");
+    // The frame really paints the steppers where the hit-test will look.
+    let frame = strip(&chat.viewport(w, h, 0));
+    assert!(
+        frame.get(tab as usize).is_some_and(|row| row.contains('▲')),
+        "▲ is on the transcript window's first row, {tab}: {}",
+        frame.join("\n")
+    );
+    assert_eq!(
+        chat.scrollbar_hit(geometry.column, tab, w, h, 0),
+        crate::chat_mouse::ScrollbarHit::Stepper,
+        "the visible top stepper is a stepper, not the track"
+    );
+    assert_eq!(
+        chat.scrollbar_hit(geometry.column, tab + 5, w, h, 0),
+        crate::chat_mouse::ScrollbarHit::Track,
+        "a row of the track below it drags"
+    );
+    // And the tab row itself belongs to the tabs: its gesture runs first, and
+    // the scrollbar must not answer for it as well.
+    assert_eq!(
+        chat.scrollbar_hit(geometry.column, tab - 1, w, h, 0),
+        crate::chat_mouse::ScrollbarHit::Miss,
+        "the session tab row is not a scrollbar cell"
+    );
+}
+
+#[test]
+fn a_scrollbar_drag_from_the_tab_rows_first_row_reaches_the_oldest_line() {
+    // The drag maps a *frame* row to a track row; without the subtraction the
+    // pointer's own row count is used raw, so a pointer on the track's top row
+    // lands `tab_top` rows short of the top - measured on `2be845bb` as
+    // 220 where the ceiling is 237, i.e. exactly one prompt short.
+    let (w, h) = (80u16, 24u16);
+    let mut chat = with_a_tool_card(tabbed(true));
+    for index in 0..40 {
+        chat.transcript.push_user(format!("line {index}"));
+    }
+    let (content, window) = chat.scroll_extent(w, h);
+    assert!(
+        content > window,
+        "the fixture overflows so a drag has range"
+    );
+    let max = (content - window) as u16;
+    let tab = chat.tab_top(w);
+    assert!(tab > 0, "the fixture must show the tab bar");
+    assert_eq!(
+        chat.scrollbar_drag_scroll(w, h, 0, tab, 0),
+        Some(max),
+        "grabbed at the track's first row, the drag reaches the ceiling ({max})"
+    );
+    assert_eq!(
+        chat.scrollbar_drag_scroll(w, h, 0, h - 1, 0),
+        Some(0),
+        "and at the frame's last row it returns to live"
+    );
+}
+
+#[test]
+fn the_drawer_tab_sits_below_the_tab_bar_not_over_it() {
+    // The handle is pinned to the transcript window's last row, which with a
+    // tab bar is one row lower than `height - dock`. Without the term it is
+    // painted over the session tabs' own row - two decorations in one cell,
+    // and the click there belongs to the tabs.
+    let (w, h) = (80u16, 24u16);
+    let mut chat = tabbed_with_panel();
+    let tab = chat.tab_top(w);
+    assert!(tab > 0, "the fixture must show the tab bar");
+    let (col, row) = chat
+        .drawer_rect(w, h)
+        .expect("a registered panel paints its handle");
+    assert_eq!(
+        row,
+        (chat.window_height(w, h).saturating_sub(1)) as u16 + tab,
+        "the handle is on the transcript window's last row, below the tabs"
+    );
+    assert_ne!(row, tab, "and never on the tab bar's own row");
+    let frame = strip(&chat.viewport(w, h, 0));
+    assert!(
+        frame
+            .get(row as usize)
+            .is_some_and(|line| line.contains('◀')),
+        "the frame paints the handle on the row the rect names ({row}): {}",
+        frame.join("\n")
+    );
+    assert!(
+        !frame
+            .get(tab as usize)
+            .is_some_and(|line| line.contains('◀')),
+        "and not on the tab row"
+    );
+    // The click lands where the glyph is, which is the point of the row.
+    assert!(
+        chat.click_drawer(col, row, w, h),
+        "the handle the reader sees answers the click"
+    );
+}
+
+#[test]
+fn a_tooltip_names_the_entry_painted_on_that_row_and_not_the_one_above() {
+    // `tooltip_at` subtracts the tab rows once, before any transcript reader.
+    // Without it every hover is addressed one row too high: a pointer resting
+    // on the blank row *above* a reasoning run names that run.
+    let (w, h) = (80u16, 24u16);
+    let mut chat = tabbed(true);
+    chat.transcript.append_reasoning("thinking about it");
+    chat.transcript.finish_assistant();
+    chat.transcript.start_tool("bash", "ls");
+    chat.transcript
+        .finish_tool(crate::transcript::ToolStatus::Ok, Some("a\nb".to_string()));
+    let tab = chat.tab_top(w);
+    assert!(tab > 0, "the fixture must show the tab bar");
+    let frame = strip(&chat.viewport(w, h, 0));
+    let row_painting = |needle: &str| {
+        frame
+            .iter()
+            .position(|line| line.contains(needle))
+            .map(|row| row as u16)
+            .unwrap_or_else(|| panic!("{needle:?} paints: {}", frame.join("\n")))
+    };
+    let thinking = row_painting("thinking about it");
+    let header = row_painting("bash");
+    assert_eq!(
+        chat.tooltip_at(4, thinking, w, h, 0).as_deref(),
+        Some("Cycle thinking · alt+t"),
+        "the reasoning row names its own run"
+    );
+    assert_eq!(
+        chat.tooltip_at(4, header, w, h, 0).as_deref(),
+        Some("Expand output"),
+        "the card header names the card"
+    );
+    // The row directly above the reasoning text paints nothing, so it must name
+    // nothing: with the offset missing this answers for the run below it.
+    assert_eq!(
+        chat.tooltip_at(4, thinking - 1, w, h, 0),
+        None,
+        "the blank row above the run is not that run's row"
+    );
+    assert_eq!(
+        chat.tooltip_at(4, tab - 1, w, h, 0),
+        None,
+        "and the session tab row names nothing transcript-shaped"
     );
 }
 
