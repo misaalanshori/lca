@@ -198,3 +198,51 @@ fn every_distinct_rendered_width_is_a_distinct_texture_id() {
         "widths 100 and 101 land on one grid, so they cost one texture"
     );
 }
+
+// Verifies: gh #324 item 3 - **a non-PNG image really does reach the kitty
+// encoder**, which is why "the transcode cache is unnecessary because `lca-tui`
+// never sees a JPEG" is **false**, and why this item stops here instead of
+// adding a decoder.
+//
+// The call path, all of it in this tree:
+//
+//   `lca_tools::image::downscale_image` re-encodes a vision model's resize *as
+//   JPEG* (`image::codecs::jpeg::JpegEncoder`, `media_type: "image/jpeg"`) and
+//   pushes it onto `ToolResult::images`;
+//   `lca_core` stores those bytes content-addressed (no conversion);
+//   `lca_ui::chat_turn_events` and `replay_records` build `ImageInfo` from the
+//   carried `media_type` and push them into the transcript;
+//   `render_image` hands the bytes to `encode_kitty`, which always says `f=100`
+//   - and `f=100` is PNG. The kitty path has no transcode and no error.
+//
+// An MCP server's `image/*` blob takes the same path with whatever mime the
+// server declares, so JPEG is not a corner: it is the default for any vision
+// model with a resize profile. So the item is **not** declined as unnecessary -
+// it needs a decoder or a staging-layer normalisation, and both are out of this
+// cycle's boundary by the brief's own rule (a codec in `lca-tui` is an ADR).
+// This row pins the measurement so the next cycle starts from the call path
+// rather than re-deriving it: it fails if the kitty encoder ever stops being
+// PNG-only, which is exactly when the transcode stops being needed.
+#[test]
+fn a_jpeg_reaches_the_kitty_encoder_and_is_claimed_as_png() {
+    let mut jpeg = b"\xff\xd8\xff\xe0".to_vec();
+    jpeg.extend_from_slice(&[0u8; 40]);
+    let info = ImageInfo::new("image/jpeg", &jpeg);
+    // A JPEG can be sniffed and sized, so nothing upstream refuses it.
+    assert_eq!(
+        lca_protocol::sniff_image_media_type(&jpeg),
+        Some("image/jpeg"),
+        "the host recognises the payload as a JPEG"
+    );
+    let rows = render_image(&info, &jpeg, ImageProtocol::Kitty, 60);
+    assert!(
+        rows[0].contains("f=100"),
+        "and the kitty transmission claims PNG for those bytes: {:?}",
+        rows[0]
+    );
+    assert!(
+        !rows[0].starts_with("\x1b_Ga=T,f=24") && !rows[0].starts_with("\x1b_Ga=T,f=32"),
+        "kitty's own JPEG/PNG codes are not used: {:?}",
+        rows[0]
+    );
+}
