@@ -84,3 +84,76 @@ fn pi_parity_zero_prompt_mode_is_explicit_never_default() {
         "yolo is always a deliberate choice"
     );
 }
+
+// Verifies: pi:packages/coding-agent/docs/settings.md (`tuiMode`) - **a settled
+// divergence, not a pin**: pi 1.0.0 defaults `tuiMode` to `"fullscreen"` and LCA's
+// scrollback renderer is the default, with the alt screen an opt-in. The clause
+// lives in `docs/pi-parity.md`'s *Settled divergences* and ADR-0037's 2026-10-02
+// annotation settles LCA's side; this row is the guard that keeps the record true.
+//
+// **Why the assertion is split the way it is.** The default is not a constant in
+// `UiState` - `UiState::new`'s test fixture says `fullscreen: false`, but the
+// production answer is computed at one seam, `initial_screen_mode` in
+// `crates/lca-cli/src/tui/reload.rs` (`tui` is not reachable from this crate unless
+// that item is exported, and it is `pub(super)`), so:
+//
+// * **behavioural**, from config: the built-in default leaves `ui.fullscreen`
+//   *unset* (`None`), which is what makes the resolution's fallback the decision
+//   rather than a duplicated literal;
+// * **behavioural**, from the key inventory: `ui.fullscreen` is a real setting, so
+//   the opt-in exists as a documented surface;
+// * **structural**, at the real resolution point: `initial_screen_mode`'s
+//   *absent* branch answers `config_fullscreen.unwrap_or(false)` and the
+//   *malformed* branch the same. A source pin here is the honest anchor rather
+//   than a behavioural one against a proxy: the alternative would be asserting a
+//   fixture that production does not use.
+//
+// **The mutation that proves it bites**: changing either `unwrap_or(false)` to
+// `unwrap_or(true)` in this seam reddens the row (measured).
+//
+// **And the mutation the brief suggested does not, which is the finding worth
+// recording**: `crates/lca-ui/src/ui_state.rs:192`'s `fullscreen: false` sits inside
+// `#[cfg(test)] mod tests`'s `options()` fixture - flipping it changes no production
+// behaviour and reddens nothing here (measured: the row still passed). That is
+// precisely why the pin is at the resolution seam instead of at the literal the
+// brief pointed at: a fixture cannot decide what a user gets.
+#[test]
+fn pi_parity_scrollback_renderer_is_the_default_and_fullscreen_is_the_opt_in() {
+    // Pi's side, named for the reader: `tuiMode` defaults to "fullscreen"
+    // (`packages/coding-agent/docs/settings.md`). LCA's side is below.
+    let defaults = Config::defaults();
+    assert_eq!(
+        defaults.ui_fullscreen(),
+        None,
+        "the shipped default does not pin a mode; the resolution below decides"
+    );
+
+    // The opt-in is a real, documented surface (the documented spelling is
+    // `ui.fullscreen`, and `/fullscreen` is the runtime toggle).
+    assert!(
+        lca_config::KNOWN_KEYS.contains(&"ui.fullscreen"),
+        "`ui.fullscreen` is a setting this build knows: the opt-in exists"
+    );
+
+    // The resolution point, from the source: both non-persisted branches fall
+    // back to `false` (scrollback). One literal, in one place.
+    let reload = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/lca-cli/src/tui/reload.rs"),
+    )
+    .expect("read reload.rs");
+    let start = reload
+        .find("pub(super) fn initial_screen_mode(")
+        .expect("the resolution seam exists");
+    let body = &reload[start..];
+    let end = body.find("\n}\n").expect("its body ends");
+    assert_eq!(
+        body[..end].matches("unwrap_or(false)").count(),
+        2,
+        "both fallbacks (no ui.json, malformed ui.json) answer scrollback: {}",
+        &body[..end]
+    );
+    assert!(
+        !body[..end].contains("unwrap_or(true)"),
+        "and neither answers fullscreen: the default is the scrollback renderer"
+    );
+}

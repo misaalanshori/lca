@@ -50,7 +50,7 @@ raw colors, fork-directories as the branch container with in-file branching laye
 vocabulary over pi's `agent_start/message_start/...` stream, and the
 read-before-edit staleness guard over pi's blind edits (gh #117: kept,
 but off by default behind `tool.edit_requires_read`, so the default
-behavior is pi parity). Extension-registered CLI flags and shortcuts over pi's `registerFlag`/`registerShortcut` (gh #79, PG-027/PG-054): refused by ADR-0044 — per-extension knobs are config keys, actions are slash commands and (when it lands) `lca <ext>` delegation. A parity case
+behavior is pi parity). Extension-registered CLI flags and shortcuts over pi's `registerFlag`/`registerShortcut` (gh #79, PG-027/PG-054): refused by ADR-0044 — per-extension knobs are config keys, actions are slash commands and (when it lands) `lca <ext>` delegation. The default renderer over pi's `tuiMode` (gh #48): pi 1.0.0 defaults `tuiMode` to `"fullscreen"`, LCA defaults `ui.fullscreen = false` — the main-screen renderer, which appends to the terminal's real scrollback so native selection, the terminal's scrollbar, right-click paste and `Ctrl+V` work by construction (ADR-0037's 2026-10-02 annotation). The alt screen is the documented opt-in (`ui.fullscreen = true` or `/fullscreen`), and pi's `--tui-mode regular` spelling is not adopted because the setting already exists. `pi_parity_scrollback_renderer_is_the_default_and_fullscreen_is_the_opt_in` asserts LCA's side at the resolution seam; a parity case that expects fullscreen-by-default here is a wrong case, not a failing product. A parity case
 that fails because of one of these is a wrong case, not a failing product.
 
 ## Red witnesses (2, `#[ignore]`-gated)
