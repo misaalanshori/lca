@@ -65,6 +65,27 @@ impl Chat {
         if self.top_layer() == Some(crate::layer_stack::Layer::Search) {
             return self.handle_search_key(data, key.as_deref());
         }
+        // Gh #388 gap 3: **a user's history binding beats the app's binding while
+        // the editor is focused.** pi's `custom-editor` states the rule and the
+        // reason in one comment - "Explicit history bindings take precedence over
+        // app actions while the editor is focused. This lets users bind Ctrl+P even
+        // though it cycles models by default" - and it is the only way a user can
+        // have `Ctrl+P` mean "previous prompt". Measured on the pre-fix tree with
+        // `tui.editor.historyPrevious = ["ctrl+p"]` and a turn running: the app arm
+        // ran first and the editor never saw the key, so the notice was "model
+        // cycling is not available in this host" instead of history.
+        //
+        // It sits above the app-level arms and below the layers that legitimately
+        // outrank it (modals, pickers, the search, a running `!` shell), so a
+        // picker's own `ctrl+p` keeps working.
+        if self.keybindings.matches(data, "tui.editor.historyPrevious") {
+            self.editor.history_browse(-1);
+            return Action::Continue;
+        }
+        if self.keybindings.matches(data, "tui.editor.historyNext") {
+            self.editor.history_browse(1);
+            return Action::Continue;
+        }
         if self.keybindings.matches(data, "app.tools.expand") {
             // Gh #400 gap 2: the same key expands the startup header. One key for
             // "show me the detail" - the header is the detail a reader reaches for
@@ -145,6 +166,13 @@ impl Chat {
         match self.editor.handle_key(data) {
             EditorEvent::Submitted(text) => self.on_submit(text),
             EditorEvent::Exit => Action::Exit,
+            // Gh #388 gap 3: the editor consumed the key to close its own popup.
+            // Before this arm existed, a consumed `Escape` answered `Changed` and
+            // the ladder ran the *same* keystroke again, so closing the
+            // autocomplete popup during a turn **cancelled the turn** - measured
+            // on the pre-fix tree with `/mo` typed and a turn running: the first
+            // Escape returned `CancelTurn`.
+            EditorEvent::Dismissed => Action::Continue,
             EditorEvent::Changed | EditorEvent::None => self.global_key(data),
         }
     }

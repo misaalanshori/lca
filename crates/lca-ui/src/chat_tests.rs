@@ -106,6 +106,96 @@ fn model_completion_inserts_the_raw_id_and_shows_the_label() {
     );
 }
 
+// Verifies: gh #388 gap 3 - **`Escape` closes an autocomplete popup before it
+// interrupts.** With a turn running and a completion popup open, the first Escape
+// belongs to the popup; only the next one cancels. That is pi's rule and the
+// issue's own words.
+//
+// **Red on the pre-cycle tree, measured**: the first Escape returned `CancelTurn`
+// with the popup closing in the same keystroke, because the editor answered
+// `EditorEvent::Changed` for a consumed key and the ladder then ran the same
+// keystroke through `global_key`. The fix is a `Dismissed` variant the caller can
+// tell apart from an edit.
+#[test]
+fn escape_closes_the_autocomplete_popup_before_it_interrupts() {
+    let mut chat = chat();
+    chat.turn_running = true;
+    for c in "/mo".chars() {
+        chat.handle_key(&c.to_string());
+    }
+    assert!(chat.editor.suggestions().is_some(), "the popup is open");
+
+    assert_eq!(
+        chat.handle_key("\x1b"),
+        Action::Continue,
+        "the first Escape closes the popup and leaves the turn running"
+    );
+    assert!(
+        chat.editor.suggestions().is_none(),
+        "and the popup really closed"
+    );
+
+    assert_eq!(
+        chat.handle_key("\x1b"),
+        Action::CancelTurn,
+        "the second Escape interrupts, because there is no popup left"
+    );
+}
+
+// Verifies: gh #388 gap 3 - **a user's history binding beats the app's binding while
+// the editor is focused.** pi's rule (`custom-editor.ts`: "Explicit history bindings
+// take precedence over app actions while the editor is focused. This lets users bind
+// Ctrl+P even though it cycles models by default").
+//
+// `Ctrl+P` is `app.model.cycleForward` by default, so the user's override is what
+// makes this a precedence question at all. Asserted as the **effect**: the editor's
+// buffer shows the previous prompt, and no model-cycle notice was said.
+//
+// **Red on the pre-cycle tree, measured**: the app arm ran first, the editor never
+// saw the key, and the notice was "model cycling is not available in this host".
+#[test]
+fn a_user_history_binding_beats_the_app_binding_while_the_editor_is_focused() {
+    use std::collections::BTreeMap;
+    let mut overrides = BTreeMap::new();
+    overrides.insert(
+        "tui.editor.historyPrevious".to_string(),
+        vec!["ctrl+p".to_string()],
+    );
+    // The override has to reach the **manager**, not only the options map: `Chat::new`
+    // takes the manager as its own argument, so an options-only override is a map
+    // nothing reads (`KeybindingsManager::new()` ignores it).
+    let mut chat = Chat::new(
+        options(),
+        Arc::new(KeybindingsManager::with_user_bindings(overrides)),
+    );
+    chat.turn_running = true;
+    // One submitted prompt, so there is history to walk into.
+    chat.editor.set_text("first prompt");
+    chat.handle_key("\r");
+    chat.take_submitted();
+    chat.editor.set_text("draft");
+
+    let action = chat.handle_key("\x10"); // Ctrl+P
+    assert_eq!(
+        action,
+        Action::Continue,
+        "the key is consumed, not submitted"
+    );
+    assert_eq!(
+        chat.editor.text(),
+        "first prompt",
+        "the editor's history won, so the buffer holds the previous prompt"
+    );
+    assert!(
+        !chat
+            .last_notice()
+            .unwrap_or_default()
+            .contains("model cycling"),
+        "and the app-level model cycle did not run: {:?}",
+        chat.last_notice()
+    );
+}
+
 #[test]
 fn escape_cancels_a_running_turn() {
     let mut chat = chat();

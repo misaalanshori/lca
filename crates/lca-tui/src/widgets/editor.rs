@@ -37,6 +37,16 @@ pub enum EditorEvent {
     None,
     /// The buffer changed.
     Changed,
+    /// The editor **consumed** the key to close its own chrome (the autocomplete
+    /// popup) and the buffer did not change.
+    ///
+    /// Gh #388 gap 3: `Changed` was the only answer an editor could give for a
+    /// consumed key, and the caller's ladder is "if the editor did not submit or
+    /// exit, run the global keys" - so closing the popup with `Escape` also
+    /// cancelled the running turn. The caller cannot distinguish "the buffer
+    /// changed" from "the chrome closed" without this variant, which is why it is
+    /// a variant rather than a second boolean.
+    Dismissed,
     /// The user submitted (Enter).
     Submitted(String),
     /// The user asked to exit (Ctrl+C on empty input).
@@ -623,6 +633,48 @@ impl Editor {
         self.refresh_or_close_suggestions();
     }
 
+    /// One dedicated history step, up (`direction < 0`) or down.
+    ///
+    /// Gh #388 gap 3: `tui.editor.historyPrevious`/`historyNext` were declared in the
+    /// binding table and matched by **nothing** - the only way into history was the
+    /// `cursorUp` boundary, so a user who bound `Ctrl+P` to "previous prompt" got no
+    /// history at all. pi has these as *dedicated* actions which "always browse
+    /// entries instead of moving the cursor" (`editor.ts:861`). Same navigation as
+    /// the boundary branch of [`Self::cursor_up`]/[`Self::cursor_down`], but
+    /// unconditional - the caller has already decided the key means history.
+    pub fn history_browse(&mut self, direction: i8) {
+        if self.history.is_empty() {
+            return;
+        }
+        if direction < 0 {
+            if self.history_index.is_none() {
+                self.draft = self.text();
+                self.history_index = Some(self.history.len());
+            }
+            if let Some(idx) = self.history_index
+                && idx > 0
+            {
+                self.history_index = Some(idx - 1);
+                let entry = &self.history[idx - 1];
+                let (text, pastes) = (entry.text.clone(), entry.pastes.clone());
+                self.set_text_with_pastes(&text, pastes);
+            }
+        } else if let Some(idx) = self.history_index {
+            if idx + 1 < self.history.len() {
+                self.history_index = Some(idx + 1);
+                let entry = &self.history[idx + 1];
+                let (text, pastes) = (entry.text.clone(), entry.pastes.clone());
+                self.set_text_with_pastes(&text, pastes);
+            } else {
+                self.history_index = None;
+                let draft = self.draft.clone();
+                self.set_text(&draft);
+            }
+        }
+        self.preferred_col = None;
+        self.refresh_or_close_suggestions();
+    }
+
     /// Move the cursor to the line start.
     pub fn cursor_line_start(&mut self) {
         self.preferred_col = None;
@@ -743,7 +795,7 @@ impl Editor {
         if self.suggestions.is_some() {
             if kb.matches(data, "tui.select.cancel") {
                 self.clear_suggestions();
-                return EditorEvent::Changed;
+                return EditorEvent::Dismissed;
             }
             if kb.matches(data, "tui.select.up") || kb.matches(data, "tui.editor.cursorUp") {
                 self.move_suggestion(-1);

@@ -581,6 +581,44 @@ fn tab_applies_a_single_candidate_silently() {
     assert!(e.suggestions().is_none());
 }
 
+// Verifies: gh #388 gap 3 - **the popup's Escape is answered as a dismissal, not as
+// an edit.** This is the editor's half of the precedence fix: closing the
+// autocomplete popup with `Escape` used to answer `EditorEvent::Changed`, which is
+// indistinguishable from a real edit at the caller, and the caller's ladder then ran
+// the *same* keystroke through its global keys - so closing the popup during a turn
+// cancelled the turn.
+//
+// Asserted at the editor, because that is where the misreport originated: the caller
+// row (`chat::tests::escape_closes_the_autocomplete_popup_before_it_interrupts`) pins
+// what it decided with it.
+#[test]
+fn escape_closes_the_popup_as_a_dismissal() {
+    let mut e = Editor::new();
+    e.set_suggestions(crate::widgets::autocomplete::Suggestions {
+        items: vec![crate::widgets::autocomplete::AutocompleteItem {
+            value: "README.md".into(),
+            label: "README.md".into(),
+            description: None,
+            origin: Origin::Builtin,
+            dim: false,
+        }],
+        prefix: "REA".into(),
+    });
+    let before = e.text();
+    let event = e.handle_key("\x1b");
+    assert!(
+        matches!(event, EditorEvent::Dismissed),
+        "closing the popup is a dismissal, not a buffer change: {event:?}"
+    );
+    assert!(e.suggestions().is_none(), "and the popup is closed");
+    assert_eq!(e.text(), before, "with the buffer untouched");
+    // A second Escape - now with no popup - is not consumed: the caller owns it.
+    assert!(
+        !matches!(e.handle_key("\x1b"), EditorEvent::Dismissed),
+        "with no popup open, Escape is the caller's"
+    );
+}
+
 // Verifies: FR-UI-24 (R5) - a trailing space moves the caret: the marker's
 // column advances on the space keystroke itself, not on the next letter.
 #[test]
