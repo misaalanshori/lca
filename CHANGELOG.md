@@ -41,6 +41,19 @@ Dates are UTC.
   is `/paste` and the right-button handler.
 
 ### Fixed
+- **An image a vision model resized now displays instead of vanishing** (gh #598,
+  interface). The resize path re-encodes the picture as JPEG and carries that media
+  type all the way to the renderer, but the kitty graphics encoder sent `f=100` — the
+  protocol's **PNG** code — whatever the bytes were, so a kitty terminal followed the
+  claim, tried to read JPEG as PNG, and drew nothing. Kitty's protocol has exactly
+  three payload formats (RGB, RGBA, PNG) and **no JPEG code**, so the encoder now sends
+  `f=100` only for PNG and takes the **placeholder** for anything else, naming the
+  media type it could not send; webp and gif are refused for the same reason. iTerm2
+  was never affected (its protocol carries no format field, so the terminal sniffs the
+  payload). What is *not* changed: the bytes a provider receives, which stay JPEG and
+  stay small — measured on the same 2000×1333 downscale, a photo is 227 KB as JPEG q80
+  and 3.5 MB as PNG, a screenshot 941 KB and 499 KB — so normalising the resize itself
+  is a separate decision about the wire, not this fix.
 - **An interactive `/compact` no longer summarizes a large session with a 4096-token
   budget** (gh #594, interface). The compaction backend starts with no budget and falls
   back to the `SUMMARIZATION_MAX_TOKENS` stopgap (4096) — and only the headless path ever
