@@ -274,6 +274,16 @@ pub fn wheel_accelerates(on_macos: bool, local: bool) -> bool {
     wheel_accelerates_with(on_macos, local, |key| std::env::var(key).ok())
 }
 
+/// [`wheel_accelerates`] for this process: the rule plus the ambient facts.
+///
+/// The **host** calls this once when it builds a screen (`lca_ui`'s
+/// `apply_screen_tuning`); the engine's own `AltScreenRenderer::new()` deliberately
+/// does not, so a library fixture or an embedder that never mentions a platform gets
+/// the curve and a row stays deterministic on every machine.
+pub fn wheel_accelerates_here() -> bool {
+    wheel_accelerates(cfg!(target_os = "macos"), is_local_session())
+}
+
 /// [`wheel_accelerates`] with the environment injected.
 pub fn wheel_accelerates_with(
     on_macos: bool,

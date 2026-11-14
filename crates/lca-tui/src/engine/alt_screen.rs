@@ -137,10 +137,7 @@ impl AltScreenRenderer {
             copy_on_select: true,
             wheel_lines: 1,
             wheel_auto: false,
-            wheel_accelerate: crate::engine::keys::wheel_accelerates(
-                cfg!(target_os = "macos"),
-                crate::engine::keys::is_local_session(),
-            ),
+            wheel_accelerate: true,
             wheel_accel: WheelAccel::new(),
             wheel_epoch: None,
             last_click: None,

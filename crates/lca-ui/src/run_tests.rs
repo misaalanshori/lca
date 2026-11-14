@@ -674,6 +674,47 @@ fn screen_switch_applies_copy_and_wheel_tuning() {
     }
 }
 
+// Verifies: gh #375 gap 1 - **the host is where the accelerate fact is applied, and an
+// alt screen built by the engine alone does not inherit a platform.**
+//
+// Two halves, both decidable on this Linux box because the rule takes the facts as
+// parameters: the engine's own construction keeps the curve (so no fixture asserts the
+// runner's OS), and `apply_screen_tuning` overwrites it with
+// `wheel_accelerates_here()` - the one call that knows the process's platform and SSH
+// state. CI's macOS leg is what proves the *value* there is `false`.
+#[test]
+fn the_screen_tuning_carries_the_hosts_wheel_acceleration_fact() {
+    let tuning = crate::state::DisplayTuning::default();
+    let mut screen = Screen::Main(MainScreenRenderer::new());
+    switch_screen(&mut screen, true, &mut FakeTerminal::new(80, 24));
+    // A renderer the engine built: the curve is available, whatever the machine is.
+    match &screen {
+        Screen::Alt(alt) => assert!(
+            alt.wheel_accelerate,
+            "engine construction must not sniff the runner's platform"
+        ),
+        Screen::Main(_) => panic!("should be fullscreen"),
+    }
+    crate::run_selection::apply_screen_tuning(&mut screen, &tuning);
+    let applied = lca_tui::engine::keys::wheel_accelerates_here();
+    match &screen {
+        Screen::Alt(alt) => assert_eq!(
+            alt.wheel_accelerate, applied,
+            "the host's fact is what the screen runs with"
+        ),
+        Screen::Main(_) => panic!("should be fullscreen"),
+    }
+    // And the tuning path leaves the fixed setting alone: `auto` resolves to one line
+    // (the curve scales it from there), and the fact must not change that number.
+    match &screen {
+        Screen::Alt(alt) => assert_eq!(
+            alt.wheel_lines, 1,
+            "`auto`'s fixed fallback is untouched by the accelerate fact"
+        ),
+        Screen::Main(_) => panic!("should be fullscreen"),
+    }
+}
+
 // Verifies: gh #233 - consent-delivered rows invalidate the snapshot,
 // so the next `/model` re-enumerates past the grant.
 #[test]

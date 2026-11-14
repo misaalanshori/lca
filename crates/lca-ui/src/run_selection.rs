@@ -92,6 +92,13 @@ pub(super) fn apply_screen_tuning(screen: &mut Screen, tuning: &crate::state::Di
         alt.wheel_lines = wheel_lines_for(tuning);
         // Gh #206: `auto` is the velocity curve now (pi's shape), so a
         // mode flip restarts the gesture.
+        // Gh #375 gap 1: **the host decides whether this terminal already accelerates
+        // the wheel** - a local Mac's OS does, so `auto` there is one line and our
+        // curve would double it. Set here, beside the other fullscreen tunables, because
+        // this is the one place every alt-screen renderer passes through (the initial
+        // screen in `run` and the `/fullscreen` switch) and the only place the process's
+        // platform and SSH state are a known fact rather than an assumption.
+        alt.wheel_accelerate = lca_tui::engine::keys::wheel_accelerates_here();
         let auto = tuning.fullscreen_wheel_lines.as_str() == "auto";
         if alt.wheel_auto != auto {
             alt.wheel_auto = auto;
