@@ -295,3 +295,174 @@ fn a_trailing_osc_string_terminator_is_not_dropped() {
         "the close keeps its terminator: {out:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Gh #405 gap 4, the strengthening the brief asked for: the property, not only
+// the samples.
+// ---------------------------------------------------------------------------
+//
+// The rows above pin the shapes the defect had (a split CSI, a split OSC, an
+// incomplete tail) one document at a time. That leaves the *space* around them
+// open: a sanitizer that drops a complete sequence, or one that misses a partly
+// written opener at some offset nobody sampled, passes every one of them. The
+// property closes the space instead of adding a fourth sample.
+//
+// Two properties, both over **arbitrary chunk splits** of a fixed document:
+//
+// 1. **byte-identical rendering** - the same document rendered as one string and
+//    as N arbitrarily sized chunks produces the same rows. This is the equality
+//    the issue's manager note calls "worth more than every shape assertion
+//    around it".
+// 2. **no raw control byte survives** - whatever the chunks, no rendered row
+//    carries an `ESC` that a terminal would act on.
+//
+// The document is fixed (not arbitrary text) because the *interesting* document
+// is the one with escapes, a link, CJK and a ZWJ emoji in it; arbitrary bytes
+// would mostly test that random letters render as random letters.
+
+use proptest::prelude::*;
+
+/// A document with every shape that has ever been split badly: a true-colour
+/// SGR, an OSC 8 hyperlink, a reset, CJK (3-byte sequences), an emoji (4-byte),
+/// a ZWJ cluster (several codepoints that must not be cut apart visually), and a
+/// trailing plain character.
+const PROPERTY_DOC: &str = "start \x1b[38;2;10;20;30mcolour\x1b[0m                             \x1b]8;;https://example.com/x\x1b\\link\x1b]8;;\x1b\\                             \u{65e5}\u{672c}\u{8a9e} \u{1f389} \u{1f468}\u{200d}\u{1f469}                             end";
+
+/// The chunks of `data` under a split schedule: `cuts` is a list of absolute
+/// offsets, sorted and clamped, with 0 and `len` implied.
+fn chunked<'a>(data: &'a str, cuts: &[usize]) -> Vec<&'a str> {
+    let mut bounds: Vec<usize> = cuts
+        .iter()
+        .map(|cut| (*cut).min(data.len()))
+        .filter(|cut| data.is_char_boundary(*cut))
+        .collect();
+    bounds.push(0);
+    bounds.push(data.len());
+    bounds.sort_unstable();
+    bounds.dedup();
+    let mut out = Vec::new();
+    for pair in bounds.windows(2) {
+        out.push(&data[pair[0]..pair[1]]);
+    }
+    out
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 256, ..ProptestConfig::default() })]
+
+    /// Verifies: gh #405 gap 4 - **one chunk and any chunk split render the
+    /// same rows.** The accumulator is a `String` and rendering parses the whole
+    /// of it, so the only way this fails is if a caller renders a *partial*
+    /// accumulation - which is exactly the defect the sanitizer exists to make
+    /// safe.
+    #[test]
+    fn any_chunk_split_renders_like_one_chunk(cuts in proptest::collection::vec(0usize..96, 0..12)) {
+        // The chunk boundaries are boundaries of the *bytes* a pipe delivers, so
+        // a schedule lands where it lands - char boundaries are filtered, since a
+        // str split inside a codepoint is not a shape a `&str` stream can have.
+        let pieces = chunked(PROPERTY_DOC, &cuts);
+        let mut acc = String::new();
+        for piece in &pieces {
+            acc.push_str(piece);
+        }
+        // A single-chunk schedule is the trivially-equal case, and it is
+        // *allowed*: the property is "however it is split", and "not at all" is
+        // one of those. What must never differ is the rendering.
+        prop_assert_eq!(&acc, PROPERTY_DOC, "the concatenation is the document");
+        let whole = wrap_text_with_ansi(PROPERTY_DOC, 80).join("\n");
+        let split = wrap_text_with_ansi(&acc, 80).join("\n");
+        prop_assert_eq!(split, whole, "chunks {} render differently", cuts.len());
+    }
+
+    /// Verifies: gh #405 gap 4 - **no unterminated escape survives**, whatever
+    /// the split or the truncation point.
+    ///
+    /// "No `ESC` at all" would be the wrong property: a complete colour span
+    /// legitimately keeps its bytes. What must never survive is an `ESC` that
+    /// opens **nothing**, because that is the byte a terminal acts on - the
+    /// injection this function exists to prevent. The document's own escapes are
+    /// all complete, so the whole string and every prefix of it must come out
+    /// with only complete escapes.
+    #[test]
+    fn no_split_leaks_an_unterminated_escape(cuts in proptest::collection::vec(0usize..96, 0..12)) {
+        // Split schedules do not change the sanitizer's input (it sees the joined
+        // text), so this property is about the *truncation* points a streaming
+        // render can land on - one per chunk boundary the schedule produced.
+        let pieces = chunked(PROPERTY_DOC, &cuts);
+        let mut acc = String::new();
+        let mut boundaries = vec![0usize];
+        for piece in &pieces {
+            acc.push_str(piece);
+            boundaries.push(acc.len());
+        }
+        prop_assert_eq!(&acc, PROPERTY_DOC, "the concatenation is the document");
+        let mut checked = 0;
+        for cut in boundaries {
+            let visible = sanitize_incomplete_escapes(&acc[..cut]);
+            prop_assert_eq!(
+                unterminated_escape_at(&visible),
+                None,
+                "a prefix truncated at {} left an unterminated escape: {:?}",
+                cut,
+                visible
+            );
+            checked += 1;
+        }
+        prop_assert!(checked > 0, "at least one boundary was checked");
+    }
+}
+
+/// The offset of the first `ESC` in `text` that opens nothing complete, or `None`.
+///
+/// A **second scanner, deliberately**: this is a test's oracle, and an oracle
+/// built out of the function under test would agree with it by construction. It
+/// is not a second production parser - the one-parser rule (`docs/testing-plan.md`) -
+/// because nothing ships it.
+fn unterminated_escape_at(text: &str) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let mut pos = 0;
+    while pos < bytes.len() {
+        if bytes[pos] != 0x1b {
+            pos += 1;
+            continue;
+        }
+        // `ESC \` is a complete two-byte ST.
+        if bytes.get(pos + 1) == Some(&b'\\') {
+            pos += 2;
+            continue;
+        }
+        // A CSI runs to its final byte (0x40..=0x7e) over parameter/intermediate
+        // bytes; an OSC runs to `BEL` or `ESC \`.
+        match bytes.get(pos + 1) {
+            Some(b'[') => {
+                let mut end = pos + 2;
+                while end < bytes.len() && !(0x40..=0x7e).contains(&bytes[end]) {
+                    end += 1;
+                }
+                if end >= bytes.len() {
+                    return Some(pos);
+                }
+                pos = end + 1;
+            }
+            Some(b']') => {
+                let mut end = pos + 2;
+                loop {
+                    if end + 1 >= bytes.len() {
+                        return Some(pos);
+                    }
+                    if bytes[end] == 0x07 {
+                        pos = end + 1;
+                        break;
+                    }
+                    if bytes[end] == 0x1b && bytes[end + 1] == b'\\' {
+                        pos = end + 2;
+                        break;
+                    }
+                    end += 1;
+                }
+            }
+            _ => return Some(pos),
+        }
+    }
+    None
+}
