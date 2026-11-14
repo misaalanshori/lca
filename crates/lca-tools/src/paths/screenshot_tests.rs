@@ -316,6 +316,24 @@ fn every_apostrophe_and_normalisation_spelling_reaches_one_file() {
     let root = home("lca-405-apostrophe-matrix", &["Desktop"]);
     let real = touch(&root.join("Desktop").join(on_disk));
     let lookup = ScreenshotLookup::new(&root);
+    // **The file's identity, not its spelling.** macOS normalises a filename on
+    // write (HFS+/APFS), so the `PathBuf` the filesystem hands back is whichever
+    // normalisation it stores - the same trap `an_accented_name_resolves_in_either_
+    // normalisation` documents. What matters here is that every spelling reaches
+    // that one file, so the assertion below is "a file with our content, at that
+    // name up to normalisation", never byte equality of the path.
+    let comparable = |path: &std::path::Path| {
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let nfc: String = {
+            use unicode_normalization::UnicodeNormalization;
+            name.nfc().collect()
+        };
+        (path.parent().map(std::path::Path::to_path_buf), nfc)
+    };
+    let expected = comparable(&real);
     for (label, typed) in [
         (
             "curly+NFD",
@@ -337,7 +355,16 @@ fn every_apostrophe_and_normalisation_spelling_reaches_one_file() {
         let found = lookup
             .resolve(Path::new(&format!("~/Desktop/{typed}")))
             .unwrap_or_else(|| panic!("{label} must resolve to the file on disk"));
-        assert_eq!(found, real, "{label} resolved to the wrong path");
+        assert_eq!(
+            comparable(&found),
+            expected,
+            "{label} resolved to a different file (spelling may differ by normalisation)"
+        );
+        assert_eq!(
+            std::fs::read(&found).expect("read"),
+            b"png",
+            "{label}: and it is the file that exists"
+        );
     }
     let _ = std::fs::remove_dir_all(&root);
 }

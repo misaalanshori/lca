@@ -235,7 +235,19 @@ fn a_follow_up_during_compaction_keeps_its_mode() {
     let mut chat = new_chat();
     chat.compacting = true;
     chat.editor.set_text("later please");
-    assert_eq!(chat.handle_key("\x1b\r"), Action::Continue); // Alt+Enter
+    // Gh #405 gap 3: the follow-up key is host-family dependent (`alt+enter` on
+    // Unix, `ctrl+q` on Windows/WSL), so press whatever this host bound rather than
+    // a literal. The literal is exactly what CI's Windows leg caught.
+    let pressed = match chat
+        .keybindings_manager()
+        .primary_key("app.message.followUp")
+        .as_str()
+    {
+        "alt+enter" => "\x1b\r".to_string(), // legacy Alt+Enter
+        "ctrl+q" => "\x11".to_string(),      // raw C0 Ctrl+Q
+        other => panic!("unexpected follow-up binding {other:?}"),
+    };
+    assert_eq!(chat.handle_key(&pressed), Action::Continue);
     assert_eq!(chat.compaction_queued.len(), 1);
     assert_eq!(
         chat.compaction_queued[0].mode,

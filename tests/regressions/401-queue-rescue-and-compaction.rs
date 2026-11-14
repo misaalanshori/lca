@@ -126,7 +126,22 @@ fn the_queue_dock_speaks_pi_and_hints_the_live_dequeue_key() {
     let key = chat
         .keybindings_manager()
         .primary_key("app.message.dequeue");
-    assert_eq!(key, "alt+up", "pi's dequeue key is the primary binding");
+    // Gh #405 gap 3: the primary dequeue key is now **host-family dependent** -
+    // `alt+up` on Unix, `alt+q` on the Windows/WSL family (pi's `windowsKeybindings`).
+    // This row's subject is that the hint prints the *resolved* key, so it asserts
+    // the two Unix spellings by name and lets the family be what it is; pinning
+    // `alt+up` outright is what CI's Windows leg caught.
+    if chat.keybindings_manager().family() == lca_tui::engine::keybindings::HostFamily::Unix {
+        assert_eq!(
+            key, "alt+up",
+            "pi's dequeue key is the primary Unix binding"
+        );
+    } else {
+        assert_eq!(
+            key, "alt+q",
+            "and the Windows/WSL family takes pi's remapped key"
+        );
+    }
     assert!(
         text.contains(&format!("↳ {key} to edit all queued messages")),
         "the hint names the resolved key:\n{text}"
@@ -218,14 +233,49 @@ fn a_flush_that_cannot_start_a_turn_keeps_the_queue() {
     );
 }
 
-// Verifies: gh #401 item 3 - `Alt+Up` takes the queue back with no picker
+// Verifies: gh #401 item 3 - the dequeue key takes the queue back with no picker
 // open, which is the discoverable path the hint promises.
+//
+// Gh #405 gap 3: the key is read from the registry rather than hard-coded, because
+// the primary binding is host-family dependent (`alt+up` Unix, `alt+q` on
+// Windows/WSL). A row that pressed a literal `Alt+Up` byte stayed green on Linux and
+// went red on CI's Windows leg - the same mistake the gh #401 hint row made, caught
+// the same way.
 #[test]
-fn alt_up_takes_the_queue_back() {
+fn the_dequeue_key_takes_the_queue_back() {
     let mut chat = chat();
     chat.begin_turn(lca_protocol::steer_queue());
     submit(&mut chat, "bring me back");
-    chat.handle_key("\x1b[1;3A"); // Alt+Up
+    let primary = chat
+        .keybindings_manager()
+        .primary_key("app.message.dequeue");
+    assert!(
+        !primary.is_empty(),
+        "the dequeue action has a binding in every family"
+    );
+    // `chat`'s manager is whichever family this host is, so the raw bytes have to
+    // come from the same place the matcher reads them: `matches` over the
+    // *bound* key, not a remembered sequence.
+    let bound = chat.keybindings_manager().keys("app.message.dequeue");
+    let pressed = bound
+        .iter()
+        .find_map(|key| raw_for(key))
+        .unwrap_or_else(|| panic!("one dequeue binding has a raw spelling: {bound:?}"));
+    chat.handle_key(&pressed);
     assert!(chat.pending.is_empty());
     assert_eq!(chat.editor.text(), "bring me back");
+}
+
+/// The raw bytes a terminal sends for one key id, for the ids this file needs.
+///
+/// A tiny table rather than a general inverse of `matches_key`: the row needs "press
+/// what the registry bound", and inventing a full reverse parser here would be the
+/// second-parser class. `None` means the row did not need that spelling.
+fn raw_for(key: &str) -> Option<String> {
+    match key {
+        "alt+up" => Some("\x1b[1;3A".to_string()), // xterm modify-arrows
+        "alt+e" => Some("\x1be".to_string()),      // legacy Alt+E
+        "alt+q" => Some("\x1bq".to_string()),      // legacy Alt+Q
+        _ => None,
+    }
 }
