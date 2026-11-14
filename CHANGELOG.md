@@ -22,6 +22,24 @@ Dates are UTC.
   dependency and no new `unsafe`**, and it goes through the same bounded read as the
   other two tiers so a stalled clipboard owner still cannot freeze the interface.
 
+### Changed
+- **Windows and WSL sessions get pi's keymap, and Unix sessions are untouched**
+  (gh #405 gap 3, interface). Windows Terminal and a native Windows console swallow
+  several of the chords the Unix table spends, so on a native Windows build and on a
+  Linux build running under WSL the defaults now follow pi's own remap: follow-up is
+  `ctrl+q` (was `alt+enter`), dequeue `alt+q`, transcript search `ctrl+f` (was
+  `ctrl+r`), the fullscreen search `ctrl+f` (was `ctrl+shift+f`), the prompt jumps are
+  the plain `ctrl+up`/`ctrl+down`, model-cycle-backward is `alt+p` alone, undo is
+  `ctrl+z` on a native Windows console and `alt+z` under WSL (was `ctrl+-`), and
+  suspend is unbound on native Windows (no `SIGTSTP` there) while a WSL build keeps
+  `ctrl+z`. The rule is pi's predicate over facts, not a compile-time check —
+  `win32 || (linux && (WSL_DISTRO_NAME || WSL_INTEROP))` — because the machine that needs
+  the Windows table runs a Linux binary; `WT_SESSION` is deliberately not part of it,
+  since a terminal is not a keymap. **No macOS or plain-Linux binding changed**, and a
+  `keybindings.toml` override still wins over either family's defaults. pi's
+  `app.clipboard.pasteImage` (`alt+v`) is not transcribed: LCA has no paste key — a paste
+  is `/paste` and the right-button handler.
+
 ### Fixed
 - **An interactive `/compact` no longer summarizes a large session with a 4096-token
   budget** (gh #594, interface). The compaction backend starts with no budget and falls

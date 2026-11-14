@@ -79,6 +79,19 @@ themes, and the key map `/hotkeys` prints); the provider/model
 generation, credentials, the shell backend, markdown transformers, and
 already-applied interface chrome follow after restart.
 
+**Windows and WSL get a different default table** (gh #405 gap 3). Windows Terminal
+and a native Windows console swallow several chords the Unix defaults spend, so a
+native Windows build and a Linux build under WSL resolve their defaults from pi's
+`windowsKeybindings` remap: follow-up `ctrl+q`, dequeue `alt+q`, transcript search
+`ctrl+f`, fullscreen search `ctrl+f`, prompt jumps `ctrl+up`/`ctrl+down`,
+model-cycle-backward `alt+p`, undo `ctrl+z` (native) or `alt+z` (WSL), and suspend
+unbound on native Windows. The predicate is pi's, over runtime facts rather than a
+compile-time check — `win32 || (linux && (WSL_DISTRO_NAME || WSL_INTEROP))`, with
+`WT_SESSION` deliberately excluded, because a terminal is not a keymap. **macOS and
+plain Linux are unchanged**; `keybindings.toml` is the same rung either way, and an
+override replaces that family's default list exactly as before. `/hotkeys` prints
+whichever table applies, so the remap is checkable rather than assumed.
+
 Editor bindings — `tui.editor.*` and `tui.input.*` — reload with
 everything else: a new cursor or newline binding takes effect on the
 next keystroke, with no restart. `/hotkeys` prints the map the editor
