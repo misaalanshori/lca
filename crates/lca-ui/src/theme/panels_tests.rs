@@ -15,6 +15,14 @@ use super::*;
 use lca_tui::engine::colors::RgbColor;
 
 /// Solarized Dark's background.
+/// Solarized Light's page (`#fdf6e3`) - the light counterpart of the constant below,
+/// and the background where the channel clamp rotates a hue the furthest.
+const SOLARIZED_LIGHT: RgbColor = RgbColor {
+    r: 0xfd,
+    g: 0xf6,
+    b: 0xe3,
+};
+
 const SOLARIZED_DARK: RgbColor = RgbColor {
     r: 0x00,
     g: 0x2b,
@@ -295,4 +303,96 @@ fn the_system_palette_uses_the_derivation() {
     }
     // The foreground is still the terminal's own (gh #10's contract).
     assert_eq!(palette.get(Role::Text), Color::Default);
+}
+
+// Verifies: gh #379 gap 2 (the "hue shifts on clamp" half) - **a tint keeps its
+// family's hue on a light background.**
+//
+// The defect this pins is real and measurable, and it is *not* the mixing gap the
+// issue's first half describes: nothing in this tree mixes two colours (no `mix`
+// anywhere outside a paint helper, and `Panel::system` derives every tint from
+// one background, so there is no sRGB midpoint to desaturate). What *is* broken is
+// the clamp: `from_oklch` runs the colour through `oklab_to_rgb`, which clamps
+// **each channel** into `0..=1`. Clamping a channel is not a gamut map - it
+// rotates the hue as it desaturates. Measured on the shipped code:
+//
+// ```text
+// #fdf6e3 (Solarized Light), user band (hue 264): shift -2.3 degrees
+// #ffffff,                     user band (hue 264): shift -11.3 degrees
+// ```
+//
+// `max_chroma_at` - the chroma bisection along the **fixed** hue ray - already
+// exists (`theme::accents`) for a different caller, which is what makes this the
+// "reuse the machinery" fix rather than a new mixer.
+#[test]
+fn a_tint_keeps_its_family_hue_on_a_light_background() {
+    for (label, background) in [
+        ("solarized light", SOLARIZED_LIGHT),
+        (
+            "pure white",
+            RgbColor {
+                r: 255,
+                g: 255,
+                b: 255,
+            },
+        ),
+        (
+            "neutral #f2f2f2",
+            RgbColor {
+                r: 242,
+                g: 242,
+                b: 242,
+            },
+        ),
+    ] {
+        for family in crate::theme::panels::families() {
+            // `toolPendingBg` is achromatic **by design** (chroma 0: a pending card
+            // has no state to signal), and a hue is meaningless at zero chroma - so
+            // it is asserted as *neutral*, not as keeping a hue.
+            if family.chroma == 0.0 {
+                let Some(color) = panel_of(background, ColorScheme::Light, family.role) else {
+                    continue;
+                };
+                let (_, chroma, hue) = crate::theme::panels::oklch_of(color);
+                // **Not zero chroma**: the derivation's background floor deliberately
+                // gives every panel the page's own cast (`BACKGROUND_CHROMA_KEEP`),
+                // so an achromatic family on a tinted page is a *quieter* version of
+                // that page, not a grey. What it must not do is carry the family's
+                // nominal hue - it has none to carry.
+                let _ = hue;
+                // **A quietly-tinted grey, never a colour claim.** The floor gives
+                // every panel the page's cast, and at these chromas the 8-bit
+                // quantisation itself decides the residual hue (measured: 0.0100 on
+                // Solarized Light, whose page is also tinted). So the assertion is
+                // "no family-hue claim at a visible chroma", which is what the
+                // design promises - not "equals the page's hue", which is not
+                // meaningful near zero chroma.
+                assert!(
+                    chroma <= 0.012,
+                    "{label} {}: an achromatic family must stay a near-grey, got \
+                     chroma {chroma:.4}",
+                    family.role.key()
+                );
+                continue;
+            }
+            let Some(color) = panel_of(background, ColorScheme::Light, family.role) else {
+                continue;
+            };
+            let (_, _, hue) = crate::theme::panels::oklch_of(color);
+            let shift = (hue - family.hue + 180.0).rem_euclid(360.0) - 180.0;
+            // Two degrees: the gamut bisection lands on the boundary where one
+            // channel is exactly 1.0 (or 0.0), and the **other two channels'
+            // 8-bit rounding** then moves the measured hue by up to ~1.6 degrees.
+            // That residual is quantization, not clipping - the pre-fix shift was
+            // 2.3 to 11.3 degrees, and unbounded in principle because a clamp
+            // rewrites the ratios rather than trimming one of them.
+            assert!(
+                shift.abs() <= 2.0,
+                "{label} {}: the tint is {shift:+.1} degrees off its family hue \
+                 ({hue:.2} vs {:.2}) - a channel clamp rotated it",
+                family.role.key(),
+                family.hue
+            );
+        }
+    }
 }

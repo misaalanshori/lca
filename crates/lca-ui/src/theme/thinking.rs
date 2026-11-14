@@ -141,7 +141,7 @@ pub fn levels(
     // is the identity (`start` *is* `base_lightness[0]`).
     let outer = base_lightness[6];
     let authored_reach = (outer - base_lightness[0]).abs();
-    let scale = if authored_reach > f64::EPSILON {
+    let reach_scale = if authored_reach > f64::EPSILON {
         SYSTEM_REACH / authored_reach
     } else {
         1.0
@@ -154,15 +154,50 @@ pub fn levels(
         chroma: 0.0,
         hue: 0.0,
     }; 7];
+    // Gh #379 gap 2: **one scale for the whole ladder, not a per-step trim.**
+    //
+    // A light terminal's page puts the far end of the authored chroma out of
+    // gamut, where the old channel clamp rotated the hue (measured: `max` wanted
+    // 45 degrees and came out at 38.4 - close enough to the error red that the
+    // border nearly stopped meaning one thing). Trimming each step to its own
+    // gamut maximum fixes the hue and **breaks the ladder's ordering**: a hue
+    // whose maximum falls below the previous step's chroma turns the ramp
+    // downhill (measured on a dark page: step 5 at 0.1723, step 6 trimmed to
+    // 0.1681). The authored chromas are strictly increasing, so scaling every
+    // step by the **same** factor preserves that ordering exactly and moves the
+    // hue not at all - the cost is a slightly quieter ladder, which is the
+    // property this ramp can afford to give up.
+    // ... and it is taken over the levels that **carry a colour claim**. `off` is a
+    // near-grey by design (chroma 0.012), and on a pure-white page its own gamut
+    // maximum is 0 - letting it set the scale collapses the whole ladder to greys
+    // (measured: every level at chroma 0.0000 on `#ffffff`), which is the "ramp that
+    // only works on one page" failure this module exists to prevent. A uniform scale
+    // over the chromatic levels keeps their ordering strictly rising, and each level
+    // is then trimmed to its own maximum, which only bites the near-grey one.
+    let chroma_scale = (0..RAMPS.len())
+        .filter(|index| chromas[*index] >= 0.03)
+        .map(|index| {
+            let lightness = if use_probe {
+                start + direction * (base_lightness[index] - base_lightness[0]).abs() * reach_scale
+            } else {
+                base_lightness[index]
+            };
+            let maximum =
+                super::panels::max_chroma_in_gamut(lightness.clamp(0.0, 1.0), RAMPS[index].0);
+            (maximum / chromas[index]).min(1.0)
+        })
+        .fold(1.0_f64, f64::min);
     for (index, (hue, _)) in RAMPS.iter().enumerate() {
         let authored = base_lightness[index];
         let lightness = if use_probe {
-            start + direction * (authored - base_lightness[0]).abs() * scale
+            start + direction * (authored - base_lightness[0]).abs() * reach_scale
         } else {
             authored
         };
-        let chroma = chromas[index];
-        let color = super::panels::from_oklch(lightness.clamp(0.0, 1.0), chroma, *hue);
+        let lightness = lightness.clamp(0.0, 1.0);
+        let chroma = (chromas[index] * chroma_scale)
+            .min(super::panels::max_chroma_in_gamut(lightness, *hue));
+        let color = super::panels::from_oklch(lightness, chroma, *hue);
         let (lightness, chroma, hue) = super::panels::oklch_of(color);
         out[index] = Level {
             color: Color::Rgb(color.r, color.g, color.b),

@@ -442,6 +442,96 @@ fn the_system_palette_ramp_is_ordered_both_ways() {
     }
 }
 
+// Verifies: gh #379 gap 2 (the "hue shifts on clamp" half, on the border ladder) -
+// **every level keeps its authored hue.**
+//
+// The authored hues are the ramp's contract: `off`..`max` sweeps 231 -> 45 degrees so
+// the border reads as one thing warming up, and `max` sits 25 degrees off the error red
+// on purpose (`max_thinking_is_not_the_error_colour`). A **channel** clamp - what
+// `oklab_to_rgb` does - rewrites the ratios as it desaturates, so on a light page the
+// far end arrives at a different hue: measured on the pre-fix code, `max` wanted 45.0
+// and came out at **38.4**, which is most of that 25-degree margin.
+//
+// Asserted against the **authored** RAMPS table rather than a remembered list, and the
+// tolerance is 1 degree: the trim lands where one channel is exactly at the gamut
+// boundary, so the other two channels' 8-bit rounding decides the residual (~0.4
+// degrees measured).
+#[test]
+fn every_level_keeps_its_authored_hue() {
+    use lca_tui::engine::colors::RgbColor;
+    // The authored hue per level, from `thinking.rs`'s RAMPS table.
+    const AUTHORED_HUE: [f64; 7] = [231.49, 231.49, 231.49, 263.25, 295.00, 337.50, 45.00];
+    // And their authored chromas, from the same table.
+    const AUTHORED_CHROMA: [f64; 7] = [0.012, 0.045, 0.090, 0.130, 0.155, 0.172, 0.185];
+    for (scheme, backgrounds) in [
+        (
+            ColorScheme::Dark,
+            vec![
+                None,
+                Some(RgbColor {
+                    r: 0x00,
+                    g: 0x2b,
+                    b: 0x36,
+                }),
+                Some(RgbColor {
+                    r: 0x1a,
+                    g: 0x1b,
+                    b: 0x26,
+                }),
+            ],
+        ),
+        (
+            ColorScheme::Light,
+            vec![
+                None,
+                Some(RgbColor {
+                    r: 0xfd,
+                    g: 0xf6,
+                    b: 0xe3,
+                }),
+                Some(RgbColor {
+                    r: 255,
+                    g: 255,
+                    b: 255,
+                }),
+            ],
+        ),
+    ] {
+        for background in backgrounds {
+            let ladder = levels(background, scheme);
+            for (index, level) in ladder.iter().enumerate() {
+                // **Hue fidelity is only meaningful where the colour is chromatic.**
+                // At `off`'s chroma (0.012) the 8-bit quantisation alone moves the
+                // measured hue by ~2.4 degrees, so asking for it there would be
+                // asking the rounding to be exact. From `minimal` (0.045) up, the
+                // colour is a claim and the hue is asserted.
+                if AUTHORED_CHROMA[index] < 0.03 {
+                    assert!(
+                        level.chroma <= 0.03,
+                        "{scheme:?} level {index}: a near-grey level stays a near-grey \
+                         (measured {:.4})",
+                        level.chroma
+                    );
+                    continue;
+                }
+                let shift = (level.hue - AUTHORED_HUE[index] + 180.0).rem_euclid(360.0) - 180.0;
+                // 2 degrees, not 1: at 0.045 chroma the three channels are ~1/255
+                // apart in places, so 8-bit rounding alone accounts for ~1.4 degrees.
+                // The pre-fix defect was **6.6** degrees at the far end (`max` on a
+                // light page), which this bound still excludes by a factor of three.
+                assert!(
+                    shift.abs() <= 2.0,
+                    "{scheme:?} level {index} (bg {background:?}): the border is \
+                     {shift:+.2} degrees off its authored {:.2} (measured {:.2}) - a \
+                     channel clamp rotated it",
+                    AUTHORED_HUE[index],
+                    level.hue
+                );
+            }
+        }
+    }
+}
+
 /// No background reported: the levels still resolve, and still order.
 ///
 /// The panels go transparent in this case (`Color::Default`); the border must

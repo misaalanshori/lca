@@ -141,15 +141,64 @@ pub(crate) fn oklch_of(color: RgbColor) -> (f64, f64, f64) {
     (l, chroma, hue)
 }
 
-/// OKLab → sRGB, clamped into gamut. The inverse of [`rgb_to_oklab`].
-fn oklab_to_rgb(l: f64, a: f64, b: f64) -> RgbColor {
+/// The largest OKLCH chroma at `lightness`/`hue` that converts **without any
+/// channel leaving `0..=1`**.
+///
+/// Gh #379 gap 2's second half: `oklab_to_rgb` clamps each **channel**, and a
+/// channel clamp is not a gamut map - it rotates the hue as it desaturates.
+/// Measured on the shipped code, a `userMessageBg` derived from Solarized Light
+/// (`#fdf6e3`) landed **2.3 degrees** off its family hue, and one derived from pure
+/// white **11.3 degrees** off; the light thinking ramp's `max` (hue 45) came out at
+/// **38.4**, which is close enough to the error red that the border nearly stopped
+/// meaning one thing.
+///
+/// The rule is the same one [`super::accents::max_chroma_at`] applies to the accents:
+/// bisect **chroma only** along the fixed hue ray, because lightness and hue are
+/// authored and only the chroma is in question. This is a strict variant of that
+/// function: the accents' version accepts a candidate whose *round trip* is close
+/// enough, which is satisfied even by a colour whose blue channel had to be clamped,
+/// so it overshoots at the very lightnesses a light terminal uses. Here the test is
+/// the raw linear channel before encoding, which is what "in gamut" means.
+#[must_use]
+pub(crate) fn max_chroma_in_gamut(lightness: f64, hue: f64) -> f64 {
+    let radians = hue.to_radians();
+    let in_gamut = |chroma: f64| {
+        let (r, g, b) = oklab_to_linear(lightness, chroma * radians.cos(), chroma * radians.sin());
+        (0.0..=1.0).contains(&r) && (0.0..=1.0).contains(&g) && (0.0..=1.0).contains(&b)
+    };
+    let mut low = 0.0_f64;
+    let mut high = 0.5_f64;
+    for _ in 0..60 {
+        let mid = (low + high) / 2.0;
+        if in_gamut(mid) {
+            low = mid;
+        } else {
+            high = mid;
+        }
+    }
+    low
+}
+
+/// OKLab → the three **linear** sRGB channels, before gamma encoding.
+///
+/// Split out of [`oklab_to_rgb`] so the gamut test can ask the question the clamp
+/// hides: a value of `1.04` is out of gamut, and clamping it first would say it was
+/// in.
+fn oklab_to_linear(l: f64, a: f64, b: f64) -> (f64, f64, f64) {
     let l_ = l + 0.396_337_78 * a + 0.215_803_76 * b;
     let m_ = l - 0.105_561_346 * a - 0.063_854_17 * b;
     let s_ = l - 0.089_484_18 * a - 1.291_485_5 * b;
     let (l3, m3, s3) = (l_ * l_ * l_, m_ * m_ * m_, s_ * s_ * s_);
-    let r = 4.076_741_7 * l3 - 3.307_711_6 * m3 + 0.230_969_94 * s3;
-    let g = -1.268_438 * l3 + 2.609_757_4 * m3 - 0.341_319_38 * s3;
-    let b = -0.004_196_086_3 * l3 - 0.703_418_6 * m3 + 1.707_614_7 * s3;
+    (
+        4.076_741_7 * l3 - 3.307_711_6 * m3 + 0.230_969_94 * s3,
+        -1.268_438 * l3 + 2.609_757_4 * m3 - 0.341_319_38 * s3,
+        -0.004_196_086_3 * l3 - 0.703_418_6 * m3 + 1.707_614_7 * s3,
+    )
+}
+
+/// OKLab → sRGB, clamped into gamut. The inverse of [`rgb_to_oklab`].
+fn oklab_to_rgb(l: f64, a: f64, b: f64) -> RgbColor {
+    let (r, g, b) = oklab_to_linear(l, a, b);
     let encode = |v: f64| {
         let v = v.clamp(0.0, 1.0);
         let out = if v <= 0.003_130_8 {
@@ -190,7 +239,16 @@ pub(crate) fn panel(
     // (Solarized's teal, Gruvbox's brown) keeps that character, and a neutral
     // one contributes nothing.
     let background_chroma = ba.hypot(bb) * BACKGROUND_CHROMA_KEEP;
-    let chroma = family.chroma.max(background_chroma);
+    // Gh #379 gap 2: **the tint is gamut-mapped along its own hue ray, not clamped
+    // by channel.** A light terminal's surfaces sit near the top of sRGB, where the
+    // family's nominal chroma does not fit; the old path clamped each channel after
+    // conversion and the clamp rotated the hue (measured: 2.3 degrees on Solarized
+    // Light, 11.3 on pure white - enough to make "blue" read as violet, which is the
+    // issue's own complaint about hue shifts).
+    let chroma = family
+        .chroma
+        .max(background_chroma)
+        .min(max_chroma_in_gamut(stepped, family.hue));
     let radians = family.hue.to_radians();
     let rgb = oklab_to_rgb(stepped, chroma * radians.cos(), chroma * radians.sin());
     if rgb == background {
