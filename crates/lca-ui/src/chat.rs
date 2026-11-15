@@ -147,6 +147,10 @@ pub struct Chat {
     /// Whether a background `/compact` is summarizing (the interface stays
     /// responsive while it does; the separator says `Working`).
     pub compacting: bool,
+    /// Gh #601: whether a branch summary is running. Its own flag rather than
+    /// reusing `compacting`, because the separator paints a different state for
+    /// each (and the queue flush a compaction owes is not a summary's).
+    pub summarizing_branch: bool,
     /// Gh #496: whether the *current* compaction already left its transcript
     /// marker, so a duplicate `CompactionEnded` (a retried attempt) does not
     /// append a second row for one compaction. Cleared by `CompactionStarted`,
@@ -508,6 +512,7 @@ impl Chat {
             turn_tab: None,
             deferred_host_session: None,
             compacting: false,
+            summarizing_branch: false,
             compaction_marked: false,
             turn_error_painted: false,
             turn_status: None,
@@ -774,7 +779,7 @@ mod startup_header_wired_tests;
 pub(crate) mod tests;
 #[cfg(test)]
 #[path = "chat_tests_support.rs"]
-mod tests_support;
+pub(crate) mod tests_support;
 #[cfg(test)]
 #[path = "usage_tests.rs"]
 mod usage_tests;

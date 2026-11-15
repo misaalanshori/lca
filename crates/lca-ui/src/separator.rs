@@ -51,6 +51,11 @@ pub enum SeparatorState {
         /// Why the compaction started.
         reason: CompactionReason,
     },
+    /// A branch summary is running (gh #601): the user pressed `s` in the
+    /// `/tree` navigator, which spends one provider call on the path they are
+    /// leaving. The state word leads, so a narrow row drops the rest rather than
+    /// the state - the same priority [`SeparatorState::Compacting`] uses.
+    BranchSummary,
 }
 
 /// Why a compaction started (gh #388 gap 2).
@@ -130,6 +135,14 @@ impl Separator {
     /// Say a compaction started, and why (gh #388 gap 2).
     pub fn compacting(&mut self, reason: CompactionReason) {
         self.state = SeparatorState::Compacting { reason };
+    }
+
+    /// Say a branch summary started (gh #601). Its own state rather than
+    /// `Working`, because the row has to say *what* the model call is for: a
+    /// user who pressed `s` and then sees only `Working` cannot tell a summary
+    /// from an ordinary turn.
+    pub fn branch_summarizing(&mut self) {
+        self.state = SeparatorState::BranchSummary;
     }
 
     /// Say the turn ended (or nothing is running): the rest state. pi
@@ -291,6 +304,14 @@ impl Separator {
                 border.clone(),
                 border.clone(),
                 format!("Compacting ({})", reason.word()),
+            ),
+            // Gh #601: the same working row (it is a model round-trip) and the
+            // state word first, so a narrow row keeps `Summarizing` and drops the
+            // rest - the truncation priority `status_text` already implements.
+            SeparatorState::BranchSummary => (
+                border.clone(),
+                border.clone(),
+                "Summarizing branch".to_string(),
             ),
             SeparatorState::Retrying {
                 attempt,

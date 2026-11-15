@@ -774,6 +774,12 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> i32 {
         if chat.poll_compact() {
             frames.request_stream();
         }
+        // ...and a branch summary started from `/tree` (gh #601): one provider
+        // call on a host thread, polled here so the separator can say
+        // `Summarizing branch` for its whole duration.
+        if chat.poll_branch_summary() {
+            frames.request_stream();
+        }
         // ...and a background `/mcp login`: the browser flow outlives
         // the command that started it.
         if crate::chat_commands::poll_mcp(&mut chat) {

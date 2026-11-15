@@ -31,7 +31,10 @@ pub use assemble::{
     attachment_hashes, read_attachment_async, stage_image, store_image_bytes,
     store_image_bytes_async,
 };
-pub use compact::{MAX_TRACKED_FILES, SYSTEM_PROMPT_CHANGE_TYPE, compact_now, compaction_reserve};
+pub use compact::{
+    MAX_TRACKED_FILES, SYSTEM_PROMPT_CHANGE_TYPE, compact_now, compaction_reserve,
+    summarize_branch_now,
+};
 pub use ext_provider::ExtensionProvider;
 pub use registry::{
     BUILTIN_COMMANDS, BUILTIN_TOOL_ALIASES, BUILTIN_TOOLS, CollisionReport, ExtensionRegistry,

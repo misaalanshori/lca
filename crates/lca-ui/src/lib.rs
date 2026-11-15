@@ -52,6 +52,8 @@ mod chat_queue;
 mod chat_render;
 mod chat_search;
 mod chat_session_commands;
+// Gh #601: the branch-summary verb's interface half (start + poll).
+mod chat_branch_summary;
 mod chat_setting_cycle;
 mod chat_settings_footer;
 pub mod chat_shell;
@@ -134,7 +136,9 @@ pub use state::{
     TreeFilterMode, TreeRow, TreeRowKind, TurnChannels, TurnRunner, UiHooks, UiOptions, UiState,
     display_path, sanitize_block, sanitize_text,
 };
-pub use state::{CompactPoll, CompactState};
+pub use state::{
+    BranchSummaryPoll, BranchSummaryStart, BranchSummaryState, CompactPoll, CompactState,
+};
 pub use state_persona::{PersonaApply, PersonaBundle, PersonaCheck, PersonaList};
 pub use theme::Theme;
 pub use transcript::{Entry, EntryHit, ToolStatus, Transcript, image_label};

@@ -18,7 +18,7 @@ use std::path::PathBuf;
 
 /// One structured tree row for navigator tests (gh #231): a user
 /// row at `depth` unless the kind says otherwise.
-pub(super) fn tree_row(id: &str, depth: usize, text: &str) -> crate::state::TreeRow {
+pub(crate) fn tree_row(id: &str, depth: usize, text: &str) -> crate::state::TreeRow {
     crate::state::TreeRow {
         id: id.to_string(),
         depth,
@@ -77,7 +77,7 @@ pub(crate) fn options() -> UiOptions {
     }
 }
 
-pub(super) fn chat() -> Chat {
+pub(crate) fn chat() -> Chat {
     Chat::new(options(), Arc::new(KeybindingsManager::new()))
 }
 

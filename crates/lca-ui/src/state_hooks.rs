@@ -18,8 +18,8 @@ use std::sync::Arc;
 use lca_protocol::CommandEffect;
 
 use crate::state::{
-    BugReview, CompactState, DisplayTuning, ForkReport, GrantEntry, LoginNext, ModelRow,
-    ReloadReport, ScopedModelRow, ShellEvent, TrustChoice,
+    BranchSummaryState, BugReview, CompactState, DisplayTuning, ForkReport, GrantEntry, LoginNext,
+    ModelRow, ReloadReport, ScopedModelRow, ShellEvent, TrustChoice,
 };
 
 /// How the input editor invokes a registered slash command.
@@ -72,6 +72,20 @@ pub type McpPoll = Arc<dyn Fn() -> Option<String> + Send + Sync>;
 /// `Done` on read (like `poll_login`'s `take()`), so a finished
 /// compaction is reported once rather than on every tick.
 pub type CompactPoll = Arc<dyn Fn() -> CompactState + Send + Sync>;
+
+/// What a background branch summary is doing (gh #601): the `CompactPoll`
+/// shape one verb over. The hook **consumes** its `Done` on read, so a
+/// finished summary is reported once rather than on every tick.
+pub type BranchSummaryPoll = Arc<dyn Fn() -> BranchSummaryState + Send + Sync>;
+
+/// Start a branch summary for the abandoned tip `record_id` (gh #601).
+///
+/// The hook **spawns and returns immediately** - `Some(reason)` is an error text
+/// for the case where the host cannot even start the work (no provider, no
+/// compaction world), and the running state is already set by the time it
+/// returns. The answer arrives through [`BranchSummaryPoll`], because the
+/// interface has to paint the state *before* the model call finishes.
+pub type BranchSummaryStart = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 
 /// The host's answer to an inspection: `(confirmed, )` and back comes the notice
 /// to show. `false` must leave nothing on disk (gh #411 design point 4).

@@ -24,15 +24,16 @@ pub use crate::state_modals::{
 };
 
 pub use crate::state_hooks::{
-    BranchHere, BugResolve, CacheMissNotice, ClipboardFilesReader, ClipboardReader,
-    ClipboardWriter, CloneSession, CommandInvoker, CompactPoll, CurrentSessionId, DeleteSession,
-    DisplayTuningHook, DoubleEscapeAction, ExternalEditor, ForkAt, ForkAtRecord, GrantList,
-    GrantRevoke, InteractiveShell, ListLabels, LoadAttachment, LoginCancel, LoginComplete,
-    LoginConfirm, LoginPick, LoginPoll, LoginRequest, McpAction, McpPoll, ModelCycle, ModelList,
-    ModelSave, NewSession, OpenUrl, ProjectSettingPersist, PromptTemplates, RegionInteractor,
-    RegionRenderer, Reload, RenameSession, SaveScopedModels, ScopedModels, ScreenModePersist,
-    SessionList, SetLabel, SettingPersist, ShellHandle, ShellRunner, StageBug, SwitchConfirm,
-    SwitchSession, ThinkingOffered, ThinkingSave, ThinkingSetter, TrustApply, TrustNeeded,
+    BranchHere, BranchSummaryPoll, BranchSummaryStart, BugResolve, CacheMissNotice,
+    ClipboardFilesReader, ClipboardReader, ClipboardWriter, CloneSession, CommandInvoker,
+    CompactPoll, CurrentSessionId, DeleteSession, DisplayTuningHook, DoubleEscapeAction,
+    ExternalEditor, ForkAt, ForkAtRecord, GrantList, GrantRevoke, InteractiveShell, ListLabels,
+    LoadAttachment, LoginCancel, LoginComplete, LoginConfirm, LoginPick, LoginPoll, LoginRequest,
+    McpAction, McpPoll, ModelCycle, ModelList, ModelSave, NewSession, OpenUrl,
+    ProjectSettingPersist, PromptTemplates, RegionInteractor, RegionRenderer, Reload,
+    RenameSession, SaveScopedModels, ScopedModels, ScreenModePersist, SessionList, SetLabel,
+    SettingPersist, ShellHandle, ShellRunner, StageBug, SwitchConfirm, SwitchSession,
+    ThinkingOffered, ThinkingSave, ThinkingSetter, TrustApply, TrustNeeded,
 };
 
 /// A one-line description of the running turn (NFR-28: state also has a
@@ -117,6 +118,24 @@ pub use crate::mcp_types::{
     McpBeginSignIn, McpCancelSignIn, McpDetail, McpList, McpServerDetail, McpServerRow,
     McpSnapshot, McpSubmitRedirect, McpToolRow,
 };
+
+/// What a background branch summary is doing (gh #601).
+///
+/// The `/tree` navigator triggers a summary on the interface thread and the
+/// call itself runs on a host thread, so the interface paints a running state
+/// *before* the answer exists. This is [`CompactState`]'s shape one verb over:
+/// `Running` raises the separator, `Done` posts the notice (or the provider
+/// error, which is never swallowed) and rests it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum BranchSummaryState {
+    /// Nothing in flight.
+    #[default]
+    Idle,
+    /// A provider call for the abandoned path is running now.
+    Running,
+    /// Finished - or failed; the string is the notice to show either way.
+    Done(String),
+}
 
 /// The background compaction's state.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -583,6 +602,12 @@ pub struct UiHooks {
     /// Poll a background `/compact`: `Running` raises the working state,
     /// `Done` posts the summary (or the refusal) as a notice and rests it.
     pub poll_compact: Option<CompactPoll>,
+    /// Start a branch summary for the abandoned tip (gh #601): spawns and
+    /// returns immediately, `Some` carrying a reason it could not start.
+    pub start_branch_summary: Option<BranchSummaryStart>,
+    /// Poll the branch summary: `Running` raises the separator's own state,
+    /// `Done` posts the notice (or the named provider error) and rests it.
+    pub poll_branch_summary: Option<BranchSummaryPoll>,
     /// Cancel the background login/identity step (R4), called on Escape
     /// while the waiting modal is open.
     pub cancel_login: Option<LoginCancel>,

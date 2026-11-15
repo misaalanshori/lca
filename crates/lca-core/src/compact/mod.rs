@@ -186,6 +186,110 @@ pub(super) async fn compact_candidate(request: CompactRequest<'_>) -> Result<Str
     Ok(summary)
 }
 
+/// Summarize an **abandoned path** and record it (gh #601): the live producer
+/// the branch-summary record has never had.
+///
+/// The pieces this rides on already exist - the replay card
+/// (`transcript/compaction_card.rs`), the context injection
+/// (`assemble`'s `Record::BranchSummary` arm), and
+/// `SessionStore::summarize_branch`, which navigates **and** appends. What was
+/// missing is the verb: nothing in `lca-cli` or `lca-ui` ever asked for one, so
+/// the record could only be written by a test.
+///
+/// # What it summarizes (from the navigation point forward, not the whole log)
+///
+/// The candidate is the **ancestry of the abandoned tip from `record_id`
+/// forward** - the records the branch being left actually learned. Reusing
+/// `/compact`'s range instead would summarize the *live* history and put its
+/// lessons on the wrong branch. The walk is `records` ordered by the resolved
+/// display view, filtered to those the tip's ancestry reaches; the same
+/// `contains` test `summarize_branch` uses to refuse a missing target, so the
+/// two cannot disagree about what "exists" means.
+///
+/// # The budget is `/compact`'s, not a second one
+///
+/// `CompletionRequest.extras["max-tokens"]` is stamped by the **backend**, from
+/// the session's model window (`ext_provider::summarization_budget`), and the
+/// interface applies it on every model change. So this call asks the same
+/// question `/compact` asks, through the same object: a second derivation here
+/// would be a second owner of a session-scoped fact and would drift from the
+/// model the session is actually running (gh #594's lesson, one verb over).
+///
+/// # Failure names the error
+///
+/// A provider failure returns `Err(reason)` **naming it** and writes nothing:
+/// the interface shows a fault line, so a summary that did not happen is a
+/// visible fact rather than a silently absent record (gh #594/#169's rule).
+pub fn summarize_branch_now(
+    store: Arc<SessionStore>,
+    session: Session,
+    extensions: Arc<ExtensionRegistry>,
+    completion_backend: Option<Arc<dyn lca_tools::CompletionBackend>>,
+    record_id: &str,
+) -> Result<String, String> {
+    let record_id = record_id.to_string();
+    drive_blocking(async move {
+        let Some(strategy) = extensions.compaction_strategy().cloned() else {
+            return Err(
+                "no compaction extension is enabled: a branch summary needs the same \
+                 summarization strategy /compact uses (FR-SESS-5)"
+                    .to_string(),
+            );
+        };
+        // **No backend requirement.** `/compact` works with `None` too: the
+        // strategy reaches the provider through its own `completion` capability
+        // (and falls back to a mechanical summary without one). Requiring one
+        // here would make the verb less capable than the verb it is modelled on.
+        //
+        // The backend, when present, is **drained** after the call: it is the
+        // session's one completion handle, and a caller that causes a call owns
+        // the usage it produced. Leaving it would make the next `/compact`
+        // report this summary's tokens as its own (the mistake #49's
+        // per-call drains exist to prevent).
+        let _ = completion_backend.as_ref();
+        let read = store
+            .read_with(&session, ViewMode::Display)
+            .map_err(|err| format!("cannot read the session: {err}"))?;
+        // The Display view is the **live chain** the reader sees: a linear
+        // sequence ending at the live tip. Navigating to `record_id` cuts
+        // everything after it, so that suffix **is** the abandoned path -
+        // "from the navigation point forward", as the issue puts it. Summarizing
+        // the prefix instead would put the *kept* history's lessons on the
+        // abandoned branch, which is the wrong half.
+        let Some(at) = read
+            .records
+            .iter()
+            .position(|record| record.id() == Some(record_id.as_str()))
+        else {
+            return Err(format!("no record with id {record_id} in this session"));
+        };
+        let candidate: Vec<Record> = read.records[at + 1..]
+            .iter()
+            .filter(|record| record.id().is_some())
+            .cloned()
+            .collect();
+        if candidate.is_empty() {
+            return Err("nothing to summarize: the branch has no records after it".to_string());
+        }
+        let summary = strategy.compact(&candidate).await.map_err(|err| {
+            format!(
+                "the branch summary failed in strategy `{}`: {err}",
+                strategy.name()
+            )
+        })?;
+        if summary.trim().is_empty() {
+            return Err("the branch summary came back empty; nothing was recorded".to_string());
+        }
+        if let Some(backend) = completion_backend.as_ref() {
+            let _ = backend.take_usage();
+        }
+        store
+            .summarize_branch(&session, &record_id, summary.trim())
+            .map_err(|err| format!("cannot write the branch summary record: {err}"))?;
+        Ok(summary.trim().to_string())
+    })
+}
+
 /// The effective token reserve (gh #36 phase 1): the configured
 /// absolute reserve, or the stopgap's fraction derivation when unset
 /// (0), so the default behavior is the old threshold by construction.

@@ -168,6 +168,17 @@ impl Chat {
                     picker.set_filter(picker.filter.cycle_forward());
                     self.tree_picker = Some(picker);
                 }
+                // Gh #601: `s` summarizes the branch being left, then leaves - the
+                // explicit trigger the owner's decision names (an explicit key, never
+                // automatic-on-navigation: the summary is a model call the user pays
+                // for, so it is asked for).
+                Some("s") => {
+                    if let Some(id) = picker.selected_id() {
+                        self.summarize_branch_and_replay(&id);
+                    } else {
+                        self.tree_picker = Some(picker);
+                    }
+                }
                 // gh #231: `e` edits the selected row's bookmark.
                 Some("e") => {
                     let current = picker.visible_label(picker.selected).unwrap_or_default();

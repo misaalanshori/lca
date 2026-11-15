@@ -34,8 +34,7 @@ pub(crate) fn save_hint(
 const HINT_FILTER: &str = "↑↓ move · enter apply · esc close · type to filter";
 /// The cells the tree's cursor prefix takes from a row (`" > "`).
 const TREE_ROW_INSET: usize = 3;
-const HINT_TREE: &str =
-    "↑↓ move · ←/→ fold · alt+←/→ branch · f filter · e label · enter show · esc close";
+const HINT_TREE: &str = "↑↓ move · ←/→ fold · alt+←/→ branch · s summarize · f filter · e label · enter show · esc close";
 const HINT_GRANTS: &str = "↑↓ move · enter revoke · esc close";
 const HINT_THEME: &str = "↑↓ preview · enter apply · esc restore";
 const HINT_SETTINGS_EDIT: &str = "type the value · enter apply · esc cancel";

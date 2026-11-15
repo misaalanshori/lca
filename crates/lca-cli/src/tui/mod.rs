@@ -22,6 +22,8 @@
 mod attach;
 // Gh #543: the live cells and the model/agent-config resolution.
 mod cells;
+// Gh #601: the `/tree` `s` key's host side (start + poll).
+mod branch_summary;
 mod clipboard;
 mod close;
 mod commands;
@@ -291,6 +293,9 @@ pub(crate) struct Ui {
     /// The background `/compact`'s state, read by the interface's
     /// `poll_compact` hook so a summarization call never blocks it.
     compact_state: Arc<Mutex<lca_ui::CompactState>>,
+    /// The background `/tree` branch summary's state (gh #601): the same shape
+    /// one verb over, because that call is a model round-trip too.
+    branch_summary_state: Arc<Mutex<lca_ui::BranchSummaryState>>,
     /// #227: a finished background install's notice, taken once by
     /// the interface's `poll_install` hook.
     hub_install: Arc<Mutex<hub::InstallSlot>>,
@@ -790,6 +795,7 @@ impl Ui {
             login_pending: Arc::new(Mutex::new(None)),
             login_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             compact_state: Arc::new(Mutex::new(lca_ui::CompactState::Idle)),
+            branch_summary_state: Arc::new(Mutex::new(lca_ui::BranchSummaryState::Idle)),
             hub_install: Arc::new(Mutex::new(hub::InstallSlot::default())),
             login_handle: Arc::new(Mutex::new(None)),
             login_manual_offered: Arc::new(Mutex::new(false)),

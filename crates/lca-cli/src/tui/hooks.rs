@@ -675,6 +675,17 @@ impl Ui {
                     }
                 }) as lca_ui::CompactPoll)
             },
+            // Gh #601: the `/tree` `s` key's host side. Same shape as
+            // `poll_compact` above - the closure spawns and returns, the poll
+            // hands a finished state over once.
+            start_branch_summary: {
+                let (start, _) = self.branch_summary_hooks();
+                Some(start)
+            },
+            poll_branch_summary: {
+                let (_, poll) = self.branch_summary_hooks();
+                Some(poll)
+            },
             // gh #12: the transcript's pre-parse markdown pipeline rides
             // whatever native extensions provide, in registration order.
             markdown_transformers: collect_markdown_transformers(&self.registry().handles()),
