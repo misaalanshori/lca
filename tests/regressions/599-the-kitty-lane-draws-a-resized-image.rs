@@ -454,3 +454,45 @@ fn a_png_passes_through_without_a_derivative() {
         "no derivative was made for a format kitty already sends"
     );
 }
+
+// Verifies: gh #599 - **the window crop's band arithmetic uses the payload's height,
+// not the wire bytes'.** A kitty placement's `y=`/`h=` are pixels of the texture the
+// terminal holds, which is now the derived PNG (a different size from the wire JPEG),
+// so a scrolled band sliced against the wire height would be misaligned by up to a
+// cell row. The rows read the number the crop itself reads, and it is not the wire's.
+#[test]
+fn the_crop_reads_the_derived_payload_height() {
+    let (chat, result) = chat_with_resized_photo("crop");
+    let (_, wire_bytes) = wire(&result);
+    let wire_height = image::load_from_memory(wire_bytes)
+        .map(|image| image.height())
+        .expect("the wire JPEG decodes");
+    assert_eq!(wire_height, 853, "the wire bytes are 1280x853");
+    let width = 100;
+    // Paint the document first, exactly as a frame does, so the memo is warm.
+    let rows = chat
+        .transcript
+        .render_for_protocol(width, &chat.theme, ImageProtocol::Kitty);
+    assert!(rows.iter().any(|row| row.contains("\x1b_Ga=T")));
+    let heights = chat.transcript.image_blocks(width);
+    let derived = heights
+        .values()
+        .copied()
+        .next()
+        .expect("the image block is in the document");
+    assert_ne!(
+        derived, wire_height,
+        "the crop is sliced in the derived payload's pixels, not the wire JPEG's"
+    );
+    // The payload is the 60-cell box at the 9x18 estimate: 540x360.
+    assert_eq!(derived, 360, "the derived payload's own height");
+    // A cold read at a *different* width has no memo for it and falls back to the
+    // wire height, which is the same picture's aspect - the honest answer rather than
+    // an encode during a measurement.
+    let cold = chat.transcript.image_blocks(40);
+    assert_eq!(
+        cold.values().copied().next(),
+        Some(wire_height),
+        "a width nobody painted keeps the wire height"
+    );
+}
