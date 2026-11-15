@@ -48,6 +48,13 @@ Dates are UTC.
   is `/paste` and the right-button handler.
 
 ### Fixed
+- **A resumed session now shows the images tools returned, instead of only their text**
+  (gh #602, interface). `--resume` and `/tree` replayed every record kind except a
+  `tool-result`'s images: the bytes were on disk, `gc` kept them and `/export` named them,
+  but the transcript resolved only user and assistant attachments, so a picture a tool
+  showed came back as the card's text alone. The replay now loads those hashes too and
+  places the picture where the live turn did — after the tool card. A hash whose file is
+  gone keeps the record's own line, as before.
 - **A 256-colour terminal now keeps its palette instead of falling back to 24-bit
   escapes it cannot render** (gh #600, interface). `xterm-256color` with `COLORTERM` unset
   used to be handed `38;2;r;g;b`, which such a terminal shows as garbage or snaps to its

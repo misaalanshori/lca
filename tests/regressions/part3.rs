@@ -850,3 +850,7 @@ mod the_kitty_lane_draws_a_resized_image;
 // the frame, driven from outside both crates.
 #[path = "600-color-depth-tier.rs"]
 mod color_depth_tier;
+
+// Gh #602: a resumed session draws the tool-result images its replay used to drop.
+#[path = "602-a-resumed-session-draws-tool-images.rs"]
+mod a_resumed_session_draws_tool_images;

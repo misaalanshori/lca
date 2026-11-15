@@ -137,6 +137,7 @@ impl Transcript {
                     content,
                     duration_ms,
                     nested,
+                    images,
                     ..
                 } => {
                     let status = match status {
@@ -167,6 +168,32 @@ impl Transcript {
                         *duration_ms,
                         children,
                     );
+                    // Gh #602: **a tool's images replay too.** The live loop
+                    // (`chat_turn_events.rs`) pushes one image entry per
+                    // `ToolResult::images` *after* `finish_tool_with_id`, and this
+                    // arm used to destructure `nested, ..` and never load the hashes -
+                    // so a resumed session showed the card and no picture, while the
+                    // bytes were on disk (`gc`'s `referenced_attachments` walks them)
+                    // and `/export` named them. The push goes here, after the card,
+                    // because a resumed transcript must read like the one that
+                    // produced it (FR-UI-7).
+                    //
+                    // No dedupe across records: two records naming one hash produce
+                    // two entries, which is what the live transcript did. The
+                    // renderer's own id cache is what avoids a second upload, and a
+                    // *display* dedupe here would silently drop a row the live
+                    // transcript showed.
+                    //
+                    // A hash that does not resolve keeps today's behaviour: the
+                    // record's own text stands (it already carries the tool's line,
+                    // e.g. `[image image/jpeg, N bytes]`) and nothing is invented -
+                    // an absent image is a fact, not an error to paint.
+                    for hash in images {
+                        if let Some((media, bytes)) = attachment.and_then(|load| load(hash)) {
+                            let info = ImageInfo::new(media, &bytes);
+                            self.push_image(info, bytes);
+                        }
+                    }
                 }
                 // Gh #393: a card, not a wall of prose. The record still holds
                 // the full summary - this is the view.
