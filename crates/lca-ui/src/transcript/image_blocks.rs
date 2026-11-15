@@ -40,7 +40,7 @@ impl Transcript {
     /// produced, so this cannot disagree with the document it describes. Cheap: it
     /// only walks lengths, and only for entries that are images.
     #[must_use]
-    pub fn image_blocks(&self) -> std::collections::HashMap<usize, u32> {
+    pub fn image_blocks(&self, width: u16) -> std::collections::HashMap<usize, u32> {
         let mut heights = std::collections::HashMap::new();
         // **No `self.render(..)` here.** It looks like a cheap cache warm, but `render`
         // builds and returns the whole document - a clone of every row, per frame - just
@@ -57,8 +57,20 @@ impl Transcript {
             let Some((_, _, lines, _)) = cache.get(i).and_then(|slot| slot.as_ref()) else {
                 continue;
             };
-            if let Entry::Image { info, .. } = entry
-                && let Some(height) = info.height
+            if let Entry::Image { info, bytes } = entry
+                // Gh #599: a JPEG's block is drawn from a **derived PNG**, whose
+                // pixel height is what the terminal's texture actually is - the wire
+                // JPEG's height would put the band boundaries up to a cell row off. A
+                // cold memo (nobody painted this width) keeps the wire height, which
+                // is the same picture's aspect.
+                && let Some(height) = self
+                    .image_display
+                    .height_for(
+                        i,
+                        bytes,
+                        (width as usize).min(self.tuning.image_width_cells.max(1) as usize),
+                    )
+                    .or(info.height)
                 && height > 0
             {
                 // The header is the entry's first row, which is where the kitty
@@ -69,6 +81,19 @@ impl Transcript {
         }
         heights
     }
+    /// How many display derivatives this transcript has encoded (gh #599).
+    ///
+    /// A **test seam**, not API: "did the encoder run again" is invisible in the
+    /// painted bytes, and a per-frame re-encode is exactly the regression a
+    /// frame-shaped assertion cannot see. `doc(hidden)` and named `_for_test` for the
+    /// same reason [`lca_tui::widgets::image::image_cell_size`]'s sibling is - the row
+    /// that asks the question lives in another crate, which `cfg(test)` cannot reach.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn image_encodes_for_test(&self) -> usize {
+        self.image_display.encodes()
+    }
+
     /// The render-cache epoch (gh #324 gap 2).
     ///
     /// Exposed to tests only: the cell-size probe's whole claim is that it drops the

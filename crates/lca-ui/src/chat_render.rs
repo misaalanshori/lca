@@ -781,7 +781,7 @@ impl Chat {
         // It runs on the transcript's `BeforePlacements` stage so the header is still
         // an `a=T` block to parse; the crop's own output is a placement, so the final
         // stage has nothing left to rewrite for a cropped block.
-        let image_heights = self.transcript.image_blocks();
+        let image_heights = self.transcript.image_blocks(width);
         // The common case is "no image straddles an edge", so the crop returns an empty
         // vector rather than a copy of the document: a per-frame clone of a 400-row
         // transcript was measurable (and made a real-terminal row flaky under load).

@@ -358,7 +358,12 @@ pub fn clear_cell_pixels() {
 }
 
 /// The cell size an image occupies at `max_width` columns, at the live scale.
-fn image_cell_size(info: &ImageInfo, max_width: usize) -> (u32, u32) {
+///
+/// Public because the display derivative (gh #599) has to lay the same picture into
+/// the **same** `c=`/`r=` box the ladder will paint: a second implementation of this
+/// arithmetic in `lca-ui` would let the payload and the box disagree while every row
+/// still passed.
+pub fn image_cell_size(info: &ImageInfo, max_width: usize) -> (u32, u32) {
     image_cell_size_with(info, max_width, current_cell_pixels())
 }
 

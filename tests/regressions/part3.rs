@@ -840,3 +840,8 @@ mod paste_file_tier;
 // the behavioural rows live beside the router).
 #[path = "385-list-math-reaches-block-math.rs"]
 mod list_math_reaches_block_math;
+
+// Gh #599: a resized image draws on kitty through a **render-time PNG derivative**
+// (the wire JPEG, its hash and the record shape are untouched).
+#[path = "599-the-kitty-lane-draws-a-resized-image.rs"]
+mod the_kitty_lane_draws_a_resized_image;

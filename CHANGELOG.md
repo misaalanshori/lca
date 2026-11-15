@@ -60,6 +60,11 @@ Dates are UTC.
   following the turn for the rest of the session — new output would never appear on
   screen again. Closing now releases it, a resize re-typesets the match on the rows the
   new width produced, and a tab switch forgets the previous tab's search state.
+- **A photo a vision model resized now displays on kitty terminals instead of a
+  placeholder** (gh #599, interface). kitty's protocol has no format code for JPEG, so
+  the resized copy the model is sent — a JPEG — could only be labelled. The picture you
+  see is now derived for the pane at draw time from the bytes that were stored; nothing
+  new is saved, hashed, or sent, and iTerm2 is unchanged.
 - **The transcript search shows which match is current, and steps both ways** (gh #376,
   interface). The selected match paints bold-and-inverse and the rest underline
   (`Ctrl+R` previously painted one style for everything), the highlight closes only the

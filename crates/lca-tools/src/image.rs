@@ -162,6 +162,42 @@ pub(crate) fn read_image_result(
     }
 }
 
+/// A **display-sized PNG** from any image the `image` crate can decode (gh #599).
+///
+/// The kitty graphics protocol names no code for JPEG (gh #598), so a resized vision
+/// attachment - which [`downscale_image`] emits as JPEG q80 - could not be sent and
+/// took the placeholder: a label where a picture belongs. The terminal can draw a
+/// PNG, so the display path converts at **render** time instead of storing a second
+/// copy. The size is `cells × cell_pixels`: the `c=`/`r=` box the renderer chose,
+/// stretched to the terminal's own cell. That is the point of deriving rather than
+/// persisting - a display copy's correct size is the pane's, which the session cannot
+/// know when it writes the record (#599's measurement: 2.06x the wire JPEG at 60
+/// cells, 0.85x at 40).
+///
+/// Nothing is upscaled: [`image::DynamicImage::resize`] fits *within* the box, so a
+/// small picture keeps its own pixels and the terminal's `c=`/`r=` stretch does the
+/// scaling, exactly as a PNG's does today. Returns `None` when the bytes do not
+/// decode, so a caller falls back to what it has: a renderer never fails a frame
+/// because a picture would not decode.
+pub fn display_png(
+    bytes: &[u8],
+    cells: (u32, u32),
+    cell_pixels: (f64, f64),
+) -> Option<(Vec<u8>, u32)> {
+    let decoded = image::load_from_memory(bytes).ok()?;
+    let cell_w = cell_pixels.0.max(1.0);
+    let cell_h = cell_pixels.1.max(1.0);
+    let max_w = (f64::from(cells.0.max(1)) * cell_w).round().max(1.0) as u32;
+    let max_h = (f64::from(cells.1.max(1)) * cell_h).round().max(1.0) as u32;
+    let fitted = decoded.resize(max_w, max_h, image::imageops::FilterType::Triangle);
+    let height = fitted.height();
+    let mut png = Vec::new();
+    fitted
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .ok()?;
+    Some((png, height))
+}
+
 /// Encode clipboard RGBA rows as PNG (gh #126): the clipboard hands
 /// raw row-major bytes; the attachment store wants a real image file.
 /// Dimensions must be non-zero and match the row length, or the paste
@@ -190,6 +226,34 @@ pub fn clipboard_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Verifies: gh #599 - the display derivative is a real PNG of the requested
+    // cell box, and bytes that do not decode answer `None` (the renderer's
+    // fallback is the placeholder, not a failed frame).
+    #[test]
+    fn display_png_fits_the_cell_box_and_refuses_undecodable_bytes() {
+        let rgb = image::RgbImage::from_fn(400, 300, |x, y| {
+            image::Rgb([(x % 256) as u8, (y % 256) as u8, 90])
+        });
+        let mut jpeg = Vec::new();
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 80);
+        encoder.encode_image(&rgb).expect("encode");
+        // Two cells wide, one tall at the estimate: 18x18 px is the fitting box,
+        // and the aspect is preserved inside it (300/400 -> 13 rows of pixels).
+        let (png, height) = display_png(&jpeg, (2, 1), (9.0, 18.0)).expect("a JPEG decodes");
+        assert_eq!(
+            lca_protocol::sniff_image_media_type(&png),
+            Some("image/png")
+        );
+        let decoded = image::load_from_memory(&png).expect("the derivative decodes");
+        assert_eq!(decoded.width(), 18, "the box's pixel width");
+        assert_eq!(decoded.height(), 14, "and the aspect that fits inside it");
+        assert_eq!(height, 14, "the payload's height rides back for the crop");
+        assert!(
+            display_png(b"not an image at all", (2, 1), (9.0, 18.0)).is_none(),
+            "undecodable bytes are the caller's fallback, not a panic"
+        );
+    }
 
     // Verifies: gh #126 - clipboard RGBA rows encode to a PNG the
     // attachment store accepts (the mocked clipboard source: no

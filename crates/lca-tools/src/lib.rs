@@ -78,7 +78,7 @@ use lca_protocol::{ToolCall, ToolResult, ToolResultStatus};
 
 pub use image::{
     IMAGE_RESIZE_EXTRA, IMAGE_VISION_EXTRA, ImagePolicy, ImageResize, ImageVision, NO_VISION_NOTE,
-    clipboard_png,
+    clipboard_png, display_png,
 };
 
 /// Pi's line budget for `read` (`DEFAULT_MAX_LINES` in pi's

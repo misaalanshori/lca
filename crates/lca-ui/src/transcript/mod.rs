@@ -290,6 +290,10 @@ pub struct Transcript {
     /// the checklist row rather than create a card. The id is the only exact key:
     /// "the most recent running card" is the *parent*, which is still running.
     suppressed: std::collections::BTreeMap<Option<String>, String>,
+    /// The display derivatives of images kitty cannot transmit (gh #599), and
+    /// the encode census. A `RefCell`/`Cell` pair for the same reason the placement
+    /// cache is: `render` takes `&self`, and this is a rendering memo.
+    image_display: image_display::ImageDisplay,
     /// Per-entry render cache (R15): `None` means the entry must be
     /// rendered; a streaming append invalidates only the last entry, so a
     /// long transcript is not re-rendered from scratch on every delta.
@@ -359,6 +363,10 @@ impl Transcript {
         if self.tuning != *tuning {
             self.tuning = tuning.clone();
             self.invalidate();
+            // Gh #599: `image_width_cells` is the box a derivative is encoded for, so
+            // a tuning change makes the memo's pixels the wrong ones. The text epoch
+            // cannot see that; this can.
+            self.invalidate_image_display();
         }
     }
 
@@ -896,6 +904,24 @@ impl Transcript {
                 out.extend(lines.iter().cloned());
                 continue;
             }
+            // Gh #599: a JPEG has no kitty `f=` code (gh #598), so kitty gets a
+            // **display-size PNG** derived from the wire bytes and cached per entry.
+            // Beside the ladder rather than inside it: the encoder in `lca-tui` must
+            // stay codec-free, and the derivative needs the entry's identity to cache.
+            if let Entry::Image { info, bytes } = entry
+                && self.tuning.show_images
+                && let Some(rows) = self.image_display.kitty_lines_for(
+                    i,
+                    info,
+                    bytes,
+                    (width as usize).min(self.tuning.image_width_cells.max(1) as usize),
+                    protocol,
+                )
+            {
+                out.extend(rows.iter().cloned());
+                cache[i] = Some((width, self.cache_epoch, rows, 0));
+                continue;
+            }
             let mut lines = Vec::new();
             let thinking_rows = render_entry(
                 entry,
@@ -938,6 +964,7 @@ impl Transcript {
 
 mod compaction_card;
 mod image_blocks;
+mod image_display;
 pub use image_blocks::RowStage;
 mod measure;
 pub use compaction_card::Card;

@@ -139,6 +139,10 @@ fn apply_cell_size_report(chat: &mut crate::chat::Chat, data: &str) {
     // is stale by construction.
     if lca_tui::widgets::image::probe_cell_pixels(width, height) {
         chat.transcript.invalidate();
+        // Gh #599: a display derivative was encoded for the **old** cell pixels, and
+        // its box is cells × cell pixels - so the probe makes the memo stale even
+        // though the text cache's epoch already moved.
+        chat.transcript.invalidate_image_display();
     }
 }
 
