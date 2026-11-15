@@ -104,6 +104,29 @@ is capped at 4000 characters (and the strategy caps every excerpt at
 `<previous-summary>` tags with an iteration instruction, and the
 mechanical fallback carries it as "Earlier summary".
 
+## Branch summaries (gh #601)
+
+A `branch-summary` record is what an **abandoned path** learned, written
+when the user navigates away from a leaf. Its replay card and its context
+injection (`assemble` frames it as "abandoned branch summary: …") existed
+before the verb did: the record could only be written by a test. Now the
+`/tree` navigator's `s` key produces one:
+
+- **What triggers it.** An explicit key, never a prompt and never
+  automatic-on-navigation. A branch summary is one provider call the user
+  pays for, so it is asked for; automatic-on-leave stays a documented
+  **option nobody has turned on** until spending a call on every branch
+  change is an accepted cost.
+- **What it costs.** One provider call through the compaction world's
+  strategy (FR-SESS-5 has no second summarizing path), with
+  `extras["max-tokens"]` from this session's summarization budget - the
+  *same* derivation `/compact` uses (see [Summarization budget](#summarization-budget)),
+  not a second one. While it runs the separator says `Summarizing branch`.
+- **What it summarizes.** The records **after** the navigation point - the
+  suffix the branch cuts away, not the prefix it keeps. A failure names the
+  provider error on a fault line and writes no record, so a summary that did
+  not happen is visible rather than silently absent.
+
 ## File tracking (phase 3)
 
 Compaction records carry cumulative `read_files` / `modified_files`

@@ -119,6 +119,14 @@ const NON_OVERLAY_EXEMPTIONS: &[&str] = &[
     "picker_press",
     "turn_tab",
     "deferred_host_session",
+    // Gh #601: the record the branch summary will replay to when its poll settles.
+    // **Exempt, and it is the same class as `turn_tab`**: it is a deferred *navigation*
+    // destination, not a modal. A tab switch mid-summary must not drop it, or the
+    // summary finishes and the branch it belongs to is forgotten (the user's `s`
+    // press silently does nothing) - the opposite of the leak this registry
+    // prevents. The running *state* is `summarizing_branch`, a bool, which the row
+    // does not treat as overlay-shaped for the same reason `compacting` is not.
+    "branch_summary_target",
     // The host's own modal (gh #124). **Exempt, and not by convenience**: the host's
     // worker blocks on `respond.recv()` (see `crates/lca-cli/src/tui/mod.rs`), so
     // dropping this field without answering would hang an extension thread forever.

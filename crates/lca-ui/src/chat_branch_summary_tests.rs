@@ -202,3 +202,130 @@ fn the_tree_hint_names_the_summarize_key() {
         "the navigator's hint lists the key with a word for it: {frame}"
     );
 }
+
+// Verifies: gh #601 - **the branch happens *after* the summary, not before.**
+// Found in a real pane: the first cut of the key branched immediately, which cut
+// the display view at the navigation point, so the verb - reading that same view
+// milliseconds later - found nothing after it and *every* summary failed with
+// `nothing to summarize`. The row drives the order: after `s` the branch hook has
+// not been called, and after the poll's `Done` it has.
+#[test]
+fn the_branch_happens_only_after_the_summary_poll_settles() {
+    use std::sync::atomic::AtomicUsize;
+
+    let branches = std::sync::Arc::new(AtomicUsize::new(0));
+    let counter = branches.clone();
+    let mut opts = options();
+    opts.plain = false;
+    opts.hooks.session_tree = Some(std::sync::Arc::new(|| {
+        vec![tree_row("u1", 0, "first"), tree_row("a1", 1, "reply")]
+    }));
+    opts.hooks.branch_here = Some(std::sync::Arc::new(move |_id: &str| {
+        counter.fetch_add(1, Ordering::SeqCst);
+        Some(Vec::new())
+    }));
+    opts.hooks.start_branch_summary = Some(std::sync::Arc::new(|_id: &str| None));
+    // The replay re-reads through `switch_session` (no append): the store already
+    // wrote the branch-point inside `summarize_branch`.
+    let reopened = std::sync::Arc::new(AtomicUsize::new(0));
+    let counter2 = reopened.clone();
+    opts.hooks.current_session_id = Some(std::sync::Arc::new(|| "s1".to_string()));
+    opts.hooks.switch_session = Some(std::sync::Arc::new(move |_id: &str| {
+        counter2.fetch_add(1, Ordering::SeqCst);
+        Some(Vec::new())
+    }));
+    let state = std::sync::Arc::new(std::sync::Mutex::new(
+        crate::state::BranchSummaryState::Running,
+    ));
+    let slot = state.clone();
+    opts.hooks.poll_branch_summary = Some(std::sync::Arc::new(move || {
+        let mut guard = slot.lock().unwrap_or_else(|p| p.into_inner());
+        match guard.clone() {
+            crate::state::BranchSummaryState::Done(notice) => {
+                *guard = crate::state::BranchSummaryState::Idle;
+                crate::state::BranchSummaryState::Done(notice)
+            }
+            ongoing => ongoing,
+        }
+    }));
+    let mut chat = crate::chat::Chat::new(
+        opts,
+        std::sync::Arc::new(lca_tui::engine::keybindings::KeybindingsManager::new()),
+    );
+    chat.open_tree_picker();
+    chat.handle_key("s");
+    assert_eq!(
+        branches.load(Ordering::SeqCst),
+        0,
+        "`s` alone must not navigate: the summary reads the path it is leaving"
+    );
+    assert_eq!(reopened.load(Ordering::SeqCst), 0);
+    *state.lock().unwrap_or_else(|p| p.into_inner()) =
+        crate::state::BranchSummaryState::Done("summarized branch at u1".to_string());
+    assert!(chat.poll_branch_summary(), "the result is a repaint");
+    assert_eq!(
+        reopened.load(Ordering::SeqCst),
+        1,
+        "the display is re-read once the summary is written"
+    );
+    assert_eq!(
+        branches.load(Ordering::SeqCst),
+        0,
+        "and the UI writes no second branch-point: the store's summary already did"
+    );
+    let notice = chat.last_notice().unwrap_or_default();
+    assert!(
+        notice.contains("branched at") || notice.contains("summarized"),
+        "the frame says what happened: {notice}"
+    );
+}
+
+// Verifies: gh #601 - **the notice survives the branch.** Found in a real pane:
+// the summary finished, the branch replayed, and the user saw only
+// `branched at …` - the summary's own line was posted first and then wiped by
+// `replay_records`' transcript clear. The order is the contract.
+#[test]
+fn the_summary_notice_is_posted_after_the_replay() {
+    use std::sync::atomic::AtomicUsize;
+
+    let branches = std::sync::Arc::new(AtomicUsize::new(0));
+    let counter = branches.clone();
+    let mut opts = options();
+    opts.plain = false;
+    opts.hooks.session_tree = Some(std::sync::Arc::new(|| {
+        vec![tree_row("u1", 0, "first"), tree_row("a1", 1, "reply")]
+    }));
+    opts.hooks.branch_here = Some(std::sync::Arc::new(move |_id: &str| {
+        counter.fetch_add(1, Ordering::SeqCst);
+        Some(Vec::new())
+    }));
+    opts.hooks.start_branch_summary = Some(std::sync::Arc::new(|_id: &str| None));
+    let state = std::sync::Arc::new(std::sync::Mutex::new(
+        crate::state::BranchSummaryState::Running,
+    ));
+    let slot = state.clone();
+    opts.hooks.poll_branch_summary = Some(std::sync::Arc::new(move || {
+        let mut guard = slot.lock().unwrap_or_else(|p| p.into_inner());
+        match guard.clone() {
+            crate::state::BranchSummaryState::Done(notice) => {
+                *guard = crate::state::BranchSummaryState::Idle;
+                crate::state::BranchSummaryState::Done(notice)
+            }
+            ongoing => ongoing,
+        }
+    }));
+    let mut chat = crate::chat::Chat::new(
+        opts,
+        std::sync::Arc::new(lca_tui::engine::keybindings::KeybindingsManager::new()),
+    );
+    chat.open_tree_picker();
+    chat.handle_key("s");
+    *state.lock().unwrap_or_else(|p| p.into_inner()) =
+        crate::state::BranchSummaryState::Done("summarized branch at u1 · 42 chars".to_string());
+    assert!(chat.poll_branch_summary());
+    let notices = chat.transcript.notices().join("\n");
+    assert!(
+        notices.contains("summarized branch at u1"),
+        "the summary's own line survives the replay: {notices}"
+    );
+}

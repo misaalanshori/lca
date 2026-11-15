@@ -7,6 +7,13 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Added
+- **`s` in `/tree` summarizes the branch you are leaving before the fork** (gh #601,
+  interface). A branch summary - what an abandoned path learned, framed for the model
+  where the new branch continues - had a replay card and a context injection but no way
+  to produce one, so the record could only be written by a test. `s` in the `/tree`
+  navigator now runs one provider call on that branch, shows `Summarizing branch` while
+  it works, and leaves you at the fork. It is explicit on purpose: the call is yours to
+  pay for, never automatic on every navigation.
 - **The paste key now pastes copied *files*, not just images and text** (gh #403 gap 3,
   interface). Pi's paste ladder is **files → image → text**; LCA's was two tiers, so a
   file copied in Finder or Explorer and pasted gave "the clipboard holds no image" or

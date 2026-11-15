@@ -43,6 +43,7 @@ impl Chat {
             return false;
         }
         self.summarizing_branch = true;
+        self.branch_summary_target = Some(record_id.to_string());
         self.separator.branch_summarizing();
         true
     }
@@ -70,6 +71,29 @@ impl Chat {
             crate::state::BranchSummaryState::Done(notice) => {
                 self.summarizing_branch = false;
                 self.separator.idle();
+                // The notice lands **after** the replay, never before: branching
+                // clears the transcript (`replay_records`), so a notice posted
+                // first would be wiped by the very step that follows it - found
+                // in a real pane, where the summary finished and the user saw
+                // only `branched at …`.
+                // The **replay** is the "then leave", and it is a re-read, not a
+                // second navigation. `store.summarize_branch` already appended the
+                // branch-point: navigating again would write a *second* one, which
+                // orphans the summary the first one's chain carried - measured in a
+                // real pane, where the summary finished and the next turn's request
+                // carried no `abandoned branch summary` at all. So this re-reads the
+                // display view, which is what `switch_session` does for the current
+                // session (no append, no new id).
+                if let Some(target) = self.branch_summary_target.take()
+                    && let (Some(current), Some(switch)) = (
+                        self.world.options.hooks.current_session_id.as_ref(),
+                        self.world.options.hooks.switch_session.as_ref(),
+                    )
+                    && let Some(records) = switch(&current())
+                {
+                    self.replay_records(&records);
+                    self.say(format!("branched at {target}; type to continue"));
+                }
                 self.say(notice);
                 true
             }
@@ -77,24 +101,23 @@ impl Chat {
     }
 
     /// The `/tree` key's whole job (gh #601): **summarize the branch being
-    /// left, then leave it.**
+    /// left, then leave it** - in that order, which is why only the navigator
+    /// closes here and the branch waits for [`Self::poll_branch_summary`].
     ///
-    /// The order matters and is the design: the summary is written by the host's
-    /// closure *after* the navigator closes, so the running separator is the only
-    /// thing on screen while the provider works, and the branch itself is taken
-    /// only when the poll says the record landed. A summary the user abandoned
-    /// mid-flight therefore never moves them; the log's own record is what a
-    /// replay shows either way.
+    /// Branching first was the first cut of this code and it was wrong in a way
+    /// only a real pane showed: `branch_at` cuts the display view at the
+    /// navigation point, so the summary - computed milliseconds later on that
+    /// same view - found nothing after it and every summary failed with
+    /// `nothing to summarize`.
     pub(crate) fn summarize_branch_and_replay(&mut self, record_id: &str) {
-        // Close the navigator: the poll needs the separator, and the dock is
-        // what paints it.
+        // Close the navigator: the poll needs the separator's row, and the dock
+        // is what paints it.
         self.tree_picker = None;
-        if !self.start_branch_summary(record_id) {
-            // A refusal (`cannot summarize …`) already posted its line; the
-            // branch stays where it is, which is the safe half of "then leave".
-            return;
-        }
-        self.branch_and_replay(record_id);
+        // A refusal (`cannot summarize …`) posts its own line, and the branch
+        // stays where it is - the safe half of "then leave". There is nothing to
+        // do with the boolean here: the branch happens in the poll, so a failure
+        // simply leaves the target unset.
+        let _ = self.start_branch_summary(record_id);
     }
 }
 

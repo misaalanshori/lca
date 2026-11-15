@@ -151,6 +151,15 @@ pub struct Chat {
     /// reusing `compacting`, because the separator paints a different state for
     /// each (and the queue flush a compaction owes is not a summary's).
     pub summarizing_branch: bool,
+    /// Gh #601: the record to branch at **once the summary finishes**.
+    ///
+    /// The order is the whole design: `s` means "summarize this branch, then
+    /// leave", so the branch-point must be written **after** the summary call -
+    /// branching first cuts the display view and leaves the verb with nothing
+    /// after the navigation point (found in a real pane: the first cut of this
+    /// code branched immediately and every summary then failed with
+    /// `nothing to summarize`).
+    pub(crate) branch_summary_target: Option<String>,
     /// Gh #496: whether the *current* compaction already left its transcript
     /// marker, so a duplicate `CompactionEnded` (a retried attempt) does not
     /// append a second row for one compaction. Cleared by `CompactionStarted`,
@@ -513,6 +522,7 @@ impl Chat {
             deferred_host_session: None,
             compacting: false,
             summarizing_branch: false,
+            branch_summary_target: None,
             compaction_marked: false,
             turn_error_painted: false,
             turn_status: None,
