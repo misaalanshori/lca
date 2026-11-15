@@ -60,19 +60,46 @@ pub(super) fn render_item(
     // The item's body: its continuation lines dedented back to the content
     // column (pi hands the item's token body, not the raw source, to the block
     // renderer, so an item's own indentation is not the block's).
+    //
+    // Indentation decides membership with one exception, and the exception is
+    // measured on pi rather than guessed: a display block **owns its lines even at
+    // column 0**, because a `\frac` body is not indented by the author. So a
+    // shallower line is still the item's when it is inside an unclosed block, or
+    // when it opens one. A closed block claims nothing further, and the next
+    // shallower line ends the item as usual.
     let mut body: Vec<&str> = vec![content];
+    let mut lazy_start = nonexistent_index();
+    if opener_unclosed(&body) {
+        lazy_start = 0;
+    }
     let mut j = at + 1;
     while j < lines.len() {
         let line = lines[j];
         // A blank line ends the body, and so does a sibling or nested item:
         // `- $$…$$` followed by `- second` must keep `second` as an item
         // (measured on pi), never as part of the first item's source.
-        if line.trim().is_empty() || leading(line) < content_col || super::list_item(line).is_some()
-        {
+        if line.trim().is_empty() || super::list_item(line).is_some() {
             break;
         }
-        body.push(line.get(content_col..).unwrap_or("").trim_end());
+        let shallow = leading(line) < content_col;
+        if shallow && lazy_start == nonexistent_index() {
+            if math::block_math(lines, j).is_none() {
+                break;
+            }
+            lazy_start = body.len();
+        }
+        body.push(
+            line.get(content_col.min(leading(line))..)
+                .unwrap_or("")
+                .trim_end(),
+        );
         j += 1;
+        if lazy_start != nonexistent_index()
+            && !opener_unclosed(&body[lazy_start..])
+            && math::block_math(&body[lazy_start..], 0).is_none()
+        {
+            lazy_start = nonexistent_index();
+        }
     }
 
     let width = width.max(1);
@@ -164,4 +191,30 @@ fn block_rows(
 
 fn leading(line: &str) -> usize {
     line.len() - line.trim_start().len()
+}
+
+/// Whether the item's first line opens a display block whose closer has not
+/// arrived yet.
+///
+/// `block_math` alone cannot answer for a body of one line: a bare `$$` is not
+/// "pending" until there is something after it that looks like math, so
+/// `["$$"]` reads as *no* block. The opener's own shape is enough here - the
+/// question is only whether a shallower line below may still belong to the item.
+fn opener_unclosed(body: &[&str]) -> bool {
+    let first = body.first().map(|line| line.trim_start()).unwrap_or("");
+    let (open, close) = if first.starts_with("$$") {
+        ("$$", "$$")
+    } else if first.starts_with("\\[") {
+        ("\\[", "\\]")
+    } else {
+        return false;
+    };
+    let joined = body.join("\n");
+    !joined.get(open.len()..).unwrap_or("").contains(close)
+}
+
+/// A sentinel for "no lazy display block is open", so the scan carries one flag
+/// (the block's start index, needed for the closer test) instead of two.
+const fn nonexistent_index() -> usize {
+    usize::MAX
 }

@@ -39,6 +39,27 @@ fn a_bulleted_fraction_typesets_under_its_bullet() {
     );
 }
 
+// Verifies: gh #385 - **a task item's math typesets too**, which is a second
+// deliberate divergence from pi (like the over-wide fallback).
+//
+// Measured on pi: `- [ ] $$\\frac{a}{b}$$` prints flat (`- [ ] a/b`) while a bare
+// `- $$\\frac{a}{b}$$` typesets. That is marked's tokenizer showing through - the
+// task marker stays inside the item's *text*, so the `$$` is mid-line and becomes
+// an inline token - not a rendering decision anyone made. LCA strips the task
+// marker into the bullet, so the item content starts at the block and typesets,
+// which keeps a document consistent with itself. A reviewer who wants pi's
+// asymmetry should change this row deliberately, not incidentally.
+#[test]
+fn a_task_marker_does_not_push_the_block_back_to_inline() {
+    let out = rows("- [ ] $$\\frac{a}{b}$$", 40);
+    assert_eq!(out[0], "- [ ] a", "{out:?}");
+    assert_eq!(
+        out[1], "      ─",
+        "the block aligns past the task marker: {out:?}"
+    );
+    assert_eq!(out[2], "      b", "{out:?}");
+}
+
 // Verifies: gh #385 gap 2 for an ordered marker - the number prints and the rows
 // align to *its* width, so `10. ` (four columns) indents deeper than `1. `.
 #[test]
@@ -175,6 +196,60 @@ fn an_unclosed_block_does_not_swallow_a_deeper_item() {
     assert!(
         out.iter().any(|row| row == "- second"),
         "the deeper item survives the pending block: {out:?}"
+    );
+}
+
+// Verifies: gh #385 - **a multi-line block whose closing `$$` is at column 0 still
+// typesets**, which is how a model writes one from the top level and then bullets
+// it. Measured on pi: `- $$\\n\\frac{a}{b}\\n$$` prints `- a` / `  ─` / `  b`.
+// The body scan therefore keeps a shallower line only while the block it opened is
+// still unclosed - a closed block has already consumed its own lines.
+#[test]
+fn an_unindented_multiline_block_still_typesets_in_an_item() {
+    let out = rows("- $$\n\\frac{a}{b}\n$$", 40);
+    assert_eq!(out, vec!["- a", "  ─", "  b"], "{out:?}");
+}
+
+// Verifies: gh #385 - a **pending** opener keeps the shallower paragraph below it
+// as part of the item, which is pi's lazy continuation. Measured on pi:
+// `- $$x_1 *y` then `following paragraph` prints `- $$x_1 *y` /
+// `  following paragraph`. The body scan keeps a shallower line while the block is
+// open, and stops at the next marker - so the loss is bounded by the item.
+#[test]
+fn a_pending_opener_keeps_the_lazy_paragraph_inside_the_item() {
+    let out = rows("- $$x_1 *y\nfollowing paragraph", 40);
+    assert_eq!(out[0], "- $$x_1 *y", "{out:?}");
+    assert_eq!(out[1], "  following paragraph", "{out:?}");
+}
+
+// Verifies: gh #385 - **an unindented block after the item's text is still the
+// item's**, which is the shape a model writes when it drops the indent:
+// `- note` then `$$` at column 0 then `\frac{a}{b}` then `$$`. Measured on pi:
+// `- note` / `  a` / `  ─` / `  b`, all prefixed. The scan keeps a shallower line
+// when it *opens* a display block, and keeps taking lines until that block closes.
+#[test]
+fn an_unindented_block_after_the_items_text_is_a_lazy_continuation() {
+    let out = rows("- note\n$$\n\\frac{a}{b}\n$$", 40);
+    assert_eq!(
+        out,
+        vec!["- note", "  a", "  ─", "  b"],
+        "the block is the item's and prefixed: {out:?}"
+    );
+}
+
+// Verifies: gh #385 - **the lazy block stops at its closer.** After an unindented
+// block closes, the lines below it are the item's ordinary continuation (pi prints
+// `  after text` prefixed), and the next `- item` is a new item. This is what the
+// lazy-start sentinel buys: without it the scan would keep taking column-0 lines
+// for the rest of the document (mutant-verified as *green* on the rows above, which
+// is why this row exists).
+#[test]
+fn a_lazy_block_stops_at_its_closer_and_the_rest_is_the_items_continuation() {
+    let out = rows("- note\n$$\n\\frac{a}{b}\n$$\nafter text\n- next item", 40);
+    assert_eq!(
+        out,
+        vec!["- note", "  a", "  ─", "  b", "  after text", "- next item"],
+        "{out:?}"
     );
 }
 

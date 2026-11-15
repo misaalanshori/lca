@@ -48,10 +48,13 @@ Dates are UTC.
   inline renderer, so a `$$…$$` block never reached the math detector. An item now
   renders its body as blocks and prefixes the typeset rows: the marker sits on the
   first row and the rest align under the content (`- a` / `  ─` / `  b`), for bullets,
-  numbers, task markers, nested items and `> - …` alike. Half-streamed math still holds
-  its raw source (no flicker, and its `_`/`*` are never italicised), malformed math
-  still fails soft, and a 2D block wider than the item falls back to raw wrapped source
-  instead of overflowing — the rule tables already use.
+  numbers, task markers, nested items and `> - …` alike. A block still belongs to the
+  item when the model forgot to indent it (`- note` then `$$` at column 0), and an
+  unclosed block keeps the paragraph that follows it — but it stops at its closer, so
+  nothing below is eaten. Half-streamed math still holds its raw source (no flicker,
+  and its `_`/`*` are never italicised), malformed math still fails soft, and a 2D
+  block wider than the item falls back to raw wrapped source instead of overflowing —
+  the rule tables already use.
 - **The editor's kill ring finishes its forward half, and `Alt+D`/`Alt+Y` finally
   do something** (gh #383 gap 2, interface). `tui.editor.deleteWordForward` (`alt+d`,
   `alt+delete`) and `tui.editor.yankPop` (`alt+y`) had been in the binding table since
