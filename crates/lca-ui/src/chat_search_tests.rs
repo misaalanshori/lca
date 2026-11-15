@@ -787,22 +787,25 @@ fn the_paint_is_bounded_by_the_window_not_the_document() {
         search(&mut chat, "value");
         let lines = chat.transcript.render(width, &chat.theme);
         let corpus = chat_search_corpus::build(&lines, 0);
-        let started = std::time::Instant::now();
-        let found = chat_search_corpus::find(&corpus, "value");
-        let corpus_time = started.elapsed();
-        assert!(!found.is_empty(), "the query matches");
+        // **Best of five, both sides.** A scheduler-contended run inflated the paint
+        // side once (22.4 ms against a 5.1 ms corpus at load 7.2, on the same tree that
+        // measures 10.9 vs 4.6 idle) - and a ratio row that fails when the box is busy
+        // teaches the next reader to distrust it rather than to fix anything. The
+        // minimum is the same claim measured with less noise, not a looser bound.
         let screen = chat.viewport(width, 24, 0);
-        let started = std::time::Instant::now();
-        for _ in 0..10 {
+        let mut paint = std::time::Duration::MAX;
+        let mut corpus_time = std::time::Duration::MAX;
+        for _ in 0..5 {
+            let started = std::time::Instant::now();
+            let found = chat_search_corpus::find(&corpus, "value");
+            corpus_time = corpus_time.min(started.elapsed());
+            assert!(!found.is_empty(), "the query matches");
+            let started = std::time::Instant::now();
             let mut copy = screen.clone();
             chat.paint_search_rows(&mut copy);
+            paint = paint.min(started.elapsed());
         }
-        (
-            started.elapsed() / 10,
-            corpus_time,
-            chat.search_matches.len(),
-            screen.len(),
-        )
+        (paint, corpus_time, chat.search_matches.len(), screen.len())
     };
 
     let (paint, corpus, matches, rows) = paint_of(600);
