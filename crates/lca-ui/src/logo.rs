@@ -214,7 +214,13 @@ fn paint(theme: &Theme, rgb: (u8, u8, u8), glyph: char) -> String {
             let base = if index < 8 { 30 } else { 90 };
             format!("{}", base + (index % 8))
         }
-        _ => format!("38;2;{r};{g};{b}"),
+        // Gh #600: the mark is a **fixed brand hex**, not a theme role, so it is not
+        // lowered at palette build - it is lowered here, once per glyph, through the
+        // same rule the roles use. `;5;N` on a 256-colour terminal, exactly what the
+        // palette's own roles spell.
+        ColorSupport::Ansi256 => format!("38;5;{}", crate::theme::depth::nearest_256(r, g, b)),
+        ColorSupport::None => return glyph.to_string(),
+        ColorSupport::Truecolor => format!("38;2;{r};{g};{b}"),
     };
     format!("\u{1b}[{colour}m{glyph}\u{1b}[39m")
 }

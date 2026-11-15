@@ -43,6 +43,7 @@ fn chat() -> Chat {
             // Colored on purpose: the rows below assert the diff roles
             // through their raw SGR (the plain theme emits none).
             plain: false,
+            color_depth: lca_tui::engine::colors::ColorDepth::Truecolor,
             invoke_command: Arc::new(|_, _| lca_protocol::CommandEffect::None),
             slash_commands: Vec::new(),
             models: Vec::new(),

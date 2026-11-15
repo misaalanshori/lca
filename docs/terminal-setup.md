@@ -83,7 +83,7 @@ terminal lacks corrupts rendering.
 |---|---|---|
 | Hyperlinks (OSC 8) | On in known-capable terminals, off under `screen`, follows the tmux client's own features | `LCA_HYPERLINKS=1` forces on, `=0` forces the `text (url)` fallback |
 | Inline images | Kitty and iTerm2 protocols detected | `terminal.show_images=false` drops image rows; `terminal.image_width_cells` caps the width (default 60); `images.auto_resize=false` sends originals |
-| Truecolor | Detected | `ui.color=never` forces plain text |
+| Colour depth | Detected: 24-bit when `COLORTERM` says `truecolor`/`24bit`, palette indices for a `256color` `TERM`, the sixteen ANSI codes otherwise, nothing for `TERM=dumb` or a pipe (gh #600) | `LCA_COLOR_DEPTH=truecolor\|256\|16\|none` forces a rung; `ui.color=never` forces plain text |
 | Taskbar progress (OSC 9;4) | On while the agent is busy — a turn, a background `/compact`, or a `!`/`!!` run — refreshed once a second (gh #369) | `terminal.show_progress=false` silences it |
 | Tab status (OSC 7501, gh #213) | On after the terminal answers the support query; off under `screen` | `LCA_PROGRAM_STATUS=1` forces reports, `=0` silences them |
 | Theme light/dark (OSC 11 + `CSI ? 996 n`, gh #379) | Asked once at startup and closed with a `DA1` sentinel (`ESC [ c`), which every terminal answers whether or not it reports colours. The theme is chosen from `COLORFGBG`/defaults **immediately**; a colour answer refines it when it arrives, including one that arrives late over a slow link. Once the sentinel has closed the query, an `OSC 11` printed by another program cannot repaint the palette | No key: `ui.theme` pins a theme and stops the refresh |

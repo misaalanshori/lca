@@ -317,6 +317,10 @@ pub struct Chat {
     /// (gh #10): the `system` theme rebuilds from this on every scheme
     /// or background answer.
     terminal_bg: Option<lca_tui::engine::colors::RgbColor>,
+    /// The terminal's colour rung (gh #600): a property of the **session**, not of
+    /// the theme, so a `/theme` switch, a preview and a scheme answer all rebuild at
+    /// the same rung. Resolved once from `UiOptions::color_depth` at construction.
+    color_support: crate::theme::ColorSupport,
     /// The startup colour query's lifecycle (gh #379 gap 1).
     theme_query: crate::theme_query::ThemeQuery,
     /// The open `/theme` picker with live preview, when any.
@@ -412,10 +416,18 @@ impl Chat {
         } else {
             world.options.themes.clone()
         };
-        let (theme, theme_notice) = crate::theme::load_all(
+        // Gh #600: the theme is built at the terminal's **detected colour rung**,
+        // once, here. `xterm-256color` with `COLORTERM` unset used to get 24-bit SGR
+        // it cannot render; now it gets palette indices. `ui.color = never` is
+        // already folded into the ladder (`world.options.plain`), which puts it above
+        // every rung.
+        let support = crate::theme::ColorSupport::for_depth(world.options.color_depth);
+        let session_support = support;
+        let (theme, theme_notice) = crate::theme::load_all_at(
             &theme_setting,
             crate::theme::detect_scheme(),
             &theme_extra_dirs,
+            support,
         );
         let theme_name = theme.name.clone();
         let theme_auto =
@@ -541,6 +553,7 @@ impl Chat {
             theme_extra_dirs,
             theme_names,
             theme_auto,
+            color_support: session_support,
             terminal_bg: None,
             theme_query: crate::theme_query::ThemeQuery::new(),
             theme_picker: None,
@@ -741,6 +754,9 @@ mod chat_toast_scrollback_tests;
 #[cfg(test)]
 #[path = "chat_command_guards.rs"]
 mod command_guards;
+#[cfg(test)]
+#[path = "depth_frame_tests.rs"]
+mod depth_frame_tests;
 #[cfg(test)]
 #[path = "chat_image_crop_tests.rs"]
 mod image_crop_tests;

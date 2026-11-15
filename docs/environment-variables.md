@@ -15,12 +15,13 @@ is `LCA_TOOL_TIMEOUT_SECONDS`; `models.enabled` is a comma list in
 environment, then the project file, then the user file, then
 defaults ([configuration](configuration.md)).
 
-Three variables stand outside the scheme:
+Four variables stand outside the scheme:
 
 | Variable | Meaning |
 |---|---|
 | `LCA_HYPERLINKS` | `1` forces OSC 8 hyperlinks on, `0` forces the `text (url)` fallback; unset leaves the capability ladder ([terminal setup](terminal-setup.md)) |
 | `LCA_PROGRAM_STATUS` | `1` forces OSC 7501 tab-status reports on, `0` silences them; unset reports only after the terminal answers the support query ([terminal setup](terminal-setup.md#tab-status-gh-213)) |
+| `LCA_COLOR_DEPTH` | `truecolor`, `256`, `16`, or `none` forces the colour rung the theme is built at, overriding detection (gh #600); `ui.color=never` still wins, because a user who asked for no colour has said something about their eyes rather than their terminal. An unparsable value keeps the detected ladder and says so on stderr once |
 | `LCA_LOG` | Tracing directives (`tracing-subscriber` filter syntax); then `RUST_LOG`, then `warn` (`debug` under `--verbose`). Logs land in `~/.lca/logs/lca.log`, bounded at 1 MiB with one spare. With the `debug-trace` feature (unstable/dev builds) the same variable drives the debug files instead: `LCA_LOG="lca_core=trace"` masters domains `lca_core`, `lca_session`, `lca_permissions`, `lca_registry` (into `debug.log`) and `lca_net`, `lca_wasm` (into `debug-wire.log`), each 5 MiB with one spare; `--debug` / `--debug-wire` enable them without the variable. Secrets never land: values emit redacted (prefix plus `[REDACTED]`), matched by **normalized key name** — lowercased with `_`/`-` stripped, exact or suffix — so `access_token`, `id_token`, `accessToken`, `Access-Token`, `client_secret`, and the OAuth callback `code` all mask, while usage counters (`max_tokens`, `input_tokens`, `prompt_tokens`) and `token_type` stay visible (not credentials). Log files are owner-only (Unix `0600`, repaired on open even for a pre-existing world-readable file; on Windows the `%USERPROFILE%` profile ACL — user + SYSTEM + Administrators) |
 | `LCA_OFFLINE` | `1` silences automatic network for the run (update checks, catalog refreshes, remote installs); model traffic still flows. Same as `--offline` |
 

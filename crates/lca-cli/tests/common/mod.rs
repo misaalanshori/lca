@@ -690,6 +690,13 @@ impl Tmux {
         } else {
             ""
         };
+        // Gh #600: tmux sets the pane's `TERM` to its own `default-terminal`
+        // (`tmux-256color`), which now means the **256-colour** rung - so a row
+        // asserting 24-bit SGR must say the terminal is truecolor, which is what
+        // those rows are about. `extra_env` (appended last) can override it, and a
+        // row that wants the 256 rung sets `TERM=xterm-256color` plus
+        // `LCA_COLOR_DEPTH=256` explicitly.
+        let colorterm = " COLORTERM=truecolor";
         let extra: String = extra_env
             .iter()
             .map(|(key, value)| format!(" {key}={value}"))
@@ -698,7 +705,7 @@ impl Tmux {
         let command = format!(
             "cd {project} && HOME={home} USERPROFILE={home} XDG_DATA_HOME={data} \
              APPDATA={data} LOCALAPPDATA={data} XDG_CONFIG_HOME={config} \
-             LCA_UPDATE_CHECK=false{endpoint}{key}{model}{extra} {bin}{arguments}",
+             LCA_UPDATE_CHECK=false{endpoint}{key}{model}{colorterm}{extra} {bin}{arguments}",
             project = sandbox.project().display(),
             home = sandbox.home.display(),
             data = sandbox.data.display(),

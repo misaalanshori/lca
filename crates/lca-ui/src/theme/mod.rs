@@ -11,6 +11,9 @@
 //! file keeps the last-good palette and reports why.
 
 pub mod accents;
+// Gh #600: the 256-colour tier's lowering, at palette build. `pub(crate)` because
+// the logo paints fixed brand hexes rather than roles and must lower too.
+pub(crate) mod depth;
 mod error;
 mod highlight;
 mod palette;
@@ -27,7 +30,7 @@ pub use error::ThemeError;
 pub use highlight::{SyntaxStyles, highlight};
 pub use palette::Palette;
 // Gh #574: the setting-to-palette resolution, split at the ceiling.
-pub use parse::{load, load_all};
+pub use parse::{load, load_all, load_all_at};
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -141,20 +144,49 @@ roles! {
     ToolErrorBg => "toolErrorBg",
 }
 
-/// How much color the styled-text renderer may spend (gh #172): the
-/// host degrades extension styling through these levels. Today the
-/// theme decides (`colored` → full RGB, `plain` → none); the middle
-/// rung is proven by guards and parked for the day terminal color
-/// detection lands anywhere in the product - no detection exists yet,
-/// and inventing it for one widget is the wrong layer.
+/// How much color this theme may spend, per terminal rung (gh #172, gh #600).
+///
+/// The rungs mirror [`lca_tui::engine::colors::ColorDepth`] minus the "no
+/// detection" case: the engine decides *which* rung a terminal is on, and a
+/// theme is built at that rung. **The lowering happens once, here at build
+/// time** - an [`ColorSupport::Ansi256`] theme's palette holds indices, so the
+/// paint path is a captured [`Color`] and never arithmetic (gh #600's cost rule).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColorSupport {
     /// The full palette: roles and `#RRGGBB` as RGB bytes.
     Truecolor,
+    /// The 256-color palette: every RGB role is lowered to its nearest index
+    /// (`theme::depth::nearest_256`, pi's three rules) at build time, and a
+    /// theme file's own index passes through untouched.
+    Ansi256,
     /// Sixteen ANSI colors: every channel maps to its nearest.
     Ansi16,
     /// No escapes at all (FR-UI-5).
     None,
+}
+
+impl ColorSupport {
+    /// Whether this rung spends escapes at all. `None` is FR-UI-5's answer.
+    #[must_use]
+    pub fn paints(self) -> bool {
+        self != ColorSupport::None
+    }
+
+    /// The rung the engine's detected depth asks for, or `None` when nothing
+    /// should be painted.
+    ///
+    /// `ColorDepth::None` maps to [`ColorSupport::None`], which is the same
+    /// answer `ui.color = never` gives - so a pipe or a `TERM=dumb` session
+    /// spends nothing either, and an already-plain theme is never upgraded.
+    #[must_use]
+    pub fn for_depth(depth: lca_tui::engine::colors::ColorDepth) -> ColorSupport {
+        match depth {
+            lca_tui::engine::colors::ColorDepth::Truecolor => ColorSupport::Truecolor,
+            lca_tui::engine::colors::ColorDepth::Ansi256 => ColorSupport::Ansi256,
+            lca_tui::engine::colors::ColorDepth::Ansi16 => ColorSupport::Ansi16,
+            lca_tui::engine::colors::ColorDepth::None => ColorSupport::None,
+        }
+    }
 }
 
 /// One color: the terminal default, a 24-bit color, or a 256-color index.
@@ -196,8 +228,19 @@ fn decoration_reset(decoration: &str) -> &'static str {
 
 /// The SGR for one style color on one channel (`38` fg, `48` bg): RGB
 /// bytes in full color, the nearest ANSI index capped at sixteen.
-fn channel_sgr(color: Color, channel: u8, capped: bool) -> String {
-    if capped {
+fn channel_sgr(color: Color, channel: u8, support: ColorSupport) -> String {
+    // Gh #600: the 256 rung. A theme-file index passes through untouched - it is
+    // already the author's palette choice - and only an RGB value is lowered, by
+    // the same function the palette build uses.
+    if support == ColorSupport::Ansi256 {
+        let index = match color {
+            Color::Default => return String::new(),
+            Color::Ansi256(index) => index,
+            Color::Rgb(r, g, b) => depth::nearest_256(r, g, b),
+        };
+        return format!("{channel};5;{index}");
+    }
+    if support == ColorSupport::Ansi16 {
         let (r, g, b) = color_rgb(color);
         let index = nearest_16(r, g, b);
         // The dim half sits at the base (30-37 fg, 40-47 bg); the
@@ -384,9 +427,41 @@ pub struct Theme {
 }
 
 impl Theme {
-    /// Build a theme from a palette: the accessors are derived from the
-    /// role table, so a custom overlay moves them too.
+    /// Build a theme from a palette at **full color**: the accessors are derived
+    /// from the role table, so a custom overlay moves them too.
+    ///
+    /// This is the `Truecolor` form, which is what a caller that names no rung
+    /// means (every unit fixture and every palette assertion). A session builds at
+    /// its terminal's rung with [`Self::from_palette_at`], chosen once from
+    /// `lca_tui::engine::colors::color_depth`.
     pub fn from_palette(name: &str, palette: Palette, colored: bool) -> Theme {
+        Self::from_palette_at(name, palette, colored, ColorSupport::Truecolor)
+    }
+
+    /// Build a theme from a palette at a chosen rung (gh #600).
+    ///
+    /// At [`ColorSupport::Ansi256`] the palette is **lowered first**, so every
+    /// style closure captures an index: the paint path does no arithmetic.
+    pub fn from_palette_at(
+        name: &str,
+        palette: Palette,
+        colored: bool,
+        support: ColorSupport,
+    ) -> Theme {
+        // Gh #600: a `None` rung is FR-UI-5's answer - no escapes at all - so it
+        // behaves exactly like a plain theme rather than a coloured one whose field
+        // happens to say `None`. Without this, a `TERM=dumb` or piped session built
+        // coloured style closures and painted 24-bit SGR into a pipe.
+        //
+        // The **caller's** flag is what "plain" means on the way back: `at_support`
+        // rebuilds a plain theme from its own palette with the caller's `colored ==
+        // false`, and a runtime `/theme` switch back to `dark` must restore colour.
+        let colored = colored && support != ColorSupport::None;
+        let palette = if support == ColorSupport::Ansi256 {
+            depth::lowered_palette(&palette)
+        } else {
+            palette
+        };
         let roles: BTreeMap<Role, StyleFn> = Role::ALL
             .iter()
             .map(|role| (*role, style(palette.get(*role), "", colored)))
@@ -405,11 +480,7 @@ impl Theme {
         let warn = style(palette.get(Role::Warning), "", colored);
         let footer = style(palette.get(Role::Muted), "", colored);
         let accent = style(palette.get(Role::Accent), "", colored);
-        let color_support = if colored {
-            ColorSupport::Truecolor
-        } else {
-            ColorSupport::None
-        };
+        let color_support = if colored { support } else { ColorSupport::None };
         Theme {
             colored,
             palette,
@@ -429,6 +500,16 @@ impl Theme {
             roles,
             bgs,
         }
+    }
+
+    /// This theme rebuilt at a terminal colour rung (gh #600).
+    ///
+    /// The palette is the theme's own (a custom overlay's, a derived `system`
+    /// surface's), so a rung change never moves a role - only how it is spelled.
+    /// A plain theme stays plain: `colored == false` forces the `None` rung.
+    #[must_use]
+    pub fn at_support(&self, support: ColorSupport) -> Theme {
+        Self::from_palette_at(&self.name, self.palette.clone(), self.colored, support)
     }
 
     /// The colored theme (the dark-terminal palette).
@@ -477,8 +558,7 @@ impl Theme {
         let content = content.to_string();
         match self.color_support {
             ColorSupport::None => content,
-            ColorSupport::Truecolor | ColorSupport::Ansi16 => {
-                let capped = self.color_support == ColorSupport::Ansi16;
+            support @ (ColorSupport::Truecolor | ColorSupport::Ansi256 | ColorSupport::Ansi16) => {
                 let mut open = Vec::new();
                 let mut close = Vec::new();
                 // Bold and dim share the `22` reset, so one close
@@ -505,7 +585,7 @@ impl Theme {
                     .as_deref()
                     .and_then(|fg| self.resolve_style_color(fg))
                 {
-                    open.push(channel_sgr(color, 38, capped));
+                    open.push(channel_sgr(color, 38, support));
                     close.push("39".to_string());
                 }
                 if let Some(color) = style
@@ -513,7 +593,7 @@ impl Theme {
                     .as_deref()
                     .and_then(|bg| self.resolve_style_color(bg))
                 {
-                    open.push(channel_sgr(color, 48, capped));
+                    open.push(channel_sgr(color, 48, support));
                     close.push("49".to_string());
                 }
                 if open.is_empty() {
@@ -550,9 +630,7 @@ impl Theme {
     /// ANSI ladder. The transcript keeps its own styles; only the
     /// extension styled-text path reads `color_support`.
     pub fn limited() -> Self {
-        let mut limited = Self::from_palette("limited", Palette::dark(), true);
-        limited.color_support = ColorSupport::Ansi16;
-        limited
+        Self::from_palette_at("limited", Palette::dark(), true, ColorSupport::Ansi16)
     }
 
     /// The plain theme (FR-UI-5).

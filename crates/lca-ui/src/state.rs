@@ -662,8 +662,17 @@ pub struct UiOptions {
     /// Open the session picker when the interface opens (gh #110:
     /// bare `-r`), instead of starting on a fresh session.
     pub open_resume_picker: bool,
-    /// Plain-text rendering (FR-UI-5).
+    /// Plain-text rendering (FR-UI-5). `ui.color = never`, which the colour ladder
+    /// puts **above every other rung** (gh #600).
     pub plain: bool,
+    /// The terminal colour rung the theme is built at (gh #600).
+    ///
+    /// Resolved once by the host from
+    /// [`lca_tui::engine::colors::current_color_depth`] - a `&mut`-free field rather
+    /// than a live read, because it is a property of the session's terminal and a
+    /// theme rebuild must not see a different answer mid-session. `plain` still wins:
+    /// the ladder itself maps `never` to `None`.
+    pub color_depth: lca_tui::engine::colors::ColorDepth,
     /// Permission prompts are auto-approved this session (ADR-0042); the
     /// footer says so every frame.
     pub yolo: bool,

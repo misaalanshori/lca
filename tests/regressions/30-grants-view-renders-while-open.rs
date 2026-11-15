@@ -41,6 +41,7 @@ fn chat(grants: Vec<GrantEntry>) -> Chat {
             thinking_visibility: Default::default(),
             codeblock_border: Default::default(),
             plain: true,
+            color_depth: lca_tui::engine::colors::ColorDepth::Truecolor,
             invoke_command: Arc::new(|_, _| CommandEffect::None),
             slash_commands: vec!["/grants".into()],
             models: Vec::new(),

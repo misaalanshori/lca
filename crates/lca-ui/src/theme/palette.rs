@@ -161,6 +161,15 @@ impl Palette {
         Palette { colors }
     }
 
+    /// A palette from pre-resolved entries (the 256-colour lowering, gh #600).
+    ///
+    /// Takes the whole role table rather than a builder, because the caller
+    /// ([`super::depth::lowered_palette`]) already has one and a mutable builder
+    /// would let a partial palette escape.
+    pub(super) fn from_entries(colors: BTreeMap<Role, Color>) -> Palette {
+        Palette { colors }
+    }
+
     /// The color for a role.
     ///
     /// A named role is its own value. A role the palette does not hold walks its

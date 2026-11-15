@@ -46,6 +46,7 @@ fn chat_with_theme(theme: &str) -> Chat {
             thinking_visibility: Default::default(),
             codeblock_border: Default::default(),
             plain: false,
+            color_depth: lca_tui::engine::colors::ColorDepth::Truecolor,
             invoke_command: Arc::new(|_, _| lca_protocol::CommandEffect::None),
             slash_commands: Vec::new(),
             models: Vec::new(),

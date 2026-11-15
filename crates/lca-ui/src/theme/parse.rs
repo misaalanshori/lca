@@ -23,6 +23,27 @@ pub fn load(
     load_all(setting, scheme, std::slice::from_ref(&dir.to_path_buf()))
 }
 
+/// Resolve the theme **at a terminal colour rung** (gh #600).
+///
+/// The setting resolution is [`load_all`]'s ladder unchanged; the rung is applied
+/// to the resolved theme afterwards, so a custom overlay's palette and a derived
+/// `system` surface both keep their roles and only change their spelling. The
+/// session calls this with its [`lca_tui::engine::colors::ColorDepth`], resolved
+/// once per theme change rather than per frame (the rung is a property of the
+/// theme).
+pub fn load_all_at(
+    setting: &str,
+    scheme: Option<lca_tui::engine::colors::ColorScheme>,
+    dirs: &[std::path::PathBuf],
+    support: super::ColorSupport,
+) -> (Theme, Option<String>) {
+    let (theme, notice) = load_all(setting, scheme, dirs);
+    if support == super::ColorSupport::Truecolor {
+        return (theme, notice);
+    }
+    (theme.at_support(support), notice)
+}
+
 /// Resolve the theme across dirs (gh #70): explicit `--theme` dirs
 /// first, then the configured one. The first readable file wins (an
 /// invalid file keeps the base and says why, like `load`).

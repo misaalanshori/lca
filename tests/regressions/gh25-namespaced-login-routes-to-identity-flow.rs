@@ -94,6 +94,7 @@ fn chat(seams: &Seams) -> Chat {
         thinking_visibility: Default::default(),
         codeblock_border: Default::default(),
         plain: true,
+        color_depth: lca_tui::engine::colors::ColorDepth::Truecolor,
         invoke_command: Arc::new(move |name, argument| {
             invoke_seams.record(format!("invoke:{name}:{argument}"));
             CommandEffect::ShowWidget("identity flow started".to_string())

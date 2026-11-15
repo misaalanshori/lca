@@ -118,6 +118,146 @@ pub fn parse_osc11_background_color(data: &str) -> Option<RgbColor> {
     Some(RgbColor { r, g, b })
 }
 
+/// How much colour a terminal can actually take (gh #600).
+///
+/// A **rung ladder**, not a boolean, because three genuinely different spellings
+/// exist: 24-bit SGR (`38;2;r;g;b`), the 256-colour palette (`38;5;n`), and the
+/// sixteen ANSI codes (`30..37`/`90..97`). Emitting a rung the terminal lacks is
+/// the defect this closes: a `TERM=xterm-256color` session with `COLORTERM` unset
+/// used to get 24-bit escapes it cannot render, and the only honest answer was
+/// `ui.color = never` - no colour at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorDepth {
+    /// 24-bit RGB sequences.
+    Truecolor,
+    /// The 256-colour palette: indices, `;5;n`.
+    Ansi256,
+    /// The sixteen ANSI colours.
+    Ansi16,
+    /// No escapes at all (FR-UI-5, and a pipe).
+    None,
+}
+
+impl ColorDepth {
+    /// Parse a [`FORCE_COLOR_DEPTH`] value: `truecolor`/`24bit`, `256`, `16`,
+    /// `none`/`off`/`0`. Case-insensitive, trimmed; anything else is `None`
+    /// so the caller can keep the ladder **and say it ignored the value**.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<ColorDepth> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "truecolor" | "24bit" | "24" => Some(ColorDepth::Truecolor),
+            "256" | "256color" => Some(ColorDepth::Ansi256),
+            "16" | "16color" | "ansi" => Some(ColorDepth::Ansi16),
+            "none" | "off" | "0" | "never" => Some(ColorDepth::None),
+            _ => None,
+        }
+    }
+
+    /// Whether any escapes are spent at this rung.
+    #[must_use]
+    pub fn paints(self) -> bool {
+        self != ColorDepth::None
+    }
+}
+
+/// The forcing variable, `LCA_HYPERLINKS`/`LCA_SHIFT_ENTER`/`LCA_WHEEL_ACCEL`'s
+/// shape: a capability that detection can get wrong must be correctable without
+/// a release, and a receipt must be drivable on a box whose terminal lies.
+pub const FORCE_COLOR_DEPTH: &str = "LCA_COLOR_DEPTH";
+
+/// Which rung this terminal is on, from the **facts** only.
+///
+/// `never` is `ui.color = never` (FR-UI-5), and it sits **above everything** -
+/// including a forced rung - because a user who asked for no colour has said
+/// something about their eyes, not about their terminal.
+///
+/// Then, in order: a forced rung; `COLORTERM` saying `truecolor`/`24bit`; a
+/// `TERM` naming `256color`; any `TERM` that is not `dumb` (sixteen colours);
+/// otherwise none. **`COLORTERM` never downgrades**: it can only raise, so a
+/// `256color` `TERM` that also says `truecolor` gets truecolor - pi's rule
+/// (`terminal-image.ts:179`'s `trueColor ? "truecolor" : "256color"`, one rung
+/// above the answer it would otherwise have).
+#[must_use]
+pub fn color_depth(
+    term: Option<&str>,
+    colorterm: Option<&str>,
+    color_mode_never: bool,
+) -> ColorDepth {
+    color_depth_forcing(term, colorterm, None, color_mode_never)
+}
+
+/// [`color_depth`] with the forcing value injected, so the whole ladder - the
+/// escape hatch included - runs as a table on every platform.
+#[must_use]
+pub fn color_depth_forcing(
+    term: Option<&str>,
+    colorterm: Option<&str>,
+    forced: Option<&str>,
+    color_mode_never: bool,
+) -> ColorDepth {
+    // Rule 1, above everything: FR-UI-5's precedence is the user's, not the
+    // terminal's and not the escape hatch's.
+    if color_mode_never {
+        return ColorDepth::None;
+    }
+    if let Some(forced) = forced {
+        // An unparsable value keeps the ladder (rule 2's second half); the
+        // caller that owns stderr says so, because silently ignoring a forcing
+        // variable is how a "it did not work" report becomes unanswerable.
+        if let Some(depth) = ColorDepth::parse(forced) {
+            return depth;
+        }
+    }
+    let term = term.unwrap_or("").trim().to_ascii_lowercase();
+    let colorterm = colorterm.unwrap_or("").trim().to_ascii_lowercase();
+    // Rule 3: COLORTERM raises. `24bit` is the other spelling terminals emit.
+    if colorterm == "truecolor" || colorterm == "24bit" {
+        return ColorDepth::Truecolor;
+    }
+    // Rule 4: the 256-colour palette, named by TERM itself.
+    if term.contains("256color") {
+        return ColorDepth::Ansi256;
+    }
+    // Rule 5: a terminal that names itself gets sixteen colours. `dumb` is
+    // excluded here rather than checked first, because a TERM of `dumb` is
+    // exactly the "do not emit escapes" answer.
+    if !term.is_empty() && term != "dumb" {
+        return ColorDepth::Ansi16;
+    }
+    // Rule 6: no TERM, a pipe, or `dumb`.
+    ColorDepth::None
+}
+
+/// [`color_depth`] for this process, over the real environment.
+///
+/// A forcing value that does not parse is reported **once** on stderr: it is
+/// the one case where the ladder silently wins over the user and the user would
+/// otherwise never learn why. (The write lands before the alternate screen in
+/// the ordinary startup order; a `/theme` rebuild that re-reads it does not
+/// re-warn, because the notice is once per process.)
+pub fn current_color_depth(color_mode_never: bool) -> ColorDepth {
+    let forced = std::env::var(FORCE_COLOR_DEPTH).ok();
+    if let Some(value) = forced.as_deref()
+        && ColorDepth::parse(value).is_none()
+    {
+        // Not `unwrap_or`: a poisoned mutex here must not lose the answer, and
+        // the set-once guard only exists to keep the line from repeating.
+        static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+        if WARNED.set(()).is_ok() {
+            eprintln!(
+                "lca: {FORCE_COLOR_DEPTH}={value:?} is not a colour depth \
+                 (truecolor|256|16|none); keeping the detected ladder"
+            );
+        }
+    }
+    color_depth_forcing(
+        std::env::var("TERM").ok().as_deref(),
+        std::env::var("COLORTERM").ok().as_deref(),
+        forced.as_deref(),
+        color_mode_never,
+    )
+}
+
 /// The startup colour query: the background (OSC 11) and the colour-scheme
 /// preference (DEC private `? 996`), followed by **`DA1` (`ESC [ c`)** as a
 /// sentinel (gh #379 gap 1).
@@ -382,6 +522,150 @@ mod tests {
                 "{typed:?} must reach the interface as input"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod color_depth_tests {
+    use super::*;
+
+    // Verifies: gh #600 - **the ladder, as a table**, with every input a
+    // parameter so this row runs on every platform. The defect it closes: a
+    // `TERM=xterm-256color` session with `COLORTERM` unset used to get 24-bit
+    // SGR, which such a terminal cannot render, and the only honest answer a
+    // user had was `ui.color = never` - no colour at all.
+    #[test]
+    fn the_detection_ladder_reads_term_and_colorterm() {
+        let cases: [(&str, Option<&str>, Option<&str>, ColorDepth); 12] = [
+            // Rule 3: COLORTERM raises, in both of the spellings terminals use.
+            (
+                "xterm-256color",
+                Some("truecolor"),
+                None,
+                ColorDepth::Truecolor,
+            ),
+            ("xterm-256color", Some("24bit"), None, ColorDepth::Truecolor),
+            (
+                "xterm-256color",
+                Some(" TRUECOLOR "),
+                None,
+                ColorDepth::Truecolor,
+            ),
+            // Rule 4: TERM names the palette.
+            ("xterm-256color", None, None, ColorDepth::Ansi256),
+            ("screen-256color", Some("false"), None, ColorDepth::Ansi256),
+            // Rule 5: any real terminal gets sixteen.
+            ("xterm", None, None, ColorDepth::Ansi16),
+            ("vt100", None, None, ColorDepth::Ansi16),
+            // Rule 6: dumb, empty, and no TERM at all.
+            ("dumb", None, None, ColorDepth::None),
+            ("", Some("truecolor"), None, ColorDepth::Truecolor),
+            // Rule 2: a forced rung wins over the ladder...
+            (
+                "xterm-256color",
+                None,
+                Some("truecolor"),
+                ColorDepth::Truecolor,
+            ),
+            (
+                "xterm-256color",
+                Some("truecolor"),
+                Some("16"),
+                ColorDepth::Ansi16,
+            ),
+            // ...and an unparsable forcing keeps the ladder.
+            (
+                "xterm-256color",
+                None,
+                Some("chartreuse"),
+                ColorDepth::Ansi256,
+            ),
+        ];
+        for (term, colorterm, forced, expected) in cases {
+            assert_eq!(
+                color_depth_forcing(Some(term), colorterm, forced, false),
+                expected,
+                "term={term:?} colorterm={colorterm:?} forced={forced:?}"
+            );
+        }
+        // Rule 6's last form: no TERM variable at all.
+        assert_eq!(color_depth(None, None, false), ColorDepth::None);
+    }
+
+    // Verifies: gh #600 - **`COLORTERM` never downgrades.** The issue's own note:
+    // it can only raise. A terminal that says `256color` and also says
+    // `COLORTERM=truecolor` has truecolor, and one that says `COLORTERM` anything
+    // else keeps whatever `TERM` implies rather than losing a rung.
+    #[test]
+    fn colorterm_raises_and_never_downgrades() {
+        assert_eq!(
+            color_depth(Some("xterm-256color"), Some("24bit"), false),
+            ColorDepth::Truecolor
+        );
+        // The specific regression a "COLORTERM decides everything" rule would
+        // cause: a 256color TERM plus a COLORTERM value that is neither
+        // spelling must still be 256, not 16 and not none.
+        assert_eq!(
+            color_depth(Some("xterm-256color"), Some("yes"), false),
+            ColorDepth::Ansi256
+        );
+        assert_eq!(
+            color_depth(Some("xterm"), Some("yes"), false),
+            ColorDepth::Ansi16
+        );
+    }
+
+    // Verifies: gh #600 + FR-UI-5 - **`ui.color = never` sits above everything**,
+    // including the forcing variable and a truecolor `COLORTERM`: a user who asked
+    // for no colour has said something about their eyes, not about their terminal.
+    #[test]
+    fn ui_color_never_beats_every_depth() {
+        for (term, colorterm, forced) in [
+            ("xterm-256color", None, None),
+            ("xterm-256color", Some("truecolor"), Some("truecolor")),
+            ("xterm-kitty", Some("24bit"), Some("256")),
+            ("dumb", None, None),
+        ] {
+            assert_eq!(
+                color_depth_forcing(Some(term), colorterm, forced, true),
+                ColorDepth::None,
+                "never must win: term={term:?} colorterm={colorterm:?} forced={forced:?}"
+            );
+        }
+    }
+
+    // Verifies: gh #600 - the forcing variable's own spellings, so a receipt can
+    // drive any rung and a misdetecting terminal can be corrected without a
+    // release (`LCA_HYPERLINKS`'s shape).
+    #[test]
+    fn the_forcing_variable_names_every_rung() {
+        for (value, expected) in [
+            ("truecolor", ColorDepth::Truecolor),
+            ("24bit", ColorDepth::Truecolor),
+            ("256", ColorDepth::Ansi256),
+            ("256color", ColorDepth::Ansi256),
+            ("16", ColorDepth::Ansi16),
+            ("ansi", ColorDepth::Ansi16),
+            ("none", ColorDepth::None),
+            ("never", ColorDepth::None),
+            ("0", ColorDepth::None),
+            (" TRUECOLOR ", ColorDepth::Truecolor),
+        ] {
+            assert_eq!(ColorDepth::parse(value), Some(expected), "value={value:?}");
+        }
+        for junk in ["", "chartreuse", "255", "true"] {
+            assert_eq!(ColorDepth::parse(junk), None, "junk={junk:?}");
+        }
+    }
+
+    // Verifies: gh #600 - `paints()` is the one answer to "does this rung spend
+    // escapes", which is what a theme's `colored` flag derives from.
+    #[test]
+    fn paints_is_false_only_for_none() {
+        assert!(ColorDepth::Truecolor.paints());
+        assert!(ColorDepth::Ansi256.paints());
+        assert!(ColorDepth::Ansi16.paints());
+        assert!(!ColorDepth::None.paints());
     }
 }
 

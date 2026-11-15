@@ -54,8 +54,14 @@ impl Chat {
     /// Picking `system` re-arms detection-following (gh #10); any other
     /// explicit pick clears it.
     pub(crate) fn set_theme(&mut self, name: &str) {
-        let (theme, notice) =
-            crate::theme::load_all(name, crate::theme::detect_scheme(), &self.theme_extra_dirs);
+        // Gh #600: the same rung the startup resolution used, so a `/theme` change
+        // never upgrades a 256-colour terminal to bytes it cannot render.
+        let (theme, notice) = crate::theme::load_all_at(
+            name,
+            crate::theme::detect_scheme(),
+            &self.theme_extra_dirs,
+            self.color_support(),
+        );
         self.theme = theme;
         // The transcript caches styled lines per entry: a new palette
         // invalidates every one of them, or the bands keep the old colors.
@@ -81,11 +87,17 @@ impl Chat {
         }
         let (theme, _) = if self.theme_setting == "system" {
             (
-                crate::theme::Theme::system_theme(self.terminal_bg, Some(scheme)),
+                crate::theme::Theme::system_theme(self.terminal_bg, Some(scheme))
+                    .at_support(self.color_support()),
                 None,
             )
         } else {
-            crate::theme::load_all(&self.theme_setting, Some(scheme), &self.theme_extra_dirs)
+            crate::theme::load_all_at(
+                &self.theme_setting,
+                Some(scheme),
+                &self.theme_extra_dirs,
+                self.color_support(),
+            )
         };
         self.theme_name = theme.name.clone();
         self.theme = theme;
@@ -114,7 +126,8 @@ impl Chat {
         // Gh #387: `theme_auto` covers `""`/`auto`/`system`; testing the literal
         // `"system"` meant the default theme never rebuilt from a probed background.
         if self.theme_auto {
-            self.theme = crate::theme::Theme::system_theme(Some(background), None);
+            self.theme = crate::theme::Theme::system_theme(Some(background), None)
+                .at_support(self.color_support());
             self.theme_name = self.theme.name.clone();
             self.transcript.invalidate();
         } else {
@@ -125,13 +138,24 @@ impl Chat {
     /// Preview a theme without committing it (FR-UI-17).
     pub(crate) fn preview_theme(&mut self, index: usize) {
         if let Some(name) = self.theme_names.get(index).cloned() {
-            let (theme, _) = crate::theme::load_all(
+            let (theme, _) = crate::theme::load_all_at(
                 &name,
                 crate::theme::detect_scheme(),
                 &self.theme_extra_dirs,
+                self.color_support(),
             );
             self.theme = theme;
             self.transcript.invalidate();
         }
+    }
+
+    /// The rung this session's theme is built at (gh #600).
+    ///
+    /// The **session's** rung, not the live theme's: reading the theme would make a
+    /// switch back from `plain` unable to restore colour, because a plain theme's own
+    /// answer is `None`. `ui.color = never` is already folded into the rung by the
+    /// ladder, so a `never` session's rung is `None` for the whole run.
+    fn color_support(&self) -> crate::theme::ColorSupport {
+        self.color_support
     }
 }

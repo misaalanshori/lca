@@ -41,6 +41,14 @@ Dates are UTC.
   is `/paste` and the right-button handler.
 
 ### Fixed
+- **A 256-colour terminal now keeps its palette instead of falling back to 24-bit
+  escapes it cannot render** (gh #600, interface). `xterm-256color` with `COLORTERM` unset
+  used to be handed `38;2;r;g;b`, which such a terminal shows as garbage or snaps to its
+  own cube — and the only honest answer a user had was `ui.color = never`, i.e. no colour.
+  The theme is now built at the rung the terminal actually has: palette indices
+  (`38;5;n`, pi's own cube-and-grey-ramp rule) for a 256-colour `TERM`, the sixteen ANSI
+  codes below that, 24-bit where `COLORTERM` says `truecolor`, and nothing at all on a
+  `TERM=dumb` or a pipe. `LCA_COLOR_DEPTH` forces a rung when detection is wrong.
 - **Transcript search now finds a phrase the window wrapped** (gh #376, interface).
   `Ctrl+R` matched one rendered row at a time, so `error handling` split across a wrap
   was **zero hits** — and a narrow pane or CJK makes that the common case rather than

@@ -47,6 +47,7 @@ fn chat(invoked: Arc<Mutex<Vec<(String, String)>>>) -> Chat {
             thinking_visibility: Default::default(),
             codeblock_border: Default::default(),
             plain: true,
+            color_depth: lca_tui::engine::colors::ColorDepth::Truecolor,
             invoke_command: Arc::new(move |name: &str, argument: &str| {
                 invoked
                     .lock()

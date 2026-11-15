@@ -120,6 +120,12 @@ impl Ui {
                 Arc::new(move || ui.take_pending_models())
             }),
             plain: config.ui_color() == ColorMode::Never,
+            // Gh #600: the rung the session theme is built at. `ui.color = never`
+            // sits above it (the ladder rule), so a `never` session paints
+            // nothing whatever this says.
+            color_depth: lca_tui::engine::colors::current_color_depth(
+                config.ui_color() == ColorMode::Never,
+            ),
             yolo,
             // Gh #400: hand the pre-load terminal and its buffer to the loop
             // exactly once; a second `options()` gets `None` and would start
