@@ -59,7 +59,15 @@ const DISPLAY_MEDIA_TYPE: &str = "image/png";
 const DERIVED_MEDIA_TYPE: &str = "image/jpeg";
 
 /// How many derivatives are remembered: a transcript's images at up to a few widths.
-const MAX_DERIVATIVES: usize = 64;
+///
+/// **Smaller than the placement cache's 64 on purpose**, because this memo stores the
+/// payload's bytes and that one stores only ids: a derivative at the default 60-cell box
+/// is ~190 KB for a photo-like picture (measured on the read tool's q80 fixture), so 16
+/// of them is ~3 MB at the default cap; a user who raises `terminal.image_width_cells`
+/// to 200 raises that to ~18 MB. Evicting one costs an encode on the next paint of that
+/// image, which is a stutter rather than a bug - the same trade the placement cache
+/// documents, one layer over.
+const MAX_DERIVATIVES: usize = 16;
 
 /// One encoded derivative, with the cell box it was produced for.
 #[derive(Debug, Clone)]
