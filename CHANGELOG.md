@@ -41,6 +41,24 @@ Dates are UTC.
   is `/paste` and the right-button handler.
 
 ### Fixed
+- **Transcript search now finds a phrase the window wrapped** (gh #376, interface).
+  `Ctrl+R` matched one rendered row at a time, so `error handling` split across a wrap
+  was **zero hits** — and a narrow pane or CJK makes that the common case rather than
+  an edge. Search now indexes the document as one wrap-insensitive corpus and maps a
+  match back to the rows and columns it covers, so a phrase broken by the pane is one
+  match painted on both rows. Wide glyphs are measured in cells, so a match through CJK
+  underlines the right characters, and case folding that expands a character (`İ`) no
+  longer shifts the span.
+- **Typing a query no longer yanks you to the top of the transcript** (gh #376,
+  interface). The first match is the nearest at or after what you were reading, wrapping
+  to the top only when nothing lies below; the selected match is revealed with a third
+  of the window above it instead of pinned to an edge, and a streaming delta cannot
+  scroll it away until you scroll yourself.
+- **The transcript search shows which match is current, and steps both ways** (gh #376,
+  interface). The selected match paints bold-and-inverse and the rest underline
+  (`Ctrl+R` previously painted one style for everything), the highlight closes only the
+  channels it opens, and `searchPrevious` — in the binding table with no handler — now
+  steps backwards and wraps.
 - **Display math inside a list item typesets instead of printing its source** (gh
   #385, interface). A bulleted derivation — `- steady state: $$x = \frac{a}{b}$$` —
   used to render the flattened one-liner `x = a/b`, while the identical content inside

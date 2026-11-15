@@ -60,6 +60,14 @@ pub const CHAT_OVERLAYS: &[&str] = &[
     "mcp_manager",
     "install_consent",
     "search",
+    // Gh #376: the search's selection state, which belongs to the overlay that owns it.
+    // A tab switch closes `search`; leaving its anchor, selected-match key or reveal
+    // scroll behind would resume the *next* tab's search from this tab's reading
+    // position - the same leak class this registry exists for, in a value instead of a
+    // surface.
+    "search_anchor",
+    "search_selected",
+    "search_scroll",
 ];
 
 /// Every transient overlay on [`UiState`](crate::ui_state::UiState), by field name.
@@ -113,6 +121,9 @@ pub(crate) fn close_tab_overlays(chat: &mut Chat) {
         mcp_manager,
         install_consent,
         search,
+        search_anchor,
+        search_selected,
+        search_scroll,
     );
     clear_world_overlays(&mut chat.world);
 }

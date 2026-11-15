@@ -860,6 +860,16 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> i32 {
             if let Some(scroll) = chat.take_jump_scroll(width, height) {
                 screen.set_scroll(scroll);
             }
+            // Gh #376 gap 3: a search reveal asks for its own scroll - a third of the
+            // window above the match - and sets the follow lock so the next stream
+            // delta cannot take it away. Taken after the jump so a prompt jump still
+            // wins when both are pending (it is the stronger intent: the reader asked
+            // to be *placed*).
+            if !chat.search_matches.is_empty()
+                && let Some(scroll) = chat.take_search_scroll()
+            {
+                screen.set_scroll(scroll);
+            }
             // gh #35: hold the reader's place across new output (pi's
             // follow-end rule in bottom coordinates), clamp to what the
             // transcript can show, and tell the renderer where the

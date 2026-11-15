@@ -267,10 +267,31 @@ pub struct Chat {
     pub(crate) prev_tab: usize,
     /// The open transcript search query (FR-UI-12), when any.
     pub search: Option<String>,
-    /// Document lines matching the search query.
-    pub(crate) search_matches: Vec<usize>,
-    /// The current match.
+    /// The matches the query found, as per-row segments (gh #376 gap 1): one entry
+    /// per match, so a phrase split across a wrap boundary is **one** match with two
+    /// segments rather than zero matches.
+    pub(crate) search_matches: Vec<crate::chat::chat_search_corpus::SearchMatch>,
+    /// The current match's index into [`Self::search_matches`].
     pub(crate) search_index: usize,
+    /// The current match's **identity** (`row:col:row:col`), which is what survives a
+    /// reload: the match list is derived from the document every frame, so an index
+    /// into it cannot be the selection (gh #376 gap 1/3).
+    pub(crate) search_selected: Option<(usize, usize, usize, usize)>,
+    /// The document row the search was opened from: the anchor the first match is
+    /// picked at or after, so typing a query does not yank the reader to row 0
+    /// (gh #376 gap 2).
+    pub(crate) search_anchor: Option<usize>,
+    /// The scroll a reveal asked for, applied by the loop on the next frame
+    /// (gh #376 gap 3).
+    pub(crate) search_scroll: Option<u16>,
+    /// The scroll a reveal set, held until the reader scrolls themselves: `clamp_scroll`
+    /// neither re-engages follow nor adds a stream delta while this is the current
+    /// scroll (pi's `followSuppressedAtEnd`, gh #376 gap 3).
+    pub(crate) search_follow_lock: std::cell::Cell<Option<u16>>,
+    /// The document row the last painted window started at (gh #376 gap 4): the paint
+    /// is given a window slice, and a match's spans are document rows, so the
+    /// difference has to be recorded where the frame resolves it.
+    pub(crate) search_view_base: std::cell::Cell<usize>,
     /// The active theme's name (FR-UI-17).
     pub theme_name: String,
     /// The configured theme setting (`ui.theme`, S5).
@@ -501,6 +522,11 @@ impl Chat {
             search: None,
             search_matches: Vec::new(),
             search_index: 0,
+            search_selected: None,
+            search_anchor: None,
+            search_scroll: None,
+            search_follow_lock: std::cell::Cell::new(None),
+            search_view_base: std::cell::Cell::new(0),
             meter: Default::default(),
             theme_name,
             theme_setting,
@@ -676,8 +702,8 @@ impl Chat {
     }
 }
 
-mod chat_highlight;
-pub(crate) use chat_highlight::{highlight_matches, strip_ansi};
+// Gh #376 gap 1: the wrap-insensitive search corpus.
+pub(crate) mod chat_search_corpus;
 
 // The turn lifecycle and the theme/keybinding group live in sibling files
 // (gh #574): an inherent `impl Chat` may be partitioned this way, so the
@@ -695,6 +721,9 @@ mod chat_offset_tests;
 #[cfg(test)]
 #[path = "chat_reload_keys_tests.rs"]
 mod chat_reload_keys_tests;
+#[cfg(test)]
+#[path = "chat_search_tests.rs"]
+mod chat_search_tests;
 #[cfg(test)]
 #[path = "chat_toast_scrollback_tests.rs"]
 mod chat_toast_scrollback_tests;

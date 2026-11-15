@@ -117,13 +117,25 @@ fn ctrl_r_searches_the_transcript() {
     }
     assert_eq!(chat.search.as_deref(), Some("question"));
     assert!(chat.search_matches.len() >= 2, "two prompts match");
-    assert!(chat.jump_target.is_some());
+    // Gh #376 gap 3: a reveal is a **scroll request**, not a jump pin - the search
+    // wants a third of the window above the match, and a prompt jump top-pins.
+    assert!(
+        chat.search_scroll.is_some(),
+        "the reveal asked for a scroll"
+    );
     chat.handle_key("\r"); // next match
     assert!(chat.search_index >= 1);
     let viewport = chat.viewport(80, 24, 0);
+    // Gh #376 gap 4: the **current** match is bold+inverse and the others are
+    // underlined, so the old "some row carries \x1b[7m" assertion is still true for
+    // the stronger reason (the selected match paints it).
     assert!(
-        viewport.iter().any(|l| l.contains("\x1b[7m")),
-        "matches are highlighted"
+        viewport.iter().any(|l| l.contains("\x1b[1;7m")),
+        "the current match is painted bold+inverse: {viewport:?}"
+    );
+    assert!(
+        viewport.iter().any(|l| l.contains("\x1b[4m")),
+        "the other matches are underlined: {viewport:?}"
     );
     chat.handle_key("\x1b"); // escape closes
     assert!(chat.search.is_none());

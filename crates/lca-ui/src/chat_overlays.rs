@@ -1,7 +1,7 @@
 //! The chat's overlay composition, split from `chat.rs` (the 1,200-line
 //! ceiling). The modals and pickers composite over the visible viewport.
 
-use super::chat::{Chat, highlight_matches};
+use super::chat::Chat;
 use super::ext_widgets::widget_lines;
 use super::render::{overlay_box_picker, side_panel};
 use crate::chat_pickers::TRUST_OPTIONS;
@@ -169,8 +169,35 @@ impl Chat {
             lines.resize(working_height, String::new());
         }
         let viewport_start = lines.len().saturating_sub(height as usize);
+        // Gh #376 gap 4: the same window/document difference the fullscreen path
+        // records. The scrollback screen hands `compose_overlays` the **bottom**
+        // `height` rows of a whole session document, so the base is that slice's first
+        // document row - without it a match would be painted at a row index relative to
+        // the document rather than to the slice.
+        self.search_view_base.set(viewport_start);
         let viewport_slice = &mut lines[viewport_start..];
         self.compose_overlays(viewport_slice, width, height);
+    }
+
+    /// Paint the search matches into a **screen slice** (FR-UI-12, gh #376 gap 4).
+    ///
+    /// The match list is per-row **segments** now, so the paint asks each row which
+    /// spans belong to it and styles them: the selected match bold+inverse, the others
+    /// underlined, each span closing only the channels it opened. The old per-row
+    /// `contains` underline is gone because a match is no longer a row - it is a span
+    /// pair, and a wrap-spanning match paints *half* on each row.
+    ///
+    /// Separate from `compose_overlays` because the scrollback screen returns from
+    /// `compose_overlays_bottom_anchored` **before** it when there is no overlay, and
+    /// the search was never an overlay: the highlight therefore has to be painted by
+    /// whoever owns the frame, not by the overlay compositor.
+    pub(super) fn paint_search_rows(&self, screen: &mut [String]) {
+        if self.search.is_none() || self.search_matches.is_empty() {
+            return;
+        }
+        for (row, line) in screen.iter_mut().enumerate() {
+            *line = self.paint_search_row(row, line);
+        }
     }
 
     /// Whether anything would be composited over the viewport right now.
@@ -250,14 +277,7 @@ impl Chat {
         }
         self.paint_drawer_tab(viewport, width, height);
 
-        // Highlight the search matches (FR-UI-12).
-        if let Some(query) = &self.search
-            && !query.is_empty()
-        {
-            for line in viewport.iter_mut() {
-                *line = highlight_matches(line, query);
-            }
-        }
+        self.paint_search_rows(viewport);
     }
 
     /// Draw the open picker, if any (returns true when one was drawn).

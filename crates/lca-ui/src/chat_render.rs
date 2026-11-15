@@ -690,6 +690,11 @@ impl Chat {
         if !self.screen_mode {
             let mut lines = self.render(width);
             self.compose_overlays_bottom_anchored(&mut lines, width, height);
+            // Gh #376 gap 4: the scrollback screen paints the **whole document**, so the
+            // search's row base is 0 and the highlight belongs here - `compose_overlays`
+            // is not reached when nothing is overlaid.
+            self.search_view_base.set(0);
+            self.paint_search_rows(&mut lines);
             self.paint_toasts_at_bottom(&mut lines, width, height);
             return lines;
         }
@@ -730,6 +735,11 @@ impl Chat {
         let from_bottom = (scroll as usize).min(content.saturating_sub(window));
         let end = content - from_bottom;
         let start = end.saturating_sub(window);
+        // Gh #376 gap 4: the paint below is handed a **window slice** (`lines`), while
+        // a match's segments are **document** rows. Recording the window's first
+        // document row here - in the one function both renderers pass through - is how
+        // the two coordinates meet without either side re-deriving the other.
+        self.search_view_base.set(start);
         // Gh #324 gap 3: an image block that straddles an edge of this window is
         // **cropped to the visible band** before the slice is taken, because after
         // the slice the block is a fragment - its header may be gone entirely (top
@@ -1062,6 +1072,19 @@ impl Chat {
         };
         self.last_transcript_len = Some(content);
         self.last_render_width = width;
+        // Gh #376 gap 3: **a reveal owns the position until the reader moves.** This
+        // is pi's `followSuppressedAtEnd`, expressed in this tree's bottom coordinates:
+        // while the lock holds the scroll a reveal set, neither the follow-at-the-end
+        // rule (which returns 0 for a live-bottom match) nor the stream delta applies,
+        // so a token arriving mid-read cannot take the selected match off the screen.
+        // Any other scroll value means the reader scrolled (or a key moved them), and
+        // that wins - the lock is dropped rather than fought.
+        if let Some(locked) = self.search_follow_lock.get() {
+            if scroll == locked {
+                return scroll.min(max);
+            }
+            self.search_follow_lock.set(None);
+        }
         if scroll == 0 {
             return 0;
         }
