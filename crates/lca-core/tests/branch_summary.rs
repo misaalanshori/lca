@@ -393,3 +393,55 @@ fn scope_roots(name: &str) -> lca_permissions::ScopeRoots {
         state_dir: root.join("data"),
     }
 }
+
+/// A backend already holding usage **and** a strategy that fails: the shape a real
+/// failure takes (the call was made and billed, then something refused), without a nested
+/// runtime. `complete` is never reached here because the double fails before asking.
+struct PreArmedBackend {
+    usage: std::sync::Mutex<Option<lca_protocol::Usage>>,
+}
+
+impl lca_tools::CompletionBackend for PreArmedBackend {
+    fn complete(
+        &self,
+        _messages: &[lca_protocol::ChatMessage],
+    ) -> Result<(String, lca_protocol::Usage), lca_tools::CompletionError> {
+        Err(lca_tools::CompletionError::Provider("unused".to_string()))
+    }
+
+    fn take_usage(&self) -> Option<lca_protocol::Usage> {
+        self.usage.lock().unwrap_or_else(|p| p.into_inner()).take()
+    }
+}
+
+#[test]
+fn a_failed_summary_still_drains_the_backend() {
+    use lca_tools::CompletionBackend as _;
+    let (store, session) = seeded("failed-drain");
+    store.append(&session, user("u1", "first")).expect("u1");
+    store.append(&session, user("u2", "abandoned")).expect("u2");
+
+    // A backend that already holds the failed call's spend, and a strategy that fails.
+    let backend = Arc::new(PreArmedBackend {
+        usage: std::sync::Mutex::new(Some(lca_protocol::Usage {
+            input: 10,
+            output: 2,
+            ..Default::default()
+        })),
+    });
+    let calls = Arc::new(AtomicUsize::new(0));
+    let error = lca_core::summarize_branch_now(
+        store.clone(),
+        session.clone(),
+        Arc::new(registry_with(calls.clone(), true)),
+        Some(backend.clone()),
+        "u1",
+    )
+    .expect_err("the strategy failed");
+    assert!(error.contains("branch summary failed"), "{error}");
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "the call was made");
+    assert!(
+        backend.take_usage().is_none(),
+        "the failed call's usage was drained, so the next /compact cannot claim it"
+    );
+}

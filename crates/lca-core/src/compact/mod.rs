@@ -271,7 +271,17 @@ pub fn summarize_branch_now(
         if candidate.is_empty() {
             return Err("nothing to summarize: the branch has no records after it".to_string());
         }
-        let summary = strategy.compact(&candidate).await.map_err(|err| {
+        let summary = strategy.compact(&candidate).await;
+        // **The backend is drained on every exit path, not only on success.** It is
+        // the session's one completion handle, so a caller that caused a call owns the
+        // usage it produced - and a *failed* call can still have spent tokens (a
+        // provider that answered with an error after billing, a strategy that gave up
+        // mid-stream). Leaving the cell occupied made the next `/compact` fold this
+        // call's tokens into its own totals, which is the #49 per-call-drain class.
+        if let Some(backend) = completion_backend.as_ref() {
+            let _ = backend.take_usage();
+        }
+        let summary = summary.map_err(|err| {
             format!(
                 "the branch summary failed in strategy `{}`: {err}",
                 strategy.name()
@@ -279,9 +289,6 @@ pub fn summarize_branch_now(
         })?;
         if summary.trim().is_empty() {
             return Err("the branch summary came back empty; nothing was recorded".to_string());
-        }
-        if let Some(backend) = completion_backend.as_ref() {
-            let _ = backend.take_usage();
         }
         store
             .summarize_branch(&session, &record_id, summary.trim())
