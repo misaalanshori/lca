@@ -41,6 +41,17 @@ Dates are UTC.
   is `/paste` and the right-button handler.
 
 ### Fixed
+- **Display math inside a list item typesets instead of printing its source** (gh
+  #385, interface). A bulleted derivation — `- steady state: $$x = \frac{a}{b}$$` —
+  used to render the flattened one-liner `x = a/b`, while the identical content inside
+  a blockquote stacked into a fraction: the list branch passed each item's text to the
+  inline renderer, so a `$$…$$` block never reached the math detector. An item now
+  renders its body as blocks and prefixes the typeset rows: the marker sits on the
+  first row and the rest align under the content (`- a` / `  ─` / `  b`), for bullets,
+  numbers, task markers, nested items and `> - …` alike. Half-streamed math still holds
+  its raw source (no flicker, and its `_`/`*` are never italicised), malformed math
+  still fails soft, and a 2D block wider than the item falls back to raw wrapped source
+  instead of overflowing — the rule tables already use.
 - **The editor's kill ring finishes its forward half, and `Alt+D`/`Alt+Y` finally
   do something** (gh #383 gap 2, interface). `tui.editor.deleteWordForward` (`alt+d`,
   `alt+delete`) and `tui.editor.yankPop` (`alt+y`) had been in the binding table since

@@ -42,6 +42,7 @@ pub type StyleFn = Arc<dyn Fn(&str) -> String + Send + Sync>;
 /// The syntax-highlighting hook (pi's `theme.highlightCode`).
 pub type HighlightFn = Arc<dyn Fn(&str, &str) -> Option<Vec<String>> + Send + Sync>;
 
+mod list_math;
 mod options;
 mod tables;
 mod transform;
@@ -495,10 +496,31 @@ fn render_blocks(
             if matches!(kind, ListMarker::Bullet { .. }) {
                 marker = (theme.list_bullet)(&marker);
             }
-            let rendered = render_inline(&content, theme, options);
             let prefix = " ".repeat(indent) + &marker;
             let marker_width = visible_width(&prefix);
-            let wrapped = wrap_text_with_ansi(&rendered, inner_width.saturating_sub(marker_width));
+            let item_width = inner_width.saturating_sub(marker_width);
+            // Gh #385: an item whose content **starts** a display-math block
+            // typesets it, the same blocks path a blockquote's children take.
+            // pi renders every item child token as a block (`markdown.ts`
+            // renderList -> renderToken), so `- $$…$$` is a `latexBlock`; an
+            // `$$` that starts mid-line stays inline (`- note: $$x$$`), which
+            // is pi's own inline `latex` token.
+            let content_col = indent + content_offset(trimmed);
+            let item = list_math::Item {
+                lines,
+                at: i,
+                content: &content,
+                content_col,
+                prefix: &prefix,
+                width: item_width,
+            };
+            if let Some((rows, extra)) = list_math::render_item(&item, theme, options) {
+                out.extend(rows);
+                i += 1 + extra;
+                continue;
+            }
+            let rendered = render_inline(&content, theme, options);
+            let wrapped = wrap_text_with_ansi(&rendered, item_width);
             for (j, wrapped_line) in wrapped.iter().enumerate() {
                 if j == 0 {
                     out.push(format!("{prefix}{wrapped_line}"));
@@ -554,6 +576,12 @@ enum ListMarker {
     /// An ordered item: the number the run starts at and the authored
     /// delimiter (`.` or `)`), which `preserveOrderedListMarkers` keeps.
     Ordered { start: u64, delim: char },
+}
+
+/// The byte offset from the line's start to the item's content, which is the
+/// column a display-math block inside the item is dedented against.
+fn content_offset(trimmed: &str) -> usize {
+    list_item(trimmed).map_or(0, |(_, content, _)| trimmed.len() - content.len())
 }
 
 fn list_item(line: &str) -> Option<(ListMarker, String, usize)> {
@@ -1003,6 +1031,8 @@ impl Markdown {
     }
 }
 
+#[cfg(test)]
+mod list_math_tests;
 #[cfg(test)]
 mod mermaid_reasoning_tests;
 #[cfg(test)]

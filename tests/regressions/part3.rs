@@ -835,3 +835,8 @@ mod error_shapes;
 // on the existing clipboard seam, with no new crate and no new `unsafe`.
 #[path = "403-gap3-paste-file-tier.rs"]
 mod paste_file_tier;
+
+// Gh #385: a list item's display math reaches `block_math` (the structural half;
+// the behavioural rows live beside the router).
+#[path = "385-list-math-reaches-block-math.rs"]
+mod list_math_reaches_block_math;
