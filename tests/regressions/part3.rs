@@ -845,3 +845,8 @@ mod list_math_reaches_block_math;
 // (the wire JPEG, its hash and the record shape are untouched).
 #[path = "599-the-kitty-lane-draws-a-resized-image.rs"]
 mod the_kitty_lane_draws_a_resized_image;
+
+// Gh #600: a 256-colour terminal keeps its palette - the ladder, the lowering, and
+// the frame, driven from outside both crates.
+#[path = "600-color-depth-tier.rs"]
+mod color_depth_tier;
