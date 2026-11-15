@@ -165,7 +165,7 @@ pub(crate) fn read_image_result(
 /// A **display-sized PNG** from any image the `image` crate can decode (gh #599).
 ///
 /// The kitty graphics protocol names no code for JPEG (gh #598), so a resized vision
-/// attachment - which [`downscale_image`] emits as JPEG q80 - could not be sent and
+/// attachment - which the resize path emits as JPEG q80 - could not be sent and
 /// took the placeholder: a label where a picture belongs. The terminal can draw a
 /// PNG, so the display path converts at **render** time instead of storing a second
 /// copy. The size is `cells × cell_pixels`: the `c=`/`r=` box the renderer chose,

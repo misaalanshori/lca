@@ -123,8 +123,8 @@ impl Transcript {
 
     /// Forget the display derivatives (gh #599).
     ///
-    /// **Not** part of [`Self::invalidate_cache`], which the theme, the keybindings and
-    /// every setting drop: a derivative's pixels depend on the **box** and the media
+    /// **Not** part of the crate-private `invalidate_cache`, which the theme, the
+    /// keybindings and every setting drop: a derivative's pixels depend on the **box** and the media
     /// type, neither of which a palette or a rebind moves, and encoding again on every
     /// theme change would be the stutter this memo exists to prevent. The two triggers
     /// that do move the box call this: a probed cell size (the box is cells × cell
