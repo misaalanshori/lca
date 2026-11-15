@@ -170,6 +170,31 @@ The loopback OAuth listener works the same as on POSIX platforms; Windows has no
 
 **Non-quarantined load-only observation (2026-11-15, gh #598).** `the_picker_moves_to_a_local_preset_that_needs_no_key` (`lca-cli::e2e_terminal`, real tmux pane) failed **once** on `test (macos-latest, shell)` (CI `43587423453`, head `0d3bd053`): its assertion read `the picker closed:` and the captured pane was still the startup screen, so the `Down`-walk to the local preset had not landed when `Enter` went in. It is a **load-only** shape - the row drives a real terminal, its walk polls a fixed 4 x 100 ms per step, and the failure is a redraw the capture missed rather than a wrong screen. Receipts: **green three times on the same machine** immediately afterwards (solo 9.8 s, solo 9.4 s, and the whole 18-row `e2e_terminal` target 18/18 in 15.1 s), and the firing commit touched only `crates/lca-tui/src/widgets/image*`, which cannot reach a login picker. **Not quarantined**: one observation is not a pattern, and the house rule is that quarantining needs a tracking issue and a named mechanism. Nothing was loosened - the assertion, the settle and the poll windows are as the gh #447 row left them. If it fires a second time, the next step is the `wait_for_input_ready`/`wait_settled_for` primitives (a captured frame that has *settled* on the preset, not a fixed sleep per step), which is what `docs/testing-plan.md` section 14 already prescribes for this class.
 
+**Non-quarantined load-only observation (2026-11-16, gh #600's CI run).** Three rows have now
+fired on the **macOS shell leg** across three consecutive runs of *different* heads, and they
+share one shape: a wall-clock or absence assertion finer than a loaded runner's scheduling
+quantum. `lca-ui::run_wake::producer_tests::an_idle_loop_does_no_work_for_200_ms` (CI
+`43750910373`, head `a4261b38`) panicked with `and the tick still fires: 1` — the 200 ms
+window held **one** 50 ms tick where the row wants ≥2, i.e. the runner was ~150 ms late to
+schedule the loop; the producer-wake and spin halves of the same row passed. Receipts:
+**5/5 green solo on this box** (0.21-0.22 s each), and 5/5 green again with 24 spinners
+packed onto its four cores. The other two rows of the same family, both **already
+non-quarantined** and both green solo 3/3 here, are
+`lca-cli::e2e_split_reply_366::a_split_terminal_reply_is_never_typed_into_the_composer`
+(`43701559681`, head `5c7ef3c6`: `ordinary typing still reaches the composer after a split
+reply:` with a pane that had not echoed yet) and
+`lca-tui::widgets::autocomplete::trigger::trigger_tests::an_unchanged_token_is_answered_from_the_cache_with_no_second_query`
+(same run: `that query started` from a poisoned `Mutex`, i.e. the answering thread did not
+reach it inside the row's `yield_now` spin).
+
+**Not quarantined, and the fix named**: each is a row whose *own* waiting needs the
+`retry_once`/`wait_settled_for` treatment rather than a wider number — the run_wake row's
+≥2-tick clause should derive from the tick interval with the load factor the harness already
+computes, and the other two should wait on their positive half (an echoed byte, a released
+sender) instead of a fixed window and a yield loop. Ledgered here with the three run ids so
+the next cycle that owns those files has the entries; **nothing was loosened in this cycle**
+and no assertion was touched.
+
 **Non-quarantined load-only observation (2026-11-15, gh #376 fix-up).**
 `e2e_polish::ctrl_c_clears_text_then_exits` (`lca-cli`, real tmux pane) failed **once** on
 `test (macos-latest, shell)` (CI `43682728063` attempt 1, head `90478b03`): the assertion
