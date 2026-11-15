@@ -160,6 +160,17 @@ fn a_never_session_paints_nothing_at_any_depth() {
         ColorDepth::Ansi16,
         ColorDepth::None,
     ] {
+        // The **other** half of FR-UI-5: `ui.color` is left on `auto` (so nothing
+        // disables colour by hand) and the *terminal* answers the `None` rung - a pipe,
+        // `TERM=dumb`. Before gh #600's `colored && support != None` line this painted
+        // 24-bit SGR into a pipe (measured: 37 bodies), which is exactly what FR-UI-5
+        // says must not happen. The `plain` half above is the same rung reached from the
+        // other side, so the row covers both.
+        let by_terminal = painted_document(depth, false);
+        assert!(
+            depth != ColorDepth::None || !by_terminal.contains("\x1b["),
+            "a session whose terminal answers no colour emits nothing either ({depth:?}):\n{by_terminal}"
+        );
         let frame = painted_document(depth, true);
         assert!(
             !frame.contains("\x1b["),
