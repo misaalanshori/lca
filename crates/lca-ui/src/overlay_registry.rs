@@ -68,6 +68,7 @@ pub const CHAT_OVERLAYS: &[&str] = &[
     "search_anchor",
     "search_selected",
     "search_scroll",
+    "search_frame",
 ];
 
 /// Every transient overlay on [`UiState`](crate::ui_state::UiState), by field name.
@@ -124,6 +125,7 @@ pub(crate) fn close_tab_overlays(chat: &mut Chat) {
         search_anchor,
         search_selected,
         search_scroll,
+        search_frame,
     );
     clear_world_overlays(&mut chat.world);
 }

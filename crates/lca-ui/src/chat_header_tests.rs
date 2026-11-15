@@ -33,7 +33,7 @@ fn chat_with_header() -> Chat {
     chat
 }
 
-fn frame(chat: &Chat) -> String {
+fn frame(chat: &mut Chat) -> String {
     strip(&chat.viewport(100, 30, 0)).join("\n")
 }
 
@@ -42,8 +42,8 @@ fn frame(chat: &Chat) -> String {
 // wall.
 #[test]
 fn the_header_starts_compact() {
-    let chat = chat_with_header();
-    let text = frame(&chat);
+    let mut chat = chat_with_header();
+    let text = frame(&mut chat);
     assert!(
         text.contains("4 extensions"),
         "the compact counts show:\n{text}"
@@ -65,14 +65,14 @@ fn the_existing_expand_key_reveals_the_table() {
     let key = chat.keybindings.primary_key("app.tools.expand");
     assert_eq!(key, "ctrl+o", "the shipped binding is the tool-expand key");
     chat.handle_key("\u{0f}");
-    let text = frame(&chat);
+    let text = frame(&mut chat);
     assert!(
         text.contains("/w/.lca/AGENTS.md"),
         "the expanded table's context row shows:\n{text}"
     );
     // And back again: the toggle is a toggle, not a one-way reveal.
     chat.handle_key("\u{0f}");
-    let text = frame(&chat);
+    let text = frame(&mut chat);
     assert!(
         !text.contains("/w/.lca/AGENTS.md"),
         "and pressing it again collapses:\n{text}"
@@ -87,7 +87,10 @@ fn the_existing_expand_key_reveals_the_table() {
 fn the_expanded_state_survives_a_new_session() {
     let mut chat = chat_with_header();
     chat.handle_key("\u{0f}");
-    assert!(frame(&chat).contains("/w/.lca/AGENTS.md"), "expanded first");
+    assert!(
+        frame(&mut chat).contains("/w/.lca/AGENTS.md"),
+        "expanded first"
+    );
     // `/new` is the tab path: it replays a fresh session's (empty) records, which
     // is what clears the transcript.
     let created = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
@@ -103,7 +106,7 @@ fn the_expanded_state_survives_a_new_session() {
         Some(Vec::<lca_protocol::Record>::new())
     }));
     chat.open_tab();
-    let text = frame(&chat);
+    let text = frame(&mut chat);
     assert!(
         text.contains("/w/.lca/AGENTS.md"),
         "the header is still expanded after the switch:\n{text}"
@@ -126,7 +129,7 @@ fn a_collision_notice_paints_on_the_compact_header() {
     );
     let mut chat = Chat::new(opts, Arc::new(KeybindingsManager::new()));
     chat.screen_mode = true;
-    let text = frame(&chat);
+    let text = frame(&mut chat);
     assert!(
         text.contains("formatter") && text.contains("skipped"),
         "the notice is on screen without expanding anything:\n{text}"

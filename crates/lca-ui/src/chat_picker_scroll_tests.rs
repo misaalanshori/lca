@@ -23,8 +23,8 @@ fn a_tall_model_picker_pages_with_frame_and_selection_visible() {
         .collect();
     chat.model_picker = Some(ModelPicker::new(models));
     let (w, h) = (80u16, 24u16);
-    let paint = |chat: &Chat| strip(&chat.viewport(w, h, 0)).join("\n");
-    let text = paint(&chat);
+    let paint = |chat: &mut Chat| strip(&chat.viewport(w, h, 0)).join("\n");
+    let text = paint(&mut chat);
     assert!(text.contains("╭─"), "top border draws");
     assert!(text.contains("╰─"), "bottom border draws");
     assert!(text.contains("▼"), "more below at the top");
@@ -34,7 +34,7 @@ fn a_tall_model_picker_pages_with_frame_and_selection_visible() {
         let _ = chat.handle_picker_key("", Some("pagedown"));
     }
     assert_eq!(chat.model_picker.as_ref().unwrap().selected, 30);
-    let text = paint(&chat);
+    let text = paint(&mut chat);
     assert!(text.contains("model-30"), "the paged-to row shows");
     assert!(text.contains("▲"), "more above now");
     assert!(text.contains("▼"), "more below still");
@@ -47,7 +47,7 @@ fn a_tall_model_picker_pages_with_frame_and_selection_visible() {
 
     let _ = chat.handle_picker_key("", Some("end"));
     assert_eq!(chat.model_picker.as_ref().unwrap().selected, 49);
-    let text = paint(&chat);
+    let text = paint(&mut chat);
     assert!(text.contains("model-49"), "the last row shows");
     assert!(!text.contains("▼"), "nothing below at the end");
 }

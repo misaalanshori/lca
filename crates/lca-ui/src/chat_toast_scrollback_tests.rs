@@ -55,7 +55,7 @@ fn scrollback_chat(turns: usize) -> Chat {
 fn frame_bytes(
     renderer: &mut MainScreenRenderer,
     term: &mut FakeTerminal,
-    chat: &Chat,
+    chat: &mut Chat,
     width: u16,
     height: u16,
 ) -> String {
@@ -80,10 +80,10 @@ fn a_toast_over_a_tall_document_never_clears_the_scrollback() {
     let mut term = FakeTerminal::new(WIDTH, HEIGHT);
     let mut renderer = MainScreenRenderer::new();
     // First frame: paint the document and settle `prev_viewport_top`.
-    frame_bytes(&mut renderer, &mut term, &chat, WIDTH, HEIGHT);
+    frame_bytes(&mut renderer, &mut term, &mut chat, WIDTH, HEIGHT);
 
     chat.toast("settings saved");
-    let out = frame_bytes(&mut renderer, &mut term, &chat, WIDTH, HEIGHT);
+    let out = frame_bytes(&mut renderer, &mut term, &mut chat, WIDTH, HEIGHT);
     assert!(
         !out.contains("\x1b[3J"),
         "a toast must not clear the scrollback: {out:?}"
@@ -98,7 +98,7 @@ fn a_toast_over_a_tall_document_never_clears_the_scrollback() {
     // backdate the toast rather than waiting one out.
     chat.toasts[0].until = std::time::Instant::now() - std::time::Duration::from_secs(1);
     chat.expire_toasts();
-    let out = frame_bytes(&mut renderer, &mut term, &chat, WIDTH, HEIGHT);
+    let out = frame_bytes(&mut renderer, &mut term, &mut chat, WIDTH, HEIGHT);
     assert!(
         !out.contains("\x1b[3J"),
         "a toast expiring must not clear the scrollback: {out:?}"

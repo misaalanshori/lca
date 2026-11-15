@@ -151,7 +151,7 @@ impl Chat {
     /// Composite overlays bottom-anchored into a full document line buffer
     /// for main-screen (scrollback) rendering.
     pub(super) fn compose_overlays_bottom_anchored(
-        &self,
+        &mut self,
         lines: &mut Vec<String>,
         width: u16,
         height: u16,
@@ -174,32 +174,16 @@ impl Chat {
         // `height` rows of a whole session document, so the base is that slice's first
         // document row - without it a match would be painted at a row index relative to
         // the document rather than to the slice.
-        self.search_view_base.set(viewport_start);
+        self.set_search_base(viewport_start);
         let viewport_slice = &mut lines[viewport_start..];
         self.compose_overlays(viewport_slice, width, height);
     }
 
-    /// Paint the search matches into a **screen slice** (FR-UI-12, gh #376 gap 4).
+    /// Paint the search matches into a **screen slice** (gh #376 fix F5).
     ///
-    /// The match list is per-row **segments** now, so the paint asks each row which
-    /// spans belong to it and styles them: the selected match bold+inverse, the others
-    /// underlined, each span closing only the channels it opened. The old per-row
-    /// `contains` underline is gone because a match is no longer a row - it is a span
-    /// pair, and a wrap-spanning match paints *half* on each row.
-    ///
-    /// Separate from `compose_overlays` because the scrollback screen returns from
-    /// `compose_overlays_bottom_anchored` **before** it when there is no overlay, and
-    /// the search was never an overlay: the highlight therefore has to be painted by
-    /// whoever owns the frame, not by the overlay compositor.
-    pub(super) fn paint_search_rows(&self, screen: &mut [String]) {
-        if self.search.is_none() || self.search_matches.is_empty() {
-            return;
-        }
-        for (row, line) in screen.iter_mut().enumerate() {
-            *line = self.paint_search_row(row, line);
-        }
-    }
-
+    /// The paint itself lives beside the search (`Chat::paint_search_rows`); this
+    /// wrapper exists because `compose_overlays_bottom_anchored` returns early when
+    /// nothing is overlaid, so the highlight has to be owned by whoever owns the frame.
     /// Whether anything would be composited over the viewport right now.
     ///
     /// One predicate for the padding decision (gh #372 bug 2), so a **new** overlay
@@ -215,7 +199,7 @@ impl Chat {
     }
 
     /// Composite the modals and the side panel over the viewport.
-    pub(super) fn compose_overlays(&self, viewport: &mut [String], width: u16, height: u16) {
+    pub(super) fn compose_overlays(&mut self, viewport: &mut [String], width: u16, height: u16) {
         // Gh #373 gap 6: input dispatch runs between frames and has no size of its
         // own, so the size this frame resolved against is recorded here - the one
         // function **both** renderers pass through (`compose_overlays_bottom_anchored`

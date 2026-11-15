@@ -43,7 +43,7 @@ fn ask_for_code(chat: &mut Chat, masked: bool) {
 }
 
 /// The whole modal as plain text.
-fn frame(chat: &Chat, width: u16, height: u16) -> String {
+fn frame(chat: &mut Chat, width: u16, height: u16) -> String {
     strip(&chat.viewport(width, height, 0)).join("\n")
 }
 
@@ -77,7 +77,7 @@ fn a_secret_step_stays_masked_after_the_flow_advances() {
     });
 
     // Nowhere: not the modal, not the trail, not the stored entry.
-    let modal = frame(&chat, 80, 24);
+    let modal = frame(&mut chat, 80, 24);
     assert!(
         !modal.contains(secret),
         "the secret reached the modal after advancing:\n{modal}"
@@ -151,7 +151,7 @@ fn a_completed_step_stays_visible_when_the_next_prompt_opens() {
     waiting(&mut chat, &url);
     ask_for_code(&mut chat, false);
 
-    let modal = frame(&chat, 80, 24);
+    let modal = frame(&mut chat, 80, 24);
     assert!(
         modal.contains("accounts.example.test"),
         "the URL from the first step is still on screen:\n{modal}"
@@ -186,7 +186,7 @@ fn a_three_step_flow_keeps_every_step() {
         masked: false,
     });
 
-    let modal = frame(&chat, 80, 30);
+    let modal = frame(&mut chat, 80, 30);
     assert!(
         modal.contains("accounts.example.test"),
         "step 1 (the URL) survived:\n{modal}"
@@ -224,7 +224,7 @@ fn a_submitted_value_carries_the_input_marker() {
         masked: false,
     });
 
-    let modal = frame(&chat, 80, 30);
+    let modal = frame(&mut chat, 80, 30);
     assert!(
         modal.contains("> http://localhost:8080/callback?code=abc"),
         "the submitted value is marked as input:\n{modal}"
@@ -342,7 +342,7 @@ fn the_newest_prompt_stays_visible_when_the_trail_is_long() {
         chat.handle_key(&character.to_string());
     }
 
-    let modal = frame(&chat, 80, 24);
+    let modal = frame(&mut chat, 80, 24);
     assert!(
         modal.contains("Paste the callback URL:"),
         "the live prompt is on screen:\n{modal}"
@@ -366,7 +366,7 @@ fn a_short_trail_is_shown_whole() {
     waiting(&mut chat, &sign_in_url());
     ask_for_code(&mut chat, false);
 
-    let modal = frame(&chat, 80, 24);
+    let modal = frame(&mut chat, 80, 24);
     assert!(
         !modal.contains("earlier step"),
         "nothing is elided when it all fits:\n{modal}"
@@ -402,7 +402,7 @@ fn the_permission_countdown_is_untouched() {
         respond: None,
         deadline: Some(std::time::Instant::now() + std::time::Duration::from_secs(30)),
     });
-    let modal = frame(&chat, 80, 24);
+    let modal = frame(&mut chat, 80, 24);
     assert!(
         modal.contains("auto-approves in"),
         "the countdown still renders:\n{modal}"
@@ -428,7 +428,7 @@ fn a_finished_flow_leaves_no_trail_behind() {
     );
     // A fresh login shows only its own step.
     waiting(&mut chat, "https://accounts.example.test/second-login");
-    let modal = frame(&chat, 80, 24);
+    let modal = frame(&mut chat, 80, 24);
     assert!(
         !modal.contains("step0"),
         "the previous login's steps are gone:\n{modal}"
@@ -458,7 +458,7 @@ fn the_grant_consent_keeps_the_trail_above_it() {
         prompt: "example's endpoint is api.example.test; add it as an ad hoc grant?".into(),
     });
 
-    let modal = frame(&chat, 80, 24);
+    let modal = frame(&mut chat, 80, 24);
     assert!(
         modal.contains("accounts.example.test"),
         "the URL from step 1 is still above the consent:\n{modal}"

@@ -44,7 +44,7 @@ fn chat_with(rows: &[(&str, &str, &str)]) -> Chat {
     chat
 }
 
-fn paint(chat: &Chat) -> String {
+fn paint(chat: &mut Chat) -> String {
     strip(&chat.viewport(100, 30, 0)).join("\n")
 }
 
@@ -65,12 +65,12 @@ fn typing_filters_the_settings_list_by_key() {
         ("ui.theme", "Theme", "The color palette"),
         ("provider.retry_limit", "Retry limit", "Retry attempts"),
     ]);
-    let before = paint(&chat);
+    let before = paint(&mut chat);
     assert!(before.contains("Color = v"), "{before}");
     assert!(before.contains("Retry limit = v"), "{before}");
 
     type_text(&mut chat, "retry");
-    let after = paint(&chat);
+    let after = paint(&mut chat);
     assert!(
         after.contains("Retry limit = v"),
         "the match stays:\n{after}"
@@ -95,7 +95,7 @@ fn typing_matches_the_label_and_the_description() {
             ("provider.retry_limit", "Retry limit", "Retry attempts"),
         ]);
         type_text(&mut chat, needle);
-        let text = paint(&chat);
+        let text = paint(&mut chat);
         assert!(
             text.contains("Retry limit = v"),
             "`{needle}` finds the row:\n{text}"
@@ -110,7 +110,7 @@ fn typing_matches_the_label_and_the_description() {
 fn the_filter_is_case_insensitive() {
     let mut chat = chat_with(&[("provider.retry_limit", "Retry limit", "Retry attempts")]);
     type_text(&mut chat, "RETRY");
-    assert!(paint(&chat).contains("Retry limit = v"));
+    assert!(paint(&mut chat).contains("Retry limit = v"));
 }
 
 // Verifies: gh #272 parity pass - THE property that makes filtering safe:
@@ -166,7 +166,7 @@ fn escape_clears_the_query_before_closing() {
     let _ = chat.handle_picker_key("", Some("escape"));
     let picker = chat.settings_picker.as_ref().expect("still open");
     assert!(picker.query.is_empty(), "the query is cleared");
-    assert!(paint(&chat).contains("Color = v"), "every row is back");
+    assert!(paint(&mut chat).contains("Color = v"), "every row is back");
 
     let _ = chat.handle_picker_key("", Some("escape"));
     assert!(chat.settings_picker.is_none(), "the second Esc closes");
@@ -181,14 +181,14 @@ fn backspace_widens_the_filter_and_an_empty_query_shows_everything() {
         ("ui.theme", "Theme", "The color palette"),
     ]);
     type_text(&mut chat, "theme");
-    assert!(!paint(&chat).contains("Color = v"));
+    assert!(!paint(&mut chat).contains("Color = v"));
 
     for _ in 0..5 {
         let _ = chat.handle_picker_key("", Some("backspace"));
     }
     let picker = chat.settings_picker.as_ref().expect("open");
     assert!(picker.query.is_empty(), "backspaced to empty");
-    let text = paint(&chat);
+    let text = paint(&mut chat);
     assert!(text.contains("Color = v"), "{text}");
     assert!(text.contains("Theme = v"), "{text}");
     assert!(
@@ -243,8 +243,8 @@ fn navigation_is_bounded_by_the_filtered_count() {
 // which is how the affordance is discovered at all.
 #[test]
 fn the_hint_names_the_search_affordance() {
-    let chat = chat_with(&[("ui.color", "Color", "Terminal color policy")]);
-    let text = paint(&chat);
+    let mut chat = chat_with(&[("ui.color", "Color", "Terminal color policy")]);
+    let text = paint(&mut chat);
     assert!(
         text.contains("type to search"),
         "the hint names the affordance:\n{text}"
@@ -257,7 +257,7 @@ fn the_hint_names_the_search_affordance() {
 fn an_empty_result_says_no_matching_settings() {
     let mut chat = chat_with(&[("ui.color", "Color", "Terminal color policy")]);
     type_text(&mut chat, "zzzznomatch");
-    let text = paint(&chat);
+    let text = paint(&mut chat);
     assert!(
         text.contains("No matching settings"),
         "the empty state is named:\n{text}"
@@ -336,7 +336,7 @@ fn cycling_row_chat() -> Chat {
 #[test]
 fn space_with_an_empty_filter_cycles_the_highlighted_row() {
     let mut chat = cycling_row_chat();
-    let before = paint(&chat);
+    let before = paint(&mut chat);
     assert!(
         before.contains("Color = auto"),
         "the row starts on auto:\n{before}"
@@ -344,7 +344,7 @@ fn space_with_an_empty_filter_cycles_the_highlighted_row() {
 
     let _ = chat.handle_picker_key(" ", Some("space"));
 
-    let after = paint(&chat);
+    let after = paint(&mut chat);
     assert!(
         after.contains("Color = never"),
         "Space activated the row:\n{after}"
@@ -368,7 +368,7 @@ fn space_with_an_empty_filter_cycles_the_highlighted_row() {
 fn space_with_a_filter_types_a_space_into_the_search() {
     let mut chat = cycling_row_chat();
     type_text(&mut chat, "display");
-    let before = paint(&chat);
+    let before = paint(&mut chat);
     assert!(
         before.contains("search: display"),
         "the filter was typed:\n{before}"
@@ -376,7 +376,7 @@ fn space_with_a_filter_types_a_space_into_the_search() {
 
     let _ = chat.handle_picker_key(" ", Some("space"));
 
-    let after = paint(&chat);
+    let after = paint(&mut chat);
     assert!(
         after.contains("search: display "),
         "the space landed in the filter:\n{after}"

@@ -51,7 +51,7 @@ fn waiting_with(url: &str) -> Chat {
 use crate::state::LoginNext as lca_ui_LoginNext;
 
 /// The whole modal as plain text, every row joined with `\n`.
-fn plain_frame(chat: &Chat, width: u16) -> String {
+fn plain_frame(chat: &mut Chat, width: u16) -> String {
     strip(&chat.viewport(width, 24, 0)).join("\n")
 }
 
@@ -198,14 +198,14 @@ fn the_copy_confirmation_fades_like_every_other_copy_notice() {
     let url = long_url();
     let mut chat = waiting_with(&url);
     chat.note_url_copied(true);
-    assert!(plain_frame(&chat, 80).contains("Copied URL to clipboard"));
+    assert!(plain_frame(&mut chat, 80).contains("Copied URL to clipboard"));
     // `tick` is the loop's own expiry pass (it calls `expire_toasts`); drive the
     // clock past the toast window rather than sleeping.
     chat.world.url_copied_at = Some(
         std::time::Instant::now() - std::time::Duration::from_secs(crate::chat::TOAST_SECS + 1),
     );
     chat.tick();
-    let after = plain_frame(&chat, 80);
+    let after = plain_frame(&mut chat, 80);
     assert!(
         !after.contains("Copied URL to clipboard"),
         "the confirmation fades:\n{after}"
@@ -237,7 +237,7 @@ fn the_copy_hint_names_the_live_binding() {
     chat.apply_login_next(lca_ui_LoginNext::Waiting {
         label: format!("waiting for browser sign-in… (esc cancels)\n\n{url}"),
     });
-    let frame = plain_frame(&chat, 80);
+    let frame = plain_frame(&mut chat, 80);
     assert!(
         frame.contains("ctrl+g") || frame.contains("Ctrl+G"),
         "the hint follows a rebind:\n{frame}"
@@ -330,7 +330,7 @@ fn a_waiting_step_without_a_url_offers_no_copy_hint() {
     chat.apply_login_next(lca_ui_LoginNext::Waiting {
         label: "discovering login options… (esc cancels)".to_string(),
     });
-    let frame = plain_frame(&chat, 80);
+    let frame = plain_frame(&mut chat, 80);
     assert!(
         !frame.contains("to copy"),
         "no URL means no copy hint:\n{frame}"
@@ -429,7 +429,7 @@ fn the_mcp_sign_in_screen_names_the_copy_key_and_confirms_in_place() {
     let url = long_url();
     let mut chat = mcp_signin_with(&url);
     chat.hyperlinks = false;
-    let before = plain_frame(&chat, 80);
+    let before = plain_frame(&mut chat, 80);
     assert!(
         before.contains("to copy"),
         "the hint names the copy key:\n{before}"
@@ -440,7 +440,7 @@ fn the_mcp_sign_in_screen_names_the_copy_key_and_confirms_in_place() {
     );
 
     chat.note_url_copied(true);
-    let after = plain_frame(&chat, 80);
+    let after = plain_frame(&mut chat, 80);
     assert!(
         after.contains("Copied URL to clipboard"),
         "the confirmation shows in place:\n{after}"
@@ -468,6 +468,6 @@ fn an_mcp_sign_in_screen_without_a_url_offers_no_hint() {
         ..Default::default()
     });
     assert_eq!(chat.mcp_sign_in_url(), None);
-    let frame = plain_frame(&chat, 80);
+    let frame = plain_frame(&mut chat, 80);
     assert!(!frame.contains("to copy"), "no hint:\n{frame}");
 }

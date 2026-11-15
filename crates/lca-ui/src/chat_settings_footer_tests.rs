@@ -45,7 +45,7 @@ fn chat_with(rows: Vec<crate::state::SettingRow>) -> Chat {
     chat
 }
 
-fn paint(chat: &Chat, width: u16, height: u16) -> String {
+fn paint(chat: &mut Chat, width: u16, height: u16) -> String {
     strip(&chat.viewport(width, height, 0)).join("\n")
 }
 
@@ -54,11 +54,11 @@ fn paint(chat: &Chat, width: u16, height: u16) -> String {
 // pushes the selected item's description below the list).
 #[test]
 fn the_footer_shows_the_selected_rows_description() {
-    let chat = chat_with(vec![
+    let mut chat = chat_with(vec![
         row("S", "a", "Aye", "The first row's whole sentence."),
         row("S", "b", "Bee", "The second row's whole sentence."),
     ]);
-    let text = paint(&chat, 100, 30);
+    let text = paint(&mut chat, 100, 30);
     assert!(
         text.contains("The first row's whole sentence."),
         "the highlighted row's description is in the footer:\n{text}"
@@ -78,13 +78,13 @@ fn the_footer_follows_the_selection() {
         row("S", "a", "Aye", "Alpha description."),
         row("S", "b", "Bee", "Beta description."),
     ]);
-    let first = paint(&chat, 100, 30);
+    let first = paint(&mut chat, 100, 30);
     assert!(first.contains("Alpha description."), "{first}");
     assert!(!first.contains("Beta description."), "{first}");
 
     let _ = chat.handle_picker_key("", Some("down"));
 
-    let second = paint(&chat, 100, 30);
+    let second = paint(&mut chat, 100, 30);
     assert!(
         second.contains("Beta description."),
         "the footer moved with the cursor:\n{second}"
@@ -102,8 +102,8 @@ fn the_footer_follows_the_selection() {
 fn the_footer_wraps_instead_of_truncating() {
     let long = "Terminal scrollback or app-owned fullscreen, and here is a tail that \
                 would be lost to any truncation at all because it is the last clause.";
-    let chat = chat_with(vec![row("S", "a", "Aye", long)]);
-    let text = paint(&chat, 80, 30);
+    let mut chat = chat_with(vec![row("S", "a", "Aye", long)]);
+    let text = paint(&mut chat, 80, 30);
     // The phrase below starts past 80 cells into the description, so it can only be
     // on screen if the footer wrapped onto a second row.
     assert!(
@@ -137,8 +137,8 @@ fn the_footer_does_not_push_list_rows_off_the_pane() {
         .collect();
 
     let count = |rows: Vec<crate::state::SettingRow>| -> usize {
-        let chat = chat_with(rows);
-        let text = paint(&chat, 100, 30);
+        let mut chat = chat_with(rows);
+        let text = paint(&mut chat, 100, 30);
         text.lines().filter(|line| line.contains("Key ")).count()
     };
 
@@ -162,7 +162,7 @@ fn a_mouse_move_does_not_change_the_footer() {
         row("S", "b", "Bee", "Beta description."),
     ]);
     let (w, h) = (100u16, 30u16);
-    let before = paint(&chat, w, h);
+    let before = paint(&mut chat, w, h);
     let (rect, map) = chat.picker_layout(w, h).expect("the box maps");
     // Every item row, hovered in turn.
     for (offset, entry) in map.iter().enumerate() {
@@ -175,7 +175,7 @@ fn a_mouse_move_does_not_change_the_footer() {
             chat.picker_hover(item);
         }
     }
-    let after = paint(&chat, w, h);
+    let after = paint(&mut chat, w, h);
     assert_eq!(before, after, "a hover changed the frame, footer included");
 }
 
@@ -229,7 +229,7 @@ fn an_over_long_footer_is_capped_and_says_so() {
 #[test]
 fn an_editing_row_has_no_footer() {
     let mut chat = chat_with(vec![row("S", "a", "Aye", "Alpha description.")]);
-    let before = paint(&chat, 100, 30);
+    let before = paint(&mut chat, 100, 30);
     assert!(before.contains("Alpha description."), "{before}");
     let _ = chat.handle_picker_key("", Some("enter"));
     assert!(
@@ -238,7 +238,7 @@ fn an_editing_row_has_no_footer() {
             .is_some_and(|picker| picker.editing.is_some()),
         "the row is editing"
     );
-    let after = paint(&chat, 100, 30);
+    let after = paint(&mut chat, 100, 30);
     assert!(
         !after.contains("Alpha description."),
         "the footer is gone while the buffer owns the row:\n{after}"
@@ -262,10 +262,10 @@ fn a_short_pane_gives_up_the_footer_not_a_list_row() {
             )
         })
         .collect();
-    let chat = chat_with(rows);
+    let mut chat = chat_with(rows);
     // 14 rows tall: the granted box is at most 10, so the list fills it and there is
     // nothing spare.
-    let text = paint(&chat, 100, 14);
+    let text = paint(&mut chat, 100, 14);
     let items = text.lines().filter(|line| line.contains("Key ")).count();
     assert!(
         items > 1,
@@ -285,8 +285,8 @@ fn a_short_pane_gives_up_the_footer_not_a_list_row() {
 // row's first version found the double insert.
 #[test]
 fn the_footer_sits_above_the_pinned_hint() {
-    let chat = chat_with(vec![row("S", "a", "Aye", "Alpha description here.")]);
-    let text = paint(&chat, 100, 30);
+    let mut chat = chat_with(vec![row("S", "a", "Aye", "Alpha description here.")]);
+    let text = paint(&mut chat, 100, 30);
     let lines: Vec<&str> = text.lines().collect();
     let footers: Vec<usize> = lines
         .iter()
@@ -329,8 +329,8 @@ fn a_short_pane_demotes_the_description_to_the_hint_line() {
             )
         })
         .collect();
-    let chat = chat_with(rows);
-    let text = paint(&chat, 100, 14);
+    let mut chat = chat_with(rows);
+    let text = paint(&mut chat, 100, 14);
     assert!(text.contains("Key 00"), "the list paints its rows:\n{text}");
     assert!(
         text.contains("A description long"),
@@ -354,8 +354,8 @@ fn the_description_appears_once_whichever_form_it_takes() {
                 )
             })
             .collect();
-        let chat = chat_with(rows);
-        let text = paint(&chat, width, height);
+        let mut chat = chat_with(rows);
+        let text = paint(&mut chat, width, height);
         let seen = text.matches("Distinctive marker").count();
         assert_eq!(
             seen, 1,

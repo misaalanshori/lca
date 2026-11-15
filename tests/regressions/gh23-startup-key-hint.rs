@@ -64,7 +64,7 @@ fn chat() -> Chat {
 // keys under their default names, and the slash-command pointer.
 #[test]
 fn the_first_frame_carries_the_key_hint() {
-    let chat = chat();
+    let mut chat = chat();
     let text: String = chat
         .viewport(100, 30, 0)
         .iter()

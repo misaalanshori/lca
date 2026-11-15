@@ -10,7 +10,7 @@ use super::chat;
 /// the card. Matching the card's own title shape (`bash`) at a row that also
 /// carries the card frame is still ambiguous, so this takes the **last** row whose
 /// text contains the command - the card is below every startup row.
-fn header_row(chat: &crate::chat::Chat, w: u16, h: u16) -> u16 {
+fn header_row(chat: &mut crate::chat::Chat, w: u16, h: u16) -> u16 {
     let frame = chat.viewport(w, h, 0);
     frame
         .iter()
@@ -84,7 +84,7 @@ fn hover_shows_and_move_or_key_hides() {
     // Gh #399: the card header's row is **found**, not assumed. The startup block
     // sits above it and its hint row names `! bash`, so a hardcoded row would
     // both miss the card and, worse, could land on the header.
-    let header = header_row(&chat, w, h);
+    let header = header_row(&mut chat, w, h);
     let text = chat.tooltip_at(4, header, w, h, 0).expect("a tip");
     assert!(text.contains("Expand"), "names the action: {text:?}");
     let then = Instant::now() - Duration::from_millis(300);
@@ -120,7 +120,7 @@ fn due_tooltips_paint_into_the_frame() {
     chat.transcript
         .finish_tool(ToolStatus::Ok, Some("a\nb\nc\nd\ne\nf".to_string()));
     let (w, h) = (80u16, 24u16);
-    let header = header_row(&chat, w, h);
+    let header = header_row(&mut chat, w, h);
     chat.hover_at = Some((4, header, Instant::now() - Duration::from_millis(300)));
     assert!(chat.poll_tooltip(w, h, 0, Instant::now()));
     let frame = chat.viewport(w, h, 0).join("\n");
@@ -142,7 +142,7 @@ fn open_tooltip_tracks_within_the_tipped_area() {
         .finish_tool(ToolStatus::Ok, Some("a\nb\nc\nd\ne\nf".to_string()));
     let (w, h) = (80u16, 24u16);
     let then = Instant::now() - Duration::from_millis(300);
-    let header = header_row(&chat, w, h);
+    let header = header_row(&mut chat, w, h);
     chat.hover_at = Some((4, header, then));
     assert!(chat.poll_tooltip(w, h, 0, Instant::now()), "due shows");
     let first = chat.tooltip.as_ref().map(|tip| (tip.col, tip.row));

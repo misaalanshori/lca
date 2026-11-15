@@ -89,7 +89,7 @@ fn strip(row: &str) -> String {
 // whatever the scroll, so the dock never scrolls away.
 #[test]
 fn the_dock_pins_while_the_transcript_scrolls() {
-    let chat = long_chat();
+    let mut chat = long_chat();
     let at_bottom = chat.viewport(W, H, 0);
     let scrolled = chat.viewport(W, H, 18);
     assert_eq!(scrolled.len(), H as usize, "the frame fills the viewport");
@@ -112,7 +112,7 @@ fn the_dock_pins_while_the_transcript_scrolls() {
 // below relies on.
 #[test]
 fn the_scrollbar_marks_the_window_and_hides_when_it_fits() {
-    let frame = long_chat();
+    let mut frame = long_chat();
     let geometry = frame.scrollbar_for_frame(W, H, 0).expect("overflowing");
     let rows = frame.viewport(W, H, 0);
     for row in rows.iter().take(geometry.rows as usize) {
@@ -146,8 +146,8 @@ fn the_scrollbar_marks_the_window_and_hides_when_it_fits() {
 // and names the key that returns there.
 #[test]
 fn the_indicator_shows_while_scrolled_and_hides_at_the_bottom() {
-    let chat = long_chat();
-    let text = |scroll: u16| {
+    let mut chat = long_chat();
+    let mut text = |scroll: u16| {
         chat.viewport(W, H, scroll)
             .iter()
             .map(|row| strip(row))
@@ -177,7 +177,7 @@ fn the_indicator_shows_while_scrolled_and_hides_at_the_bottom() {
 // the viewport actually paints.
 #[test]
 fn selecting_a_scrollbar_row_copies_exactly_the_text() {
-    let chat = long_chat();
+    let mut chat = long_chat();
     let geometry = chat.scrollbar_for_frame(W, H, 0).expect("overflowing");
     let rows = chat.viewport(W, H, 0);
     let row = rows

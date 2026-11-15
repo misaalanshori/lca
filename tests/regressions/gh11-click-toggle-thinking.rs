@@ -83,7 +83,7 @@ fn thinking_chat() -> Chat {
     chat
 }
 
-fn frame(chat: &Chat) -> Vec<String> {
+fn frame(chat: &mut Chat) -> Vec<String> {
     chat.viewport(80, 24, 0)
         .iter()
         .map(|l| strip_terminal_sequences(l))
@@ -103,7 +103,7 @@ fn click(renderer: &mut AltScreenRenderer, col: u16, row: u16) -> Option<(u16, u
 #[test]
 fn clicking_a_reasoning_row_toggles_that_run() {
     let mut chat = thinking_chat();
-    let before = frame(&chat);
+    let before = frame(&mut chat);
     assert!(
         !before.iter().any(|l| l.contains("delta")),
         "the tail hides before the click"
@@ -118,7 +118,7 @@ fn clicking_a_reasoning_row_toggles_that_run() {
         chat.click_at(cell.0, cell.1, 0, 80, 24),
         lca_ui::ClickOutcome::ThinkingToggled
     );
-    let after = frame(&chat);
+    let after = frame(&mut chat);
     assert!(
         after.iter().any(|l| l.contains("delta")) && after.iter().any(|l| l.contains("epsilon")),
         "the run expanded:\n{}",
@@ -130,7 +130,7 @@ fn clicking_a_reasoning_row_toggles_that_run() {
 #[test]
 fn clicking_a_non_run_row_does_nothing() {
     let mut chat = thinking_chat();
-    let before = frame(&chat);
+    let before = frame(&mut chat);
     let row = before
         .iter()
         .position(|l| l.contains("quux question"))
@@ -141,7 +141,7 @@ fn clicking_a_non_run_row_does_nothing() {
         chat.click_at(cell.0, cell.1, 0, 80, 24),
         lca_ui::ClickOutcome::Ignored
     );
-    assert_eq!(frame(&chat), before, "nothing moved");
+    assert_eq!(frame(&mut chat), before, "nothing moved");
 }
 
 // Main-screen never captures the mouse, so the click half is alt-screen

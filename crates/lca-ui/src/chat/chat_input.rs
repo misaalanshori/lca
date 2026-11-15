@@ -111,9 +111,12 @@ impl Chat {
             return Action::Continue;
         }
         if self.keybindings.matches(data, "app.search") {
-            self.search = Some(String::new());
-            self.search_matches.clear();
-            self.search_index = 0;
+            // Gh #376 fix F3: opening **re-anchors**. The old arm cleared the query and
+            // the index but not the anchor, so the *first* search of the tab kept
+            // deciding where the second one landed (measured: anchor 1 survived a
+            // close-and-scroll, so search 2 picked the first search's row while the
+            // reader was at the live bottom).
+            self.open_search();
             // The readout renders from state in the dock (gh #239).
             return Action::Continue;
         }

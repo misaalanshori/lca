@@ -34,12 +34,12 @@ fn themed_chat(show_hardware_cursor: bool) -> crate::chat::Chat {
 /// `viewport`, not `render`: an overlay is composited by `viewport` (the
 /// document `render` returns has no overlay on it), and bug 3's rows learned the
 /// same lesson the hard way.
-fn frame(chat: &crate::chat::Chat) -> Vec<String> {
+fn frame(chat: &mut crate::chat::Chat) -> Vec<String> {
     chat.viewport(80, 30, 0)
 }
 
 /// Whether the chat's rendered frame paints its caret.
-fn paints(chat: &crate::chat::Chat) -> bool {
+fn paints(chat: &mut crate::chat::Chat) -> bool {
     let (_, position) = lca_tui::engine::core::extract_cursor_position(&frame(chat));
     position.expect("the composer always carries a marker").2
 }
@@ -49,11 +49,11 @@ fn paints(chat: &crate::chat::Chat) -> bool {
 #[test]
 fn the_tuning_reaches_the_editors_caret() {
     assert!(
-        paints(&themed_chat(false)),
+        paints(&mut themed_chat(false)),
         "off: a coloured theme paints the caret, the product default"
     );
     assert!(
-        !paints(&themed_chat(true)),
+        !paints(&mut themed_chat(true)),
         "on: the accessibility opt-in reaches the editor and stops the painting"
     );
 }
@@ -73,18 +73,18 @@ fn flipping_the_tuning_at_runtime_flips_the_caret() {
         ..Default::default()
     }));
     let mut chat = crate::chat::Chat::new(opts, Arc::new(KeybindingsManager::new()));
-    assert!(paints(&chat), "starts painted");
+    assert!(paints(&mut chat), "starts painted");
 
     flag.store(true, std::sync::atomic::Ordering::SeqCst);
     chat.tick();
     assert!(
-        !paints(&chat),
+        !paints(&mut chat),
         "the tick re-applies the tuning, so the change lands without a restart"
     );
 
     flag.store(false, std::sync::atomic::Ordering::SeqCst);
     chat.tick();
-    assert!(paints(&chat), "and back again");
+    assert!(paints(&mut chat), "and back again");
 }
 
 // Verifies: gh #371 bug 4 - the plain theme's no-escape contract survives the
@@ -97,19 +97,19 @@ fn flipping_the_tuning_at_runtime_flips_the_caret() {
 #[test]
 fn switching_to_the_plain_theme_stops_the_painting() {
     let mut chat = themed_chat(false);
-    assert!(paints(&chat), "a coloured theme paints");
+    assert!(paints(&mut chat), "a coloured theme paints");
 
     chat.set_theme("plain");
     chat.tick();
     assert!(
-        !paints(&chat),
+        !paints(&mut chat),
         "the plain theme renders no escapes at all (FR-UI-5), so the caret is the \
          terminal's - and the tuning sync is what notices the theme changed"
     );
 
     chat.set_theme("dark");
     chat.tick();
-    assert!(paints(&chat), "and switching back restores it");
+    assert!(paints(&mut chat), "and switching back restores it");
 }
 
 // Verifies: gh #371 bug 4 - the overlay fields follow the composer's caret form
@@ -169,7 +169,7 @@ fn the_overlay_fields_follow_the_toggle_too() {
                 picker.rows.iter().map(|row| &row.key).collect::<Vec<_>>()
             );
         }
-        let painted_frame = frame(&chat);
+        let painted_frame = frame(&mut chat);
         let (clean, position) = lca_tui::engine::core::extract_cursor_position(&painted_frame);
         let Some((row, _, painted)) = position else {
             panic!(
@@ -205,9 +205,9 @@ fn a_host_with_no_tuning_hook_keeps_the_default() {
     opts.plain = false;
     opts.theme = "dark".to_string();
     opts.hooks.display_tuning = None;
-    let chat = crate::chat::Chat::new(opts, Arc::new(KeybindingsManager::new()));
+    let mut chat = crate::chat::Chat::new(opts, Arc::new(KeybindingsManager::new()));
     assert!(
-        paints(&chat),
+        paints(&mut chat),
         "no hook means the defaults (off), so the painted caret stays"
     );
 }

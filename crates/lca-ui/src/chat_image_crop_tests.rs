@@ -94,7 +94,7 @@ fn a_top_scrolled_image_is_placed_as_the_visible_band() {
     lca_tui::widgets::image::clear_cell_pixels();
     // Text above the image, so a scroll exists that puts part of it in view with its
     // top cut off.
-    let (chat, px_h) = chat_with_tall_image_padded(40);
+    let (mut chat, px_h) = chat_with_tall_image_padded(40);
     // The window is `height - dock`, and `scroll` counts rows up from the document's
     // bottom. Deriving the reachable range from the document's own length keeps this
     // row honest when the fixture's padding changes.
@@ -147,7 +147,7 @@ fn a_top_scrolled_image_is_placed_as_the_visible_band() {
 #[test]
 fn scrolling_changes_the_placement_not_the_id_and_never_re_sends_the_payload() {
     lca_tui::widgets::image::clear_cell_pixels();
-    let (chat, _px_h) = chat_with_tall_image();
+    let (mut chat, _px_h) = chat_with_tall_image();
 
     // Derive the scrolls that reach the image rather than guessing: `scroll` counts up
     // from the document's bottom, so the reachable band is near `max_scroll`.
@@ -198,7 +198,7 @@ fn scrolling_changes_the_placement_not_the_id_and_never_re_sends_the_payload() {
 #[test]
 fn an_image_outside_the_window_places_nothing() {
     lca_tui::widgets::image::clear_cell_pixels();
-    let (chat, _px_h) = chat_with_tall_image();
+    let (mut chat, _px_h) = chat_with_tall_image();
     // Scrolled to the very top: the image (at the document's start) *is* visible, so
     // instead scroll the document the other way - the image is at the top, so the
     // bottom of the document is where it is out of view.
@@ -220,7 +220,7 @@ fn an_image_outside_the_window_places_nothing() {
 #[test]
 fn the_placeholder_frame_carries_no_placement_and_no_geometry() {
     lca_tui::widgets::image::clear_cell_pixels();
-    let (chat, _px_h) = chat_with_tall_image();
+    let (mut chat, _px_h) = chat_with_tall_image();
     // `viewport` renders with the detected protocol, which on this box (and in CI) is
     // None, so the frame is the placeholder for every scroll position.
     for scroll in [0u16, 10, 20] {

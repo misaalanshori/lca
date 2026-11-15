@@ -52,7 +52,7 @@ fn selected(chat: &Chat) -> usize {
 }
 
 /// Paint one frame, so `picker_window` reflects the current selection.
-fn frame(chat: &Chat) -> (usize, usize, u16) {
+fn frame(chat: &mut Chat) -> (usize, usize, u16) {
     let (w, h) = (80u16, 24u16);
     let _ = chat.viewport(w, h, 0);
     let (start, end, content) = chat.picker_window.get();
@@ -73,12 +73,12 @@ fn frame(chat: &Chat) -> (usize, usize, u16) {
 fn a_mouse_move_over_a_picker_item_does_not_change_the_selection() {
     let mut chat = tall_chat();
     // Keyboard-walk to a rolled position, so the window is provably off the top.
-    let _ = frame(&chat);
+    let _ = frame(&mut chat);
     for _ in 0..20 {
         let _ = chat.handle_picker_key("", Some("down"));
     }
     let before = selected(&chat);
-    let (start_before, end_before, _) = frame(&chat);
+    let (start_before, end_before, _) = frame(&mut chat);
     assert!(start_before > 0, "the window rolled: {start_before}");
 
     // A move over a *different* item - the gesture that used to select.
@@ -90,7 +90,7 @@ fn a_mouse_move_over_a_picker_item_does_not_change_the_selection() {
         before,
         "a move is not a selection: hover must not write `selected`"
     );
-    let (start_after, end_after, _) = frame(&chat);
+    let (start_after, end_after, _) = frame(&mut chat);
     assert_eq!(
         (start_after, end_after),
         (start_before, end_before),
@@ -107,7 +107,7 @@ fn a_mouse_move_over_a_picker_item_does_not_change_the_selection() {
 #[test]
 fn a_move_then_enter_confirms_the_pre_move_selection() {
     let mut chat = tall_chat();
-    let _ = frame(&chat);
+    let _ = frame(&mut chat);
     for _ in 0..5 {
         let _ = chat.handle_picker_key("", Some("down"));
     }
@@ -136,7 +136,7 @@ fn a_move_then_enter_confirms_the_pre_move_selection() {
 #[test]
 fn a_press_previews_and_a_release_on_the_same_row_confirms() {
     let mut chat = tall_chat();
-    let _ = frame(&chat);
+    let _ = frame(&mut chat);
     let target = 7;
 
     chat.picker_press(target);
@@ -171,7 +171,7 @@ fn a_press_previews_and_a_release_on_the_same_row_confirms() {
 #[test]
 fn a_release_on_a_different_row_aborts_and_restores() {
     let mut chat = tall_chat();
-    let _ = frame(&chat);
+    let _ = frame(&mut chat);
     for _ in 0..4 {
         let _ = chat.handle_picker_key("", Some("down"));
     }
@@ -205,7 +205,7 @@ fn a_release_on_a_different_row_aborts_and_restores() {
 #[test]
 fn a_release_off_the_items_aborts_and_restores() {
     let mut chat = tall_chat();
-    let _ = frame(&chat);
+    let _ = frame(&mut chat);
     for _ in 0..3 {
         let _ = chat.handle_picker_key("", Some("down"));
     }
@@ -235,7 +235,7 @@ fn a_release_off_the_items_aborts_and_restores() {
 #[test]
 fn the_wheel_moves_one_item_per_event_with_no_acceleration() {
     let mut chat = tall_chat();
-    let _ = frame(&chat);
+    let _ = frame(&mut chat);
     assert_eq!(selected(&chat), 0);
 
     // `delta` is added to the index, so +1 walks *down* the list (the wheel arm
@@ -266,7 +266,7 @@ fn the_wheel_moves_one_item_per_event_with_no_acceleration() {
 #[test]
 fn the_wheel_clamps_at_both_ends() {
     let mut chat = tall_chat();
-    let _ = frame(&chat);
+    let _ = frame(&mut chat);
     chat.wheel_picker(-1);
     assert_eq!(selected(&chat), 0, "no wrap above the first row");
     for _ in 0..80 {
@@ -288,7 +288,7 @@ fn the_wheel_clamps_at_both_ends() {
 #[test]
 fn the_keyboard_walk_is_unchanged() {
     let mut chat = tall_chat();
-    let _ = frame(&chat);
+    let _ = frame(&mut chat);
     for _ in 0..3 {
         let _ = chat.handle_picker_key("", Some("down"));
     }
@@ -387,7 +387,7 @@ fn every_picker_shape_previews_on_press() {
 #[test]
 fn chrome_press_selects_nothing_and_backdrop_still_dismisses() {
     let mut chat = tall_chat();
-    let _ = frame(&chat);
+    let _ = frame(&mut chat);
     let before = selected(&chat);
     chat.picker_press_item(None);
     assert_eq!(selected(&chat), before, "chrome moves nothing");

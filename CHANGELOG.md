@@ -50,10 +50,16 @@ Dates are UTC.
   underlines the right characters, and case folding that expands a character (`İ`) no
   longer shifts the span.
 - **Typing a query no longer yanks you to the top of the transcript** (gh #376,
-  interface). The first match is the nearest at or after what you were reading, wrapping
-  to the top only when nothing lies below; the selected match is revealed with a third
+  interface). The first match is the nearest at or after what you were reading — and
+  that anchor is re-read on **every** search, so a second search lands where you are
+  rather than where the first one started; the selected match is revealed with a third
   of the window above it instead of pinned to an edge, and a streaming delta cannot
   scroll it away until you scroll yourself.
+- **Closing the search gives the scroll back** (gh #376, interface). Closing `Ctrl+R`
+  used to leave the search's scroll hold parked in the frame, so the transcript stopped
+  following the turn for the rest of the session — new output would never appear on
+  screen again. Closing now releases it, a resize re-typesets the match on the rows the
+  new width produced, and a tab switch forgets the previous tab's search state.
 - **The transcript search shows which match is current, and steps both ways** (gh #376,
   interface). The selected match paints bold-and-inverse and the rest underline
   (`Ctrl+R` previously painted one style for everything), the highlight closes only the

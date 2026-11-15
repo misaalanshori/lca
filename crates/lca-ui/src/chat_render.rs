@@ -666,7 +666,32 @@ impl Chat {
     /// exit handoff (gh #374 gap 1); [`Self::take_document`] is how the host gets
     /// it. One composition serves both, so the frame and the dump cannot disagree
     /// and neither is rendered twice.
-    pub fn viewport(&self, width: u16, height: u16, scroll: u16) -> Vec<String> {
+    /// Re-query the search when the document or the geometry changed under it
+    /// (gh #376 fix F1).
+    ///
+    /// This is the **one seam both renderers pass through** and it already receives
+    /// `(width, height)`, so a resize, a tab switch and a `/fullscreen` flip all land
+    /// here rather than needing three write sites (the SIGWINCH branch in `run.rs` is
+    /// one of three ways the geometry can change). Before this, `refresh_search` ran
+    /// only from a keystroke, so a resize painted the **old width's columns** on the
+    /// new rows until the reader typed (measured: spans `["rtup", "elp. LC"]`).
+    ///
+    /// `Mode::Retain` keeps the selection by match **key**, so the refresh itself does
+    /// not move the reader; the key comparison inside makes an unchanged frame free.
+    fn refresh_search_for_frame(&mut self, width: u16) {
+        if self.search.is_none() {
+            return;
+        }
+        let rows = self.transcript_len(width);
+        self.refresh_search_for_geometry(rows, width);
+    }
+
+    /// The frame the renderer paints.
+    ///
+    /// `&mut self` since gh #376 fix F1: this is the seam an open search re-queries
+    /// through when the geometry changed under it. The refresh keeps the selection by
+    /// match key, so the borrow does not move the reader.
+    pub fn viewport(&mut self, width: u16, height: u16, scroll: u16) -> Vec<String> {
         self.viewport_for_protocol(
             width,
             height,
@@ -681,19 +706,24 @@ impl Chat {
     /// kitty placement concern, and only a caller that names the protocol can assert
     /// it on a terminal without graphics. The product path is `viewport`, unchanged.
     pub fn viewport_for_protocol(
-        &self,
+        &mut self,
         width: u16,
         height: u16,
         scroll: u16,
         protocol: lca_tui::widgets::image::ImageProtocol,
     ) -> Vec<String> {
+        // Gh #376 fix F1: re-query when the document or the geometry moved under an
+        // open search. Here because this is the one function **both renderers** pass
+        // through; the SIGWINCH branch in `run.rs` is only one of the three ways the
+        // geometry can change.
+        self.refresh_search_for_frame(width);
         if !self.screen_mode {
             let mut lines = self.render(width);
             self.compose_overlays_bottom_anchored(&mut lines, width, height);
             // Gh #376 gap 4: the scrollback screen paints the **whole document**, so the
             // search's row base is 0 and the highlight belongs here - `compose_overlays`
             // is not reached when nothing is overlaid.
-            self.search_view_base.set(0);
+            self.set_search_base(0);
             self.paint_search_rows(&mut lines);
             self.paint_toasts_at_bottom(&mut lines, width, height);
             return lines;
@@ -739,7 +769,7 @@ impl Chat {
         // a match's segments are **document** rows. Recording the window's first
         // document row here - in the one function both renderers pass through - is how
         // the two coordinates meet without either side re-deriving the other.
-        self.search_view_base.set(start);
+        self.set_search_base(start);
         // Gh #324 gap 3: an image block that straddles an edge of this window is
         // **cropped to the visible band** before the slice is taken, because after
         // the slice the block is a fragment - its header may be gone entirely (top
@@ -1072,18 +1102,36 @@ impl Chat {
         };
         self.last_transcript_len = Some(content);
         self.last_render_width = width;
-        // Gh #376 gap 3: **a reveal owns the position until the reader moves.** This
-        // is pi's `followSuppressedAtEnd`, expressed in this tree's bottom coordinates:
-        // while the lock holds the scroll a reveal set, neither the follow-at-the-end
-        // rule (which returns 0 for a live-bottom match) nor the stream delta applies,
-        // so a token arriving mid-read cannot take the selected match off the screen.
-        // Any other scroll value means the reader scrolled (or a key moved them), and
-        // that wins - the lock is dropped rather than fought.
-        if let Some(locked) = self.search_follow_lock.get() {
-            if scroll == locked {
+        // Gh #376 fix F4: **the search holds the match's rows, not a scroll number.**
+        //
+        // The shipped shape held the reveal's scroll and returned it unchanged, which kept
+        // the *number* and lost the *row*: a document that grew past the window pushed the
+        // match off the top in five streamed lines while "locked" (measured). pi's
+        // `disableFollow` (`scroll-view.ts:131`) suppresses follow-at-the-end rather than
+        // pinning a coordinate, and `tui-alt-screen.ts:655` re-reveals only when the match
+        // is outside the window. So: while the hold is armed, keep the selected match
+        // inside `[top, top + window)`, moving the scroll the least that does it (a third
+        // of the window down, pi's reveal lead, when it is above); a match already inside
+        // the window leaves the incoming scroll alone, which is what keeps an idle search
+        // free and a live-bottom match following.
+        if let Some((first_row, last_row)) = self.frame().follow {
+            let top_now = content
+                .saturating_sub(window)
+                .saturating_sub(scroll as usize);
+            let visible_end = top_now + window;
+            if first_row >= top_now && last_row < visible_end {
                 return scroll.min(max);
             }
-            self.search_follow_lock.set(None);
+            let moved = if first_row < top_now {
+                let lead = window / 3;
+                let top = first_row.saturating_sub(lead);
+                content.saturating_sub(window).saturating_sub(top)
+            } else {
+                content
+                    .saturating_sub(window)
+                    .saturating_sub(top_now + last_row + 1 - window)
+            };
+            return moved.min(max as usize) as u16;
         }
         if scroll == 0 {
             return 0;

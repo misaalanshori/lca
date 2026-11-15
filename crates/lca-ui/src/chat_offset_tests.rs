@@ -95,7 +95,7 @@ fn with_a_tool_card(mut chat: Chat) -> Chat {
 }
 
 /// The frame row that paints `needle`, found the way a reader's eye would.
-fn frame_row(chat: &Chat, width: u16, height: u16, needle: &str) -> Option<u16> {
+fn frame_row(chat: &mut Chat, width: u16, height: u16, needle: &str) -> Option<u16> {
     let frame = chat.viewport(width, height, 0);
     frame
         .iter()
@@ -115,7 +115,7 @@ fn a_click_on_the_first_transcript_row_collapses_the_card_under_it() {
     let (w, h) = (80u16, 24u16);
     let mut chat = with_a_tool_card(tabbed(true));
     // Land the reader on the card, then find where the frame paints it.
-    let header = frame_row(&chat, w, h, "bash").expect("the card header paints");
+    let header = frame_row(&mut chat, w, h, "bash").expect("the card header paints");
     assert!(
         header >= chat.tab_top(w),
         "the card is below the tab bar: header at {header}, tabs at {}",
@@ -206,7 +206,7 @@ fn the_window_matches_the_rows_actually_painted() {
     // the tab bar the frame shows `height - dock - 1`; a window of
     // `height - dock` claims a row that the tab bar owns.
     let (w, h) = (80u16, 24u16);
-    let chat = with_a_tool_card(tabbed(true));
+    let mut chat = with_a_tool_card(tabbed(true));
     let (_, window) = chat.scroll_extent(w, h);
     let (_, dock) = chat.sections(w);
     assert_eq!(
@@ -255,8 +255,8 @@ fn a_tooltip_over_a_tool_header_names_that_header() {
     // Hover fired one row below its target: the window was right, the row was not
     // offset by the tab bar.
     let (w, h) = (80u16, 24u16);
-    let chat = with_a_tool_card(tabbed(true));
-    let header = frame_row(&chat, w, h, "bash").expect("the card header paints");
+    let mut chat = with_a_tool_card(tabbed(true));
+    let header = frame_row(&mut chat, w, h, "bash").expect("the card header paints");
     let text = chat.tooltip_at(4, header, w, h, 0);
     assert!(
         text.as_deref()

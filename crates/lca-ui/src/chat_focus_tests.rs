@@ -51,12 +51,12 @@ fn colored_chat() -> crate::chat::Chat {
     crate::chat::Chat::new(opts, Arc::new(KeybindingsManager::new()))
 }
 
-fn paint(chat: &crate::chat::Chat) -> Vec<String> {
+fn paint(chat: &mut crate::chat::Chat) -> Vec<String> {
     chat.viewport(W, H, 0)
 }
 
 /// The frame's plain text, for "the caret sits beside this label" assertions.
-fn plain(chat: &crate::chat::Chat) -> Vec<String> {
+fn plain(chat: &mut crate::chat::Chat) -> Vec<String> {
     let (clean, _) = lca_tui::engine::core::extract_cursor_position(&paint(chat));
     clean.iter().map(|row| strip(row)).collect()
 }
@@ -212,16 +212,21 @@ fn type_keys(chat: &mut crate::chat::Chat, text: &str) {
 fn the_model_search_field_owns_the_single_marker() {
     let mut chat = model_chat();
     type_keys(&mut chat, "alp");
-    let frame = paint(&chat);
+    let frame = paint(&mut chat);
     let (count, row) = markers(&frame);
-    assert_eq!(count, 1, "exactly one marker:\n{}", plain(&chat).join("\n"));
+    assert_eq!(
+        count,
+        1,
+        "exactly one marker:\n{}",
+        plain(&mut chat).join("\n")
+    );
     let prefix = caret_prefix(&frame).expect("the marker carries a prefix");
     assert!(
         prefix.contains("search: alp"),
         "the marker rides the search field, after what was typed: {prefix:?}"
     );
     assert!(
-        row.is_some_and(|row| plain(&chat)[row].contains("search:")),
+        row.is_some_and(|row| plain(&mut chat)[row].contains("search:")),
         "and it is on the search row"
     );
 }
@@ -231,7 +236,7 @@ fn the_model_search_field_owns_the_single_marker() {
 fn the_resume_search_field_owns_the_single_marker() {
     let mut chat = resume_chat();
     type_keys(&mut chat, "fir");
-    let frame = paint(&chat);
+    let frame = paint(&mut chat);
     assert_eq!(markers(&frame).0, 1);
     let prefix = caret_prefix(&frame).expect("prefix");
     assert!(prefix.contains("search: fir"), "{prefix:?}");
@@ -242,7 +247,7 @@ fn the_resume_search_field_owns_the_single_marker() {
 fn the_extension_filter_owns_the_single_marker() {
     let mut chat = hub_chat();
     type_keys(&mut chat, "open");
-    let frame = paint(&chat);
+    let frame = paint(&mut chat);
     assert_eq!(markers(&frame).0, 1);
     let prefix = caret_prefix(&frame).expect("prefix");
     assert!(prefix.contains("filter: open"), "{prefix:?}");
@@ -253,7 +258,7 @@ fn the_extension_filter_owns_the_single_marker() {
 fn the_settings_search_field_owns_the_single_marker() {
     let mut chat = settings_chat();
     type_keys(&mut chat, "model");
-    let frame = paint(&chat);
+    let frame = paint(&mut chat);
     assert_eq!(markers(&frame).0, 1);
     let prefix = caret_prefix(&frame).expect("prefix");
     assert!(prefix.contains("search: model"), "{prefix:?}");
@@ -273,7 +278,7 @@ fn the_settings_inline_edit_owns_the_single_marker() {
         "the row is being edited"
     );
     type_keys(&mut chat, "-2");
-    let frame = paint(&chat);
+    let frame = paint(&mut chat);
     assert_eq!(markers(&frame).0, 1);
     let prefix = caret_prefix(&frame).expect("prefix");
     assert!(
@@ -298,7 +303,7 @@ fn the_tree_bookmark_field_owns_the_single_marker() {
         "the label field is open"
     );
     type_keys(&mut chat, "chk");
-    let frame = paint(&chat);
+    let frame = paint(&mut chat);
     assert_eq!(markers(&frame).0, 1);
     let prefix = caret_prefix(&frame).expect("prefix");
     assert!(prefix.contains("chk"), "{prefix:?}");
@@ -317,13 +322,13 @@ fn the_masked_secret_field_owns_the_single_marker_without_leaking_it() {
     });
     chat.handle_key("s");
     chat.handle_key("k");
-    let frame = paint(&chat);
+    let frame = paint(&mut chat);
     assert_eq!(markers(&frame).0, 1);
-    let text = plain(&chat).join("\n");
+    let text = plain(&mut chat).join("\n");
     // The field's own row, not the whole frame: a transcript or hint line can
     // contain any two letters by accident, and an assertion that scans all of
     // it would fail on the startup header rather than on a leak.
-    let field_row = plain(&chat)
+    let field_row = plain(&mut chat)
         .into_iter()
         .find(|row| row.contains("**"))
         .unwrap_or_else(|| panic!("the mask is painted:\n{text}"));
@@ -343,7 +348,7 @@ fn the_masked_secret_field_owns_the_single_marker_without_leaking_it() {
 fn the_host_input_dialog_owns_the_single_marker() {
     let mut chat = input_dialog_chat();
     type_keys(&mut chat, "abc");
-    let frame = paint(&chat);
+    let frame = paint(&mut chat);
     assert_eq!(markers(&frame).0, 1);
     let prefix = caret_prefix(&frame).expect("prefix");
     assert!(prefix.contains("abc"), "{prefix:?}");
@@ -354,7 +359,7 @@ fn the_host_input_dialog_owns_the_single_marker() {
 fn the_host_select_filter_owns_the_single_marker() {
     let mut chat = select_dialog_chat();
     type_keys(&mut chat, "be");
-    let frame = paint(&chat);
+    let frame = paint(&mut chat);
     assert_eq!(markers(&frame).0, 1);
     let prefix = caret_prefix(&frame).expect("prefix");
     assert!(prefix.contains("> be"), "{prefix:?}");
@@ -368,7 +373,7 @@ fn the_transcript_search_owns_the_single_marker() {
     chat.handle_key("\x12");
     assert!(chat.search.is_some(), "Ctrl+R opens the search readout");
     type_keys(&mut chat, "rus");
-    let frame = paint(&chat);
+    let frame = paint(&mut chat);
     assert_eq!(markers(&frame).0, 1);
     let prefix = caret_prefix(&frame).expect("prefix");
     assert!(prefix.contains("/rus"), "{prefix:?}");
@@ -401,8 +406,8 @@ fn the_mcp_redirect_field_owns_the_single_marker() {
     }
     chat.handle_mcp_manager_key("a", None);
     chat.handle_mcp_manager_key("b", None);
-    let frame = paint(&chat);
-    assert_eq!(markers(&frame).0, 1, "{}", plain(&chat).join("\n"));
+    let frame = paint(&mut chat);
+    assert_eq!(markers(&frame).0, 1, "{}", plain(&mut chat).join("\n"));
     let prefix = caret_prefix(&frame).expect("prefix");
     assert!(prefix.contains("> ab"), "{prefix:?}");
 }
@@ -417,7 +422,7 @@ fn the_mcp_redirect_field_owns_the_single_marker() {
 fn the_composer_keeps_its_marker_when_nothing_is_open() {
     let mut chat = colored_chat();
     type_keys(&mut chat, "hello");
-    let frame = paint(&chat);
+    let frame = paint(&mut chat);
     assert_eq!(markers(&frame).0, 1);
     let prefix = caret_prefix(&frame).expect("prefix");
     assert!(
@@ -453,7 +458,7 @@ fn a_short_frame_anchors_to_the_overlay_that_covers_the_composer() {
 fn the_active_field_paints_the_composers_caret_form() {
     let mut chat = model_chat();
     type_keys(&mut chat, "a");
-    let frame = paint(&chat);
+    let frame = paint(&mut chat);
     let row = frame
         .iter()
         .find(|row| row.contains(CURSOR_MARKER))
@@ -484,7 +489,7 @@ fn plain_theme_keeps_the_bare_marker() {
         "alpha".into(),
     ))]));
     type_keys(&mut chat, "al");
-    let frame = paint(&chat);
+    let frame = paint(&mut chat);
     assert_eq!(markers(&frame).0, 1);
     let row = frame
         .iter()
@@ -557,7 +562,7 @@ fn every_keyboard_owning_surface_keeps_the_marker_count_at_one() {
     type_keys(&mut search, "x");
     surfaces.push(("transcript search", search));
 
-    for (name, chat) in &surfaces {
+    for (name, chat) in &mut surfaces {
         let frame = paint(chat);
         assert_eq!(
             markers(&frame).0,
@@ -600,12 +605,12 @@ fn a_fieldless_surface_keeps_the_composers_marker_by_design() {
         selected: 0,
         input: String::new(),
     });
-    let frame = paint(&chat);
+    let frame = paint(&mut chat);
     assert_eq!(
         markers(&frame).0,
         1,
         "exactly one marker, on the composer:\n{}",
-        plain(&chat).join("\n")
+        plain(&mut chat).join("\n")
     );
     assert_eq!(
         chat.keyboard_owner(),
@@ -619,18 +624,18 @@ fn a_fieldless_surface_keeps_the_composers_marker_by_design() {
 // is not on screen.
 #[test]
 fn an_empty_settings_query_falls_back_to_the_composer() {
-    let chat = settings_chat();
+    let mut chat = settings_chat();
     assert_eq!(
         chat.keyboard_owner(),
         Focus::Composer,
         "the search row is not on screen, so nothing painted claims the caret"
     );
-    let frame = paint(&chat);
+    let frame = paint(&mut chat);
     assert_eq!(
         markers(&frame).0,
         1,
         "and the frame still carries exactly one marker:\n{}",
-        plain(&chat).join("\n")
+        plain(&mut chat).join("\n")
     );
 }
 
@@ -641,7 +646,7 @@ fn an_empty_settings_query_falls_back_to_the_composer() {
 fn the_caret_costs_no_layout() {
     let mut chat = model_chat();
     type_keys(&mut chat, "al");
-    let widths: Vec<usize> = paint(&chat)
+    let widths: Vec<usize> = paint(&mut chat)
         .iter()
         .map(|row| lca_tui::engine::text::visible_width(&row.replace(CURSOR_MARKER, "")))
         .collect();

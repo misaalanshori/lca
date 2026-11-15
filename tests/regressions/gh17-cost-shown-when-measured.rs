@@ -63,7 +63,7 @@ fn chat() -> Chat {
     )
 }
 
-fn frame(chat: &Chat) -> String {
+fn frame(chat: &mut Chat) -> String {
     chat.viewport(100, 30, 0)
         .iter()
         .map(|l| strip_terminal_sequences(l))
@@ -75,7 +75,7 @@ fn frame(chat: &Chat) -> String {
 // silence, not a zero.
 #[test]
 fn the_footer_hides_the_cost_before_any_usage() {
-    let text = frame(&chat());
+    let text = frame(&mut chat());
     assert!(
         !text.contains('$'),
         "no cost segment before the first usage-bearing turn:\n{text}"
@@ -99,7 +99,7 @@ fn a_measured_zero_cost_is_shown() {
         output: 10,
         ..Default::default()
     });
-    let text = frame(&chat);
+    let text = frame(&mut chat);
     assert!(
         text.contains("$0.0000"),
         "a free model's measured zero cost reads as measured, not missing:\n{text}"
@@ -120,7 +120,7 @@ fn a_real_cost_is_shown_as_before() {
         cost: 0.0123,
         ..Default::default()
     });
-    let text = frame(&chat);
+    let text = frame(&mut chat);
     assert!(
         text.contains("$0.0123"),
         "a priced turn keeps its cost:\n{text}"

@@ -1024,7 +1024,7 @@ fn scrollbar_cell_background(row: &str) -> Option<String> {
 // default background down the right edge of every coloured block.
 #[test]
 fn a_scrollbar_cell_over_a_shaded_user_message_keeps_the_band_background() {
-    let chat = chat_with_scrollbar();
+    let mut chat = chat_with_scrollbar();
     let (w, h) = (80u16, 24u16);
     let rows = chat.viewport(w, h, 0);
     let band = user_band_bg(&chat);
@@ -1058,7 +1058,7 @@ fn a_scrollbar_cell_over_a_shaded_user_message_keeps_the_band_background() {
 // everywhere.
 #[test]
 fn a_scrollbar_cell_over_an_unshaded_row_does_not_invent_a_background() {
-    let chat = chat_with_scrollbar();
+    let mut chat = chat_with_scrollbar();
     let (w, h) = (80u16, 24u16);
     let rows = chat.viewport(w, h, 0);
     let band = user_band_bg(&chat);
@@ -1083,7 +1083,7 @@ fn a_scrollbar_cell_over_an_unshaded_row_does_not_invent_a_background() {
 // still distinguishable from the track by its glyph, background or not.
 #[test]
 fn the_scrollbar_thumb_stays_legible_against_the_band() {
-    let chat = chat_with_scrollbar();
+    let mut chat = chat_with_scrollbar();
     let (w, h) = (80u16, 24u16);
     let geometry = chat
         .scrollbar_for_frame(w, h, 0)

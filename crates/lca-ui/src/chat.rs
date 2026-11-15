@@ -279,19 +279,28 @@ pub struct Chat {
     pub(crate) search_selected: Option<(usize, usize, usize, usize)>,
     /// The document row the search was opened from: the anchor the first match is
     /// picked at or after, so typing a query does not yank the reader to row 0
-    /// (gh #376 gap 2).
+    /// (gh #376 gap 2). Cleared by the open path and by the close path, so each search
+    /// anchors at where the reader is **now** rather than at the first search's row
+    /// (gh #376 fix F3).
     pub(crate) search_anchor: Option<usize>,
+    /// The binds the search owns: the painted window's base, the geometry its match list
+    /// was computed at, and the row the selected match must keep on screen.
+    ///
+    /// One `Cell` rather than four siblings because these are all *frame bookkeeping* -
+    /// written by the paint path, which both renderers enter through `&self` - and the
+    /// overlay registry's guard derives overlay-shaped fields by their `Option<…>`
+    /// type. Keeping it one cell means two members instead of four, and the registry
+    /// clears it through `clear_cells!` (gh #376 fix F6).
+    ///
+    /// `Option`-shaped so the overlay registry can see it: `tests/regressions/333`
+    /// derives overlay-shaped fields by their `Option<…>` type, and `close_overlays!`
+    /// clears it with a plain `= None` (gh #376 fix F6 - the shipped shape was a
+    /// `Cell<Option<u16>>` that the macro's `= None` could not touch, so a tab switch
+    /// left the previous tab's follow hold armed).
+    pub(crate) search_frame: Option<SearchFrame>,
     /// The scroll a reveal asked for, applied by the loop on the next frame
     /// (gh #376 gap 3).
     pub(crate) search_scroll: Option<u16>,
-    /// The scroll a reveal set, held until the reader scrolls themselves: `clamp_scroll`
-    /// neither re-engages follow nor adds a stream delta while this is the current
-    /// scroll (pi's `followSuppressedAtEnd`, gh #376 gap 3).
-    pub(crate) search_follow_lock: std::cell::Cell<Option<u16>>,
-    /// The document row the last painted window started at (gh #376 gap 4): the paint
-    /// is given a window slice, and a match's spans are document rows, so the
-    /// difference has to be recorded where the frame resolves it.
-    pub(crate) search_view_base: std::cell::Cell<usize>,
     /// The active theme's name (FR-UI-17).
     pub theme_name: String,
     /// The configured theme setting (`ui.theme`, S5).
@@ -524,9 +533,8 @@ impl Chat {
             search_index: 0,
             search_selected: None,
             search_anchor: None,
+            search_frame: Some(SearchFrame::default()),
             search_scroll: None,
-            search_follow_lock: std::cell::Cell::new(None),
-            search_view_base: std::cell::Cell::new(0),
             meter: Default::default(),
             theme_name,
             theme_setting,
@@ -704,6 +712,9 @@ impl Chat {
 
 // Gh #376 gap 1: the wrap-insensitive search corpus.
 pub(crate) mod chat_search_corpus;
+/// Gh #376 fix: the search's frame bookkeeping, in its own file so the cell's shape
+/// and its accessors live beside the search rather than in the struct.
+pub(crate) use crate::chat_search::SearchFrame;
 
 // The turn lifecycle and the theme/keybinding group live in sibling files
 // (gh #574): an inherent `impl Chat` may be partitioned this way, so the
