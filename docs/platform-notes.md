@@ -162,26 +162,52 @@ The loopback OAuth listener works the same as on POSIX platforms; Windows has no
 
 **The pty capability on Windows (resolved 2026-09-29).** Windows pseudo-terminal support went through eight CI rounds, and those rounds were not wasted: verbatim `\\?\` working directories (cmd.exe reads them as UNC and refuses them), the console-close reader deadlock (now the documented end-of-stream flush), the pump busy-spin (now yields), and the `PtyChild::spawn` environment block all landed there. But the round that set out to fix the pseudoconsole attribute went the wrong way: it passed `UpdateProcThreadAttribute` the *address* of an `HPCON` instead of the HPCON value itself. `UpdateProcThreadAttribute` returns success either way, so the child was silently born on a fresh default console - `mode con` inside it reported 120x30 while the pty had been created 24x80 - and the output pipe received zero bytes. Microsoft's own sample and wezterm's `procthreadattr::set_pty` both pass the value, with `cbSize = sizeof(HPCON)`; that is what this code now does. The child's std handles are also explicitly invalidated (`STARTF_USESTDHANDLES` with `INVALID_HANDLE_VALUE`), because a parent with redirected stdio - a test harness, a daemon, an editor - otherwise leaks its own handles into the child and the output never reaches the pseudoconsole. A second, independent defect surfaced the moment the TUI rendered on ConPTY: `/exit` hung the process, because `sys::wait_stdin` reported readable unconditionally and the reader's blocking `ReadFile` could not be interrupted, so `ProcessTerminal::stop` hung joining the reader thread; `wait_stdin` now reports readable only when a key event is actually pending (it peeks the console records and consumes non-key ones, so `ReadFile` returns promptly), and `stop` retries `CancelSynchronousIo` before joining as a net. **A consumed non-key record is no longer discarded** (gh #323): the wait reports what it found, so a `WINDOW_BUFFER_SIZE_EVENT` - the console saying the user resized - reaches the reader loop's size check in the same iteration instead of waiting for its next tick. Only buffer-size records count; mouse and focus records are still ignored, because treating every non-key record as a resize would repaint on every mouse move. The unix side has no equivalent channel (a resize arrives as `SIGWINCH`), so `WaitOutcome::Resize` is constructed only by this backend. Relatedly, the two `SetConsoleMode` calls in `enable_raw_mode` now have their returns checked: a refusal used to vanish, leaving the app believing it was in raw mode while the console stayed cooked, and it now surfaces through `Terminal::raw_mode_error` with the handle name and the OS code rather than being swallowed by `.ok()`. All five previously-quarantined tests are green on a real console *and* on the hosted `windows-latest` runner, so the "hosted runner has no console" hypothesis was wrong - the fault was in this code all along, and no self-hosted runner is needed. The three pty tests keep their macOS `ENOTTY` ignore (tracked below); nothing else is ignored on Windows.
 
-**Windows: `a_cancel_interrupts_the_extension_before_cancel_returns` fired again (2026-11-16,
-gh #547).** CI `43774970823` (head `3f25c83e`) failed the **windows-latest** suite on
-`lca-core::turn_boundary`'s row at `turn_boundary.rs:379` with ``interrupt()` had already run
-when `cancel()` returned (gh #547); a 1 ms poll thread could only reach it on a later tick`.
-That assertion is a **hard** one (it is what #547's synchronous-callback fix bought), so the
-firing is evidence about the *callback registration*, not about a bound: the row's canceller
-thread waits for the turn's first delta (a real event, not a duration) and then calls
-`flag.cancel()` and reads `cap.is_cancelled()` on the **next line**. The shape of the failure
-therefore says `cancel()` returned before the listener ran, which on Windows means the thread
-that incremented the epoch had not yet reached the guest's trap point when the read happened —
-`cancel()` invoking listeners synchronously fixes the *ordering*, but the guest's own trap is
-still asynchronous by construction.
-The row has been red **twice** before on hosted Windows (CI `36881146884`, `36943299928`) and
-was split so the un-quarantined half covers the contract that can hold; this is a **third**
-firing on a different head. Not quarantined by this cycle (it is `lca-core`'s row and this
-cycle touched `lca-ui`), and nothing loosened. The named next step, for the cycle that owns
-`turn_boundary.rs`: assert the **effect** on the guest (a trap observed / a spinner stopped)
-rather than the flag's value one instruction after `cancel()`, or drive the cancel from a
-point where the guest is provably inside a host call (the shape #547's own receipt used) —
-do not widen the read into a sleep loop.
+**Windows: `a_cancel_interrupts_the_extension_before_cancel_returns` — three firings, and the
+row now proves the edge (2026-11-16, fixed by gh #604).** The row has fired on hosted
+**windows-latest** three times across three different heads, every one green solo here:
+
+| run | date | head | what failed |
+|---|---|---|---|
+| `36881146884` | 2026-10-01 | — | the 30 s **hang guard** |
+| `36943299928` | 2026-10-02 | — | the 30 s **hang guard** |
+| `43774970823` | 2026-11-16 | `3f25c83e` | the **assertion** at `turn_boundary.rs:379`: ``interrupt()` had already run when `cancel()` returned (gh #547); a 1 ms poll thread could only reach it on a later tick` |
+
+The third firing is the informative one: the turn returned promptly (so the hang guard was
+not the failure) and the **ordering claim** was what failed. Its diagnosis, written down here
+because the message could not say it: the row's canceller waited for the turn's first delta
+(a real event, not a duration - good), then called `flag.cancel()` and read
+`cap.is_cancelled()` **on the next line**. That read is a load of an atomic a *listener* wrote,
+on a **different object**, with no happens-before edge between "`cancel()` returned" and
+"the listener has run" — the listener runs on the cancelling thread by construction, but under
+a ~60-80 ms scheduling quantum the canceller can be descheduled between the return and the read
+(or the load can be observed stale), which is exactly what a stretched Windows runner did. Both
+sides being `SeqCst` does not help: they are different atomics, so there is no edge to be
+sequenced. And the message named a poll thread gh #547 had **removed**, which is why a reader
+could not tell whether the firing was a regression.
+
+**Fixed, by moving the observation to where the edge is made (gh #604):** the row now registers
+**its own** `on_cancel` callback after the turn's listener is in place (so it is later in
+registration order), and `CancelFlag::cancel` runs the drained list front to back on the
+cancelling thread before returning. What that callback records is the double's own facts - the
+`interrupt()` call count and the guest engine's state read **inside** `interrupt()` itself
+immediately after `cap.cancel()` - so the assertions are `interrupts >= 1` and
+`latched_on_interrupt`, i.e. the turn's fan-out had already run when the row's own registration
+ran. No wait, no yield, no sleep: the claim is ordering **at the moment of return**, and the
+mutant that defers the fan-out to a spawned thread (the pre-#547 poller shape) reddens both it
+and `the_canceller_runs_after_the_turns_own_listener` (`crates/lca-tools/src/cancel.rs`'s own
+rows, where the contract lives). Measured this cycle: **10/10 green** at `-j 8` with 16 spinners
+on this 4-core box (loadavg 3.96 → 15.30). `cancel()`'s fan-out needed **no** code change (it
+was always synchronous); only a doc sentence stating that registration order *is* the ordering
+contract, and the row, moved.
+
+One measured correction to the issue's own option 2: that option proposed asserting the guest's
+`stream_completion` cancelled arm fired. **It does not fire in a turn row**, and not by
+accident - `stream_once`'s `select!` is `biased` with `cancel.wait_cancelled()` first, so the
+host returns `CallFail::Cancelled` and drops the guest's dispatch future before it can observe
+anything (probe: `interrupts=1 guest_saw_cancel=false TurnOutcome.error=None` in 3/3 runs).
+A guest observes a cancellation from inside a **blocked host call** (the `net`/`complete`
+waits poll the same engine), so the assertion was replaced by the same fact at the same instant,
+taken on the fan-out's own thread.
 
 **A fourth `pty_spawn_delivers_terminal_output` firing (2026-11-16, gh #535's row).** CI
 `43796693310` (head `08c22855`) failed `test (macos-latest, engines)` on this row with exactly
