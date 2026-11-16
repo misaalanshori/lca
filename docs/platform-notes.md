@@ -230,6 +230,25 @@ conclusive once the slave side is provably closed), or (b) start the drain windo
 never separates. A 300 ms ceiling would only be the answer if a measurement showed a late tail
 arriving between 100 and 300 ms; the probe above could not show that on this box.
 
+**`pty_spawn_delivers_terminal_output` fired twice in one session (2026-11-16, gh #535's row).**
+Two CI runs on consecutive heads gave the same macOS engines shape:
+`43804606795` (head `330180a6`) and then the next run — each `content: "exit 0 "` with an empty
+payload, i.e. the host declaring the session drained before the tail was readable. Measured here
+each time first: **3/3 green solo** (5.7 s), and a probe raising `DRAIN_ATTEMPTS` 20 → 60 (a 300 ms
+ceiling) also 3/3, so this box cannot tell the two bounds apart.
+
+That makes **five** firings of one row across two months (`42069077201`, `42166657159`,
+`43796693310`, `43804606795`, and the second of the pair), all macOS, all the same shape. **The
+ledger's conclusion changed**: this is no longer a "name the next step" observation. The next
+`lca-tools` cycle that owns `pty.rs` should treat it as a **product defect with a bounded
+remainder**, in this order: (a) separate `try_wait`'s answer from the **slave-side** EOF, because
+the drain phase currently starts on the former and macOS's `POLLHUP` arrives with the latter —
+that is the arm the loop never distinguishes; (b) if that does not explain it, print the drain
+attempt count and the byte count at the moment `Ok(None)` is returned, so the next firing says
+exactly how far the window got instead of only `exit 0 `. Do **not** widen the ceiling again
+without that number: the 300 ms probe changed nothing measurable here, and a bound raised without
+a measurement is the same guess with a bigger number.
+
 **Quarantine ledger (open 2026-10-02).** `cancelling_a_turn_interrupts_a_running_extension_call` (`lca-core/tests/hooks_dispatch.rs`, gh #548 phase 4's split of `hooks.rs`) is `#[ignore]`d on Windows under testing-plan section 13's rule: its *second* turn - a fresh cancel flag, the scripted provider, one completed conformance call - exceeded the 30-second hang guard twice on hosted runners (CI `36881146884` on 2026-10-01 and CI `36943299928` on 2026-10-02), while the first turn's cancellation assertions passed both times, the local suite stayed green on every run, and Linux/macOS never reproduced it. What is known so far: the fake provider releases its script lock at statement scope, the epoch trap does end the spinning call (turn one is prompt, which is why no spinner leaks), the blocking pool is not exhausted by one call, and the elapsed diagnostic the guard prints is the number the next observation will carry. No mechanism is named yet, so the fix is open - runner contention is the shape of the evidence, not a proven cause. The assertions themselves are untouched; un-quarantining is removing the `cfg_attr` on the test, and section 13's stale-quarantine clock starts at this date.
 
 *Update (2026-10-06, #89):* the test is split in two. Turn one's cancellation assertions now run un-quarantined on every platform (`cancelling_a_turn_interrupts_a_running_extension_call` — they passed on Windows both times the hang fired, so the FR-CONC-1 contract is covered where the full test cannot run).
