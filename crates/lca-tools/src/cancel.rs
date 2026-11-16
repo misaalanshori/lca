@@ -71,6 +71,14 @@ impl CancelFlag {
     /// whole point of the registry: a spinning extension's epoch bump is a
     /// store-visible side effect, not something to be delivered by a poller.
     ///
+    /// **Registration order is the ordering contract** (gh #604): callbacks run
+    /// in the order they were registered, so a callback registered later may
+    /// treat an earlier one's side effects as already visible - which is how the
+    /// turn-boundary row proves that the turn's fan-out ran before the canceller
+    /// returned, instead of reading another object's flag on the line after this
+    /// call and hoping. That row's three hosted-Windows firings are why the
+    /// guarantee is written here, in the artefact that owns it.
+    ///
     /// The callbacks run **outside** the registry lock, so a callback that
     /// cancels again, or registers another listener, cannot deadlock. A
     /// callback that panics is caught and the remaining callbacks still run:
@@ -313,6 +321,46 @@ mod tests {
         flag.cancel();
         assert_eq!(kept.load(Ordering::SeqCst), 1, "the surviving listener ran");
         assert_eq!(gone.load(Ordering::SeqCst), 0, "the dropped two did not");
+    }
+
+    // Verifies: gh #547's contract, pinned where the API lives (gh #604) -
+    // **a callback registered later observes an earlier callback's side effect.**
+    //
+    // This is the ordering the turn-boundary row relies on, stated on the flag
+    // alone: no turn, no extension, no spawn. Two callbacks are registered in
+    // order; the first writes to a cell, the second reads it. If `cancel()`
+    // deferred the drain (the pre-#547 poller shape), the second callback would
+    // run on a thread whose read has no happens-before edge to the first's
+    // write - and, more simply, would not run at all before `cancel()` returned.
+    //
+    // Registration order is not incidental: `on_cancel` appends under one lock
+    // and `cancel()` takes the whole list and walks it front to back, so the
+    // only way this row fails is the contract changing.
+    #[test]
+    fn the_canceller_runs_after_the_turns_own_listener() {
+        let flag = CancelFlag::new();
+        // What the first callback does is a side effect the second can see.
+        let wrote = Arc::new(AtomicBool::new(false));
+        let seen_by_second = Arc::new(AtomicBool::new(false));
+        let first_write = Arc::clone(&wrote);
+        let _turn_listener = flag.on_cancel(move || {
+            first_write.store(true, Ordering::SeqCst);
+        });
+        let observed = Arc::clone(&seen_by_second);
+        let read_first = Arc::clone(&wrote);
+        let _my_listener = flag.on_cancel(move || {
+            observed.store(read_first.load(Ordering::SeqCst), Ordering::SeqCst);
+        });
+        flag.cancel();
+        assert!(
+            seen_by_second.load(Ordering::SeqCst),
+            "the later registration ran after the earlier one and saw its effect: \
+             callbacks run in registration order, synchronously, inside `cancel()` \
+             (gh #604) - a deferred drain cannot satisfy this"
+        );
+        // And the property is not "the second ran first": registration order is
+        // the assertion, not a coincidence of the scheduler.
+        assert!(flag.is_cancelled());
     }
 
     // Verifies: gh #547 - a hundred-turn session accumulates nothing.
