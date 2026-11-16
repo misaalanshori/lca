@@ -815,6 +815,13 @@ mod compaction {
         let sandboxed = wasm(FIXTURE, "empty-committed");
         let native_answer = format!("{:?}", native.compact(&[]).await);
         let sandboxed_answer = format!("{:?}", sandboxed.compact(&[]).await);
+        // **Not a prefix comparison.** A `[..6]`-style check stays green because both
+        // modes' answers start with the same mechanical prefix (measured: the empty
+        // range's whole answer is `[summarization failed: …]\nConversation so far
+        // (0 messages). Requests: ` on both sides), so any prefix short enough to be
+        // "one mode" is also identical on the other. Full equality is therefore the
+        // only shape that can fail - and it is what the boundary needs: the guest's
+        // `Vec` handling against the twin's emptiness branch.
         assert_eq!(
             native_answer, sandboxed_answer,
             "an empty range diverges between the delivery modes.\n  committed component: \
