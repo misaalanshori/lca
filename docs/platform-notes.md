@@ -208,13 +208,20 @@ reply:` with a pane that had not echoed yet) and
 (same run: `that query started` from a poisoned `Mutex`, i.e. the answering thread did not
 reach it inside the row's `yield_now` spin).
 
-**Not quarantined, and the fix named**: each is a row whose *own* waiting needs the
-`retry_once`/`wait_settled_for` treatment rather than a wider number — the run_wake row's
-≥2-tick clause should derive from the tick interval with the load factor the harness already
-computes, and the other two should wait on their positive half (an echoed byte, a released
-sender) instead of a fixed window and a yield loop. Ledgered here with the three run ids so
-the next cycle that owns those files has the entries; **nothing was loosened in this cycle**
-and no assertion was touched.
+**Fixed, by row (2026-11-16, gh #603).** All three took the treatment named above — no
+number was widened, and every claim each row made is still made:
+
+| row | the shape that fired | the shape now |
+|---|---|---|
+| `lca-ui::run_wake::producer_tests` | `an_idle_loop_does_no_work_for_200_ms`: `and the tick still fires: 1` — a hard-coded 200 ms window could not be filled with two 50 ms ticks on a runner ~150 ms late | renamed `an_idle_loop_does_no_work_for_its_own_window`, driven by a pure `idle_loop_bounds(tick)` helper: window = `2 * tick + 150 ms` (**250 ms** at the shipped tick), iteration ceiling = `window / tick * 3 + 2` (**17**). The three clauses are unchanged (no producer wake, no spin, ≥2 ticks), and `idle_loop_bounds_scale_with_the_tick` pinning the arithmetic across ticks 10–200 ms means a future tick change moves both bounds with it instead of leaving a constant behind to flake against |
+| `lca-cli::e2e_split_reply_366` | `ordinary typing still reaches the composer after a split reply:` — the paste's `wait_until_painted` (a **settle**, which knows only that the screen stopped changing) returned a frame from before the paste arrived | **positive half first, absence second, on one frame**: `paste_text("hello")` → `wait_for("hello", 10 s)` (the bounded, load-scaled wait, whose echo can only happen through a live input path) → `wait_until_painted` → both `hello` **and** "no reply fragment" asserted against *that* capture. The absence is stronger, not weaker: it is now read from a frame that demonstrably carries typing, where a leaked fragment would appear as `[?62;1;2chello` |
+| `lca-tui::…::trigger_tests` | `that query started` from a **poisoned** `Mutex` — the answering thread never got scheduled inside the row's `while … yield_now()`, so `answer`'s `expect` panicked while holding the handle mutex and the next thread's `expect("lock")` panicked on the poison | the fake owns a `mpsc::Sender<()>` signalled **from `start`**, and rows `recv_timeout` on it (`wait_until_started`) instead of spinning. A timeout is a **named harness** message ("this is the harness, not the cache"), `answer` returns `Err` naming what to do instead of panicking, and every lock in the fake tolerates a poisoned neighbour. `a_query_that_never_starts_is_named_rather_than_poisoning_the_mutex` pins all three clauses |
+
+Measured on this box (4 cores, load 6.7) with `-j 8`, i.e. deliberately oversubscribed, three
+rounds: **7/7 green each round** (the e2e row 1.6–1.8 s, the tick row 0.31–0.34 s). A fourth
+firing of any of these on a hosted runner is now a **product** question, not a fixture one —
+the rows no longer wait on a schedule of their own, they wait on the event or window they
+assert about.
 
 **Non-quarantined load-only observation (2026-11-15, gh #376 fix-up).**
 `e2e_polish::ctrl_c_clears_text_then_exits` (`lca-cli`, real tmux pane) failed **once** on
