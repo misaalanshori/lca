@@ -174,3 +174,186 @@ fn pty_forwards_keystrokes_both_ways() {
     assert!(out.contains("round-trip"), "got {out:?}");
     pty.kill();
 }
+
+// ---------------------------------------------------------------------------
+// Gh #606: the drain's end-of-stream, instrumented
+// ---------------------------------------------------------------------------
+//
+// `pty_spawn_delivers_terminal_output` (lca-ext-host's conformance row) has now failed
+// five times on hosted macOS, every one `exit 0` with an empty payload: the host
+// answered end-of-stream before the child's tail was readable. Two facts the drain
+// window cannot separate are *(a)* a tail still in flight and *(b)* a master that is
+// drained yet stays readable (macOS answers zero bytes forever). On macOS `POLLIN` is
+// set in both, so elapsed time is the only separator and nothing recorded **how far**
+// it got - which is why all five firings produced the same uninformative line.
+//
+// These rows pin the instrument, not a new platform behaviour: what can be driven here
+// is Linux, where an EOF **is** conclusive, so `a_tail_after_the_child_exits_is_still_read`
+// is green **before** and after this cycle. That is stated rather than claimed as
+// coverage: it proves the drain phase does not discard a tail that arrives *before* the
+// exit is observed, and it cannot prove anything about a macOS-shaped master, which is
+// precisely why the diagnostic matters more than the row.
+
+// Verifies: gh #606 - **a finished session's drain reports how far it got.**
+//
+// The three facts are the ones a sixth firing needs: the attempt count (was the window
+// spent, and how far in?), the session's byte total (did anything arrive at all?), and
+// whether the kernel named the end (`slave_closed`). Linux reaches this conclusion with
+// `POLLHUP`, so `exhausted` is false and `attempts` is small - a macOS firing would
+// show `exhausted=true` and `attempts=20`, which is the whole point of the field.
+#[cfg(unix)]
+#[test]
+fn the_drain_reports_how_far_it_got() {
+    let ws = scratch("pty-diagnostic");
+    let mut pty = lca_tools::PtyChild::spawn(
+        "sh",
+        &["-c".into(), "printf tail-606".into()],
+        &ws,
+        24,
+        80,
+        &[],
+    )
+    .expect("spawn");
+    let mut out = String::new();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let mut diagnostic = None;
+    while std::time::Instant::now() < deadline {
+        match pty.read(4096).expect("read") {
+            Some(chunk) => out.push_str(&String::from_utf8_lossy(&chunk)),
+            None => {
+                diagnostic = pty.drain_diagnostic();
+                break;
+            }
+        }
+    }
+    let _ = pty.wait();
+    let diagnostic = diagnostic.expect(
+        "the drain concluded (None) and recorded a diagnostic; without one a firing \
+         cannot say how far the window got (gh #606)",
+    );
+    // The byte count is the session's **total**, which includes what this row read.
+    assert!(
+        diagnostic.bytes >= out.len() as u64 / 2,
+        "the diagnostic counts the bytes this session delivered ({} read as {out:?}): {}",
+        out.len(),
+        diagnostic.describe()
+    );
+    assert!(
+        out.contains("tail-606"),
+        "the tail arrived, so this is the healthy shape: {out:?}"
+    );
+    // Linux names the end (`POLLHUP`/EIO), so the window is not what decided it.
+    assert!(
+        diagnostic.slave_closed,
+        "on Linux the kernel names the end, which is the fact macOS cannot give: {}",
+        diagnostic.describe()
+    );
+    assert!(
+        !diagnostic.exhausted,
+        "and the ceiling was therefore not spent: {}",
+        diagnostic.describe()
+    );
+    // The message a row would print, so the shape is asserted and not only the fields.
+    let described = diagnostic.describe();
+    assert!(
+        described.contains("attempts=") && described.contains("bytes="),
+        "the description names the two numbers a firing needs: {described}"
+    );
+}
+
+// Verifies: gh #606 - **a tail written after the child exits is still delivered.**
+//
+// The five macOS firings' shape: the child's output is *in flight* when `try_wait` first
+// reports the exit. Here the child sleeps a moment and then writes, so the ordering the
+// drain phase exists for really happens - and the bytes must arrive.
+//
+// **What this does not prove** (stated, not papered over): macOS's drained-but-readable
+// master cannot be reproduced on Linux, where the kernel names the end and the loop exits
+// at once. So this row proves the drain phase does not drop a tail it *can* still see, not
+// that the macOS window is wide enough - that is what the diagnostic reports, and what a
+// future macOS run must be read for.
+#[cfg(unix)]
+#[test]
+fn a_tail_after_the_child_exits_is_still_read() {
+    let ws = scratch("pty-late-tail");
+    let mut pty = lca_tools::PtyChild::spawn(
+        "sh",
+        &["-c".into(), "sleep 0.05; printf late-tail-606".into()],
+        &ws,
+        24,
+        80,
+        &[],
+    )
+    .expect("spawn");
+    let mut out = String::new();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while !out.contains("late-tail-606") && std::time::Instant::now() < deadline {
+        match pty.read(4096).expect("read") {
+            Some(chunk) => out.push_str(&String::from_utf8_lossy(&chunk)),
+            None => break,
+        }
+    }
+    assert!(
+        out.contains("late-tail-606"),
+        "the drain phase lost a tail written after the child's exit: {out:?} \
+         (diagnostic: {:?})",
+        pty.drain_diagnostic().map(|d| d.describe())
+    );
+    let _ = pty.wait();
+}
+
+// Verifies: gh #477's property, at gh #606's new counter: **a finished session does not
+// spin, and does not pay the window again on every call.**
+//
+// The attempt counter is session-scoped, so N calls against an exhausted session cost
+// what one call cost. Asserting the counter rather than a stopwatch is the same rule the
+// #535 rows use: a wall-clock bound measures the runner, a counter measures the code.
+#[cfg(unix)]
+#[test]
+fn a_drained_master_does_not_spin() {
+    let ws = scratch("pty-drained");
+    let mut pty = lca_tools::PtyChild::spawn("true", &[], &ws, 24, 80, &[]).expect("spawn");
+    // Drain it once.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    loop {
+        if std::time::Instant::now() >= deadline {
+            panic!("an empty program's session never concluded");
+        }
+        if pty.read(1024).expect("read").is_none() {
+            break;
+        }
+    }
+    let after_first = pty
+        .drain_diagnostic()
+        .expect("the first None records a diagnostic");
+    assert!(
+        after_first.attempts <= 20,
+        "the drain cannot exceed DRAIN_ATTEMPTS: {}",
+        after_first.describe()
+    );
+    // Twenty more reads: each must answer None at once, and none may add an attempt.
+    for _ in 0..20 {
+        assert_eq!(
+            pty.read(1024).expect("read"),
+            None,
+            "a finished session keeps answering None"
+        );
+    }
+    let after_twenty = pty.drain_diagnostic().expect("still recorded");
+    assert_eq!(
+        after_twenty.attempts,
+        after_first.attempts,
+        "the window is spent once per session, not once per call (gh #477): {} -> {}",
+        after_first.describe(),
+        after_twenty.describe()
+    );
+    assert_eq!(
+        after_twenty.windows,
+        1,
+        "and the drain phase ran exactly once (`windows` is the field that catches a \
+         per-call reset, which `attempts` cannot where a platform concludes at its first          attempt): {} -> {}",
+        after_first.describe(),
+        after_twenty.describe()
+    );
+    let _ = pty.wait();
+}
