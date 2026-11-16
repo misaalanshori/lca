@@ -183,6 +183,27 @@ rather than the flag's value one instruction after `cancel()`, or drive the canc
 point where the guest is provably inside a host call (the shape #547's own receipt used) —
 do not widen the read into a sleep loop.
 
+**A fourth `pty_spawn_delivers_terminal_output` firing (2026-11-16, gh #535's row).** CI
+`43796693310` (head `08c22855`) failed `test (macos-latest, engines)` on this row with exactly
+the shape gh #535 fixed for - `content: "exit 0 "` with an empty payload, `duration_ms 1129`,
+i.e. the **host declared the session drained** before the child's tail was readable. That is
+the third *class* recurrence (runs `42069077201`, `42166657159`, now `43796693310`), all on
+macOS, all at a few seconds into a run whose typed id starts with `candidate-share`.
+
+Measured here before touching anything: **3/3 green solo** on Linux (5.7-6.9 s each), and a
+probe raising `DRAIN_ATTEMPTS` from 20 to 60 (a 300 ms ceiling) also passed 3/3 — so this box
+cannot distinguish the two, which is the honest state of the evidence. **Not quarantined**,
+nothing loosened, and the 100 ms ceiling is **not** widened blind: the row's own comment already
+separates the two worlds (an empty result with `exit 0` is the host calling the session drained;
+anything else is the program), and the next step, for a cycle that owns `crates/lca-tools`, is
+one of two measured shapes rather than a bigger number — (a) make the drain phase's **exit
+signal** carry the slave-side EOF (macOS's `POLLHUP` on the master arrives with the child's exit
+status, so a read that answers zero bytes *after* a confirmed exit could be treated as
+conclusive once the slave side is provably closed), or (b) start the drain window when the
+**slave** closes rather than when `try_wait` first answers, which is the arm the current loop
+never separates. A 300 ms ceiling would only be the answer if a measurement showed a late tail
+arriving between 100 and 300 ms; the probe above could not show that on this box.
+
 **Quarantine ledger (open 2026-10-02).** `cancelling_a_turn_interrupts_a_running_extension_call` (`lca-core/tests/hooks_dispatch.rs`, gh #548 phase 4's split of `hooks.rs`) is `#[ignore]`d on Windows under testing-plan section 13's rule: its *second* turn - a fresh cancel flag, the scripted provider, one completed conformance call - exceeded the 30-second hang guard twice on hosted runners (CI `36881146884` on 2026-10-01 and CI `36943299928` on 2026-10-02), while the first turn's cancellation assertions passed both times, the local suite stayed green on every run, and Linux/macOS never reproduced it. What is known so far: the fake provider releases its script lock at statement scope, the epoch trap does end the spinning call (turn one is prompt, which is why no spinner leaks), the blocking pool is not exhausted by one call, and the elapsed diagnostic the guard prints is the number the next observation will carry. No mechanism is named yet, so the fix is open - runner contention is the shape of the evidence, not a proven cause. The assertions themselves are untouched; un-quarantining is removing the `cfg_attr` on the test, and section 13's stale-quarantine clock starts at this date.
 
 *Update (2026-10-06, #89):* the test is split in two. Turn one's cancellation assertions now run un-quarantined on every platform (`cancelling_a_turn_interrupts_a_running_extension_call` — they passed on Windows both times the hang fired, so the FR-CONC-1 contract is covered where the full test cannot run).
