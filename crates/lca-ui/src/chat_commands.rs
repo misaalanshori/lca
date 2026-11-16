@@ -83,7 +83,6 @@ impl Chat {
     /// wizard's job here is the thinking level; the notice names the limitation
     /// rather than refusing to open.
     pub(super) fn open_thinking_wizard(&mut self) {
-        eprintln!("OPEN_THINKING_WIZARD called");
         let current_level = self.thinking_level().unwrap_or_default();
         let offered = self
             .world

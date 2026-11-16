@@ -854,3 +854,8 @@ mod color_depth_tier;
 // Gh #602: a resumed session draws the tool-result images its replay used to drop.
 #[path = "602-a-resumed-session-draws-tool-images.rs"]
 mod a_resumed_session_draws_tool_images;
+
+// Gh #605: no `print!`/`println!`/`eprintln!` in `lca-ui`'s production code - the one line
+// a pane found in the shipped wizard path, and the walk that keeps the class out.
+#[path = "605-no-print-in-lca-ui.rs"]
+mod no_print_in_lca_ui;
