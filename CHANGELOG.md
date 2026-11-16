@@ -87,6 +87,14 @@ Dates are UTC.
   the resized copy the model is sent — a JPEG — could only be labelled. The picture you
   see is now derived for the pane at draw time from the bytes that were stored; nothing
   new is saved, hashed, or sent, and iTerm2 is unchanged.
+- **Opening the thinking wizard no longer writes a stray line to stderr** (gh #605,
+  interface). A leftover debug print (`OPEN_THINKING_WIZARD called`) sat in the wizard's
+  production path since the `/settings` wizard landed and was in every release after it:
+  under a normal, un-redirected stderr that line goes **into the terminal the interface
+  is drawing on**, where it can corrupt a frame or kill the process on a terminal whose
+  reader is gone. Deleted, and a guard now walks `lca-ui`'s whole module tree so the next
+  print macro cannot ship (no frame assertion can see one, which is why it survived).
+
 - **The transcript search shows which match is current, and steps both ways** (gh #376,
   interface). The selected match paints bold-and-inverse and the rest underline
   (`Ctrl+R` previously painted one style for everything), the highlight closes only the
