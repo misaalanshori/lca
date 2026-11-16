@@ -557,16 +557,105 @@ mod producer_tests {
         assert!(drain(&rx).is_empty(), "and no request was invented");
     }
 
-    // Verifies: gh #370 flaw 1 (**the spin guard**) - 200 ms of a quiet loop performs
-    // no work beyond its ticks. A wake mechanism that fired spuriously would trade a
-    // 50 ms sleep for a hot loop, which the issue says would be worse than the bug.
+    /// Slack added on top of two ticks when deriving an idle row's window.
+    ///
+    /// **Why the window is derived at all** (gh #603): this row asserted "≥ 2 ticks in a
+    /// hard-coded 200 ms" for four years of tick values, and on CI `43750910373` (macOS,
+    /// head `a4261b38`) it read `and the tick still fires: 1` - the runner delivered one
+    /// 50 ms tick in 200 ms, i.e. it was ~2x late to schedule the wakes. The row was
+    /// asserting the runner's schedule, not the product's behaviour, and the failure said
+    /// so. Two ticks plus this slack is the *product* claim (an idle loop keeps ticking),
+    /// and it moves with [`WAIT_TICK`] if the tick ever changes.
+    const IDLE_SLACK: std::time::Duration = std::time::Duration::from_millis(150);
+
+    /// The window an idle-loop row may watch, and the iteration ceiling it may allow:
+    /// `(window, ceiling)`.
+    ///
+    /// * **window** = `2 * tick + IDLE_SLACK` - room for the two ticks the claim needs
+    ///   (250 ms at the shipped [`WAIT_TICK`], against the 200 ms hard-coded before
+    ///   gh #603). Gh #603's brief stated 300 ms in its prose while giving this formula;
+    ///   the formula is what the row uses, and the ceiling below is derived from it the
+    ///   same way, so the two never drift apart.
+    /// * **ceiling** = `window / tick * 3 + 2` - three times the ticks the window has
+    ///   room for, plus the two boundary iterations a stopwatch always adds. At the
+    ///   shipped tick that is **17**, against the 12 hard-coded before. It stays two
+    ///   orders of magnitude below a spin: a loop that never waited would count
+    ///   `~10^5` iterations here (1 µs per iteration), which is why the upper bound is
+    ///   the half that identifies the defect and the lower half only identifies a
+    ///   starved runner.
+    ///
+    /// Pure, so the arithmetic is testable without a clock, and `tick` is a parameter
+    /// rather than [`WAIT_TICK`] so a row can prove the shape holds for other ticks.
+    fn idle_loop_bounds(tick: std::time::Duration) -> (std::time::Duration, u32) {
+        let window = tick.saturating_mul(2) + IDLE_SLACK;
+        let ticks_in_window = window.as_millis() / tick.as_millis().max(1);
+        let ceiling = u32::try_from(ticks_in_window * 3 + 2).unwrap_or(u32::MAX);
+        (window, ceiling)
+    }
+
+    // Verifies: gh #603 - the idle row's two bounds move with the tick, so no future
+    // tick change leaves a wall-clock constant behind to flake against.
+    //
+    // The tabulated ticks are the ones a maintainer might plausibly choose (10 ms is a
+    // faster spinner, 200 ms a slower one); the assertion is the *shape*, not the
+    // numbers, so a different slack keeps this row green while a hard-coded window
+    // fails it (mutant (a) in gh #603's brief is exactly that: `2 * tick` must fit).
     #[test]
-    fn an_idle_loop_does_no_work_for_200_ms() {
+    fn idle_loop_bounds_scale_with_the_tick() {
+        for tick_ms in [10u64, 16, 33, 50, 100, 200] {
+            let tick = std::time::Duration::from_millis(tick_ms);
+            let (window, ceiling) = idle_loop_bounds(tick);
+            // Two ticks always fit, and the slack is included rather than eaten.
+            assert!(
+                window >= tick * 2,
+                "a {tick:?} tick needs room for two of itself: {window:?}"
+            );
+            assert!(
+                window > tick * 2,
+                "and room beyond them, or a loaded runner has none: {window:?}"
+            );
+            // The ceiling allows at least three times the ticks the window holds.
+            let ticks_in_window = u64::try_from(window.as_millis() / tick.as_millis()).unwrap_or(0);
+            assert!(
+                u64::from(ceiling) >= ticks_in_window * 3,
+                "the ceiling must not be tighter than three times the {ticks_in_window}                  ticks a {window:?} window holds: {ceiling}"
+            );
+            // And it is nowhere near a spin, on any of these ticks.
+            assert!(
+                u64::from(ceiling) < 10_000,
+                "a ceiling of {ceiling} for a {tick:?} tick is no longer a spin guard"
+            );
+        }
+        // The shipped tick's own numbers, quoted so a reader can see them without
+        // running the arithmetic: 50 ms -> 250 ms window, ceiling 17.
+        let (window, ceiling) = idle_loop_bounds(WAIT_TICK);
+        assert_eq!(
+            window,
+            std::time::Duration::from_millis(250),
+            "the shipped window is two ticks plus slack"
+        );
+        assert_eq!(ceiling, 17, "and its ceiling is 17 iterations");
+    }
+
+    // Verifies: gh #370 flaw 1 (**the spin guard**) - one derived window of a quiet loop
+    // performs no work beyond its ticks. A wake mechanism that fired spuriously would
+    // trade a 50 ms sleep for a hot loop, which the issue says would be worse than the
+    // bug.
+    //
+    // **Renamed and re-based by gh #603.** The row used to be
+    // `an_idle_loop_does_no_work_for_200_ms`, and its name was the assertion: a 200 ms
+    // constant that a loaded macOS runner could not fill with two ticks. Both bounds now
+    // come from [`idle_loop_bounds`], so the row states a *rate* - "a tick per tick,
+    // never more" - rather than a wall-clock number, and the three clauses are unchanged:
+    // no producer wake, no spin, at least two ticks.
+    #[test]
+    fn an_idle_loop_does_no_work_for_its_own_window() {
+        let (window, ceiling) = idle_loop_bounds(WAIT_TICK);
         let (_waker, wakes) = Wakes::new();
         let start = std::time::Instant::now();
-        let mut iterations = 0;
+        let mut iterations = 0u32;
         let mut producer_wakes = 0;
-        while start.elapsed() < std::time::Duration::from_millis(200) {
+        while start.elapsed() < window {
             iterations += 1;
             match wakes.wait(never()) {
                 Woke::Producer => producer_wakes += 1,
@@ -578,13 +667,15 @@ mod producer_tests {
             producer_wakes, 0,
             "an idle loop is never woken by a producer"
         );
-        // 200 ms at a 50 ms tick is ~4 iterations. Allow generous slack for a loaded
-        // machine but fail loudly if the loop is spinning (which would be hundreds).
+        // A spin counts hundreds (a yield loop counts ~10^5); the derived ceiling is 17.
         assert!(
-            iterations <= 12,
-            "an idle loop ticks, it does not spin: {iterations} iterations in 200 ms"
+            iterations <= ceiling,
+            "an idle loop ticks, it does not spin: {iterations} iterations in {window:?}              (ceiling {ceiling})"
         );
-        assert!(iterations >= 2, "and the tick still fires: {iterations}");
+        assert!(
+            iterations >= 2,
+            "and the tick still fires: {iterations} iterations in {window:?} (the row              needs two ticks of {WAIT_TICK:?} plus slack)"
+        );
     }
 
     // Verifies: gh #370 flaw 1 - the **tick still fires**, so the spinner animates and
