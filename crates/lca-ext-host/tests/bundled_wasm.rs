@@ -55,6 +55,40 @@
 //! inside `provider.rs`, which is at gate 11's ceiling already - a new row there
 //! would be the second reason to split it, and this subject (the built artifact,
 //! not the provider world) is a different thing to look up.
+//!
+//! # gh #597: the second bundled extension, and the one that had no WASM coverage
+//!
+//! `docs/testing-plan.md` §13's sentence used to end at "the next bundled
+//! extension is not covered": `compaction-default`'s **native** half is exercised
+//! by `lca-core`'s compaction tests, and its **sandboxed** half had no committed
+//! component and no row at all - so the delivery-mode boundary the rest of this
+//! file exists for was untested on the one extension whose job is to rewrite a
+//! session log. Both halves of that gap are closed here, and each with the
+//! mechanism that costs least:
+//!
+//! * a **dev-dependency line** (`compaction-default` in `Cargo.toml`) gives the
+//!   rows the native twin, exactly as `openai-compatible`'s already do;
+//! * a **committed fixture** (`extensions/compaction-default/fixtures/component.wasm`,
+//!   produced by `cargo build --release --target wasm32-wasip2 -p compaction-default`)
+//!   gives them an artifact that exists on every machine, which is also what puts
+//!   that file under `scripts/wasm-check.sh`'s derived interface comparison and
+//!   under `fixture_current.rs`'s directory walk - no new machinery, two existing
+//!   guards now cover it.
+//!
+//! **The mechanical strategy path on purpose.** No `completion` backend is installed
+//! in either mode, so both run the strategy's mechanical fallback
+//! (`run_compact`'s `degraded` shape, which names the missing provider and then
+//! writes an excerpt summary). That costs no provider, no network and no model
+//! call, and it is exactly the code the record framing crosses: `SessionRecord`
+//! `kind`/`body` in the guest against the native handle's own `record.type_tag()`
+//! plus `serde_json::to_string`. A completion-backed comparison would additionally
+//! need a scripted provider, and the divergence class it would guard (the prompt
+//! text) is already pinned by that crate's own tests.
+//!
+//! An **empty range** is the third row because a guest's `Vec`/option handling and
+//! the native path's own emptiness branch are the place two delivery modes most
+//! easily disagree - measured here: they answer the same string, which is the
+//! assertion rather than an assumption.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 use std::path::PathBuf;
@@ -205,17 +239,18 @@ fn asked() -> Vec<(String, String)> {
     )]
 }
 
-/// Where `wasm-check.sh` leaves the fresh build: `target/wasm32-wasip2/release/`.
+/// Where `wasm-check.sh` leaves a fresh build: `target/wasm32-wasip2/release/`.
 /// `CARGO_TARGET_DIR` is honoured because a worker or CI may move it.
-fn fresh_artifact() -> Option<PathBuf> {
+fn fresh_artifact_of(extension: &str) -> Option<PathBuf> {
     let target = std::env::var_os("CARGO_TARGET_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target"));
     let path = target
         .join("wasm32-wasip2/release")
-        .join(format!("{}.wasm", NAME.replace('-', "_")));
+        .join(format!("{}.wasm", extension.replace('-', "_")));
     path.is_file().then_some(path)
 }
+
 
 /// The house rule for a harness that is not present: **skip by name**, never
 /// pass silently, and let an env flag turn it into a failure.
@@ -228,17 +263,17 @@ fn fresh_artifact() -> Option<PathBuf> {
 /// `extension components build` job runs this suite with `LCA_REQUIRE_WASM=1`
 /// right after it has built the artifact (so a cold checkout there is a failure,
 /// not a green row that exercised nothing).
-fn artifact_or_skip(row: &str) -> Option<PathBuf> {
-    let artifact = fresh_artifact();
+fn artifact_or_skip_of(row: &str, extension: &str) -> Option<PathBuf> {
+    let artifact = fresh_artifact_of(extension);
     if artifact.is_none() {
         let reason = format!(
-            "{row}: the fresh `{NAME}` component build is absent, so the bundled-WASM \
+            "{row}: the fresh `{extension}` component build is absent, so the bundled-WASM \
              path went UNVERIFIED here. `scripts/wasm-check.sh` (or `cargo build --release \
-             --target wasm32-wasip2 -p {NAME}`) produces \
+             --target wasm32-wasip2 -p {extension}`) produces \
              `target/wasm32-wasip2/release/{}.wasm`, which this row reads rather than \
              building (a nested cargo call inside a test is a build-system dependency \
              this suite deliberately does not have).",
-            NAME.replace('-', "_")
+            extension.replace('-', "_")
         );
         if std::env::var("LCA_REQUIRE_WASM").is_ok() {
             panic!("LCA_REQUIRE_WASM is set and {reason}");
@@ -246,6 +281,11 @@ fn artifact_or_skip(row: &str) -> Option<PathBuf> {
         eprintln!("skip: {reason}");
     }
     artifact
+}
+
+/// [`artifact_or_skip_of`] for this file's first subject (gh #351's extension).
+fn artifact_or_skip(row: &str) -> Option<PathBuf> {
+    artifact_or_skip_of(row, NAME)
 }
 
 // Verifies: gh #351 finding 3 - **the headline.** A bundled extension compiled
@@ -501,4 +541,327 @@ fn the_absence_path_skips_by_name_and_the_require_flag_makes_it_fail() {
         "exactly two rows consult the skip path: a third would be a row whose \
          skip nobody reviewed, and one would leave a row that never skips"
     );
+}
+
+// ---------------------------------------------------------------------------
+// gh #597: the default compaction strategy, in both delivery modes
+// ---------------------------------------------------------------------------
+
+/// The second bundled extension under test, and the one whose WASM half had no
+/// row at all: its native twin is covered by `lca-core`'s compaction tests and
+/// its sandboxed half was the open half of `docs/testing-plan.md` §13's
+/// sentence. See this file's module doc for why the mechanical path is the one
+/// the rows drive (no provider, no network, and the record framing is exactly
+/// what crosses the boundary there).
+mod compaction {
+    use std::sync::{Arc, Mutex};
+
+    use lca_ext_abi::ExtensionDispatch;
+    use lca_ext_host::{ExtHost, ExtensionLimits, HostEnvironment};
+
+    const NAME: &str = "compaction-default";
+    const MANIFEST: &str = include_str!("../../../extensions/compaction-default/extension.toml");
+    const FIXTURE: &[u8] =
+        include_bytes!("../../../extensions/compaction-default/fixtures/component.wasm");
+
+    /// A prompt that never answers: the mechanical path makes no capability call,
+    /// and a row that accidentally made one should fail rather than prompt.
+    struct Deny;
+    impl lca_permissions::PermissionPrompt for Deny {
+        fn ask(&mut self, _action: &lca_permissions::Action) -> lca_permissions::Decision {
+            lca_permissions::Decision::Denied
+        }
+        fn review_proposals(&mut self, _diff: &lca_permissions::ProposalDiff) -> bool {
+            false
+        }
+    }
+
+    /// One scratch root per half, with the layouts both sides expect. The
+    /// compaction world imports `resources`/`state` like every world does (ADR-0030),
+    /// so those roots have to exist even though this strategy reads neither.
+    fn env(tag: &str) -> Arc<HostEnvironment> {
+        let root = lca_testkit::scratch_path(&format!("lca-bundled-wasm-compaction-{tag}"));
+        let _ = std::fs::remove_dir_all(&root);
+        for dir in ["project", "private", "config", "data", "tmp"] {
+            std::fs::create_dir_all(root.join(dir)).expect("mkdir");
+        }
+        let roots = lca_permissions::ScopeRoots {
+            workspace: root.join("project"),
+            private: root.join("private"),
+            home_config: root.join("config"),
+            temp: root.join("tmp"),
+            state_dir: root.join("data"),
+        };
+        Arc::new(HostEnvironment {
+            roots,
+            prompt: Arc::new(Mutex::new(Deny)),
+            grant_store: Arc::new(Mutex::new(
+                lca_permissions::GrantStore::open(&root.join("grants.json")).expect("store"),
+            )),
+            project: root.join("project"),
+            proposals: None,
+            dialogs: lca_permissions::SharedDialogs::default(),
+        })
+    }
+
+    /// The WASM half: the committed (or freshly built) component through the host.
+    fn wasm(bytes: &[u8], tag: &str) -> Arc<dyn ExtensionDispatch> {
+        let mut host = ExtHost::new(
+            ExtensionLimits {
+                memory_bytes: 64 * 1024 * 1024,
+                fuel_per_call: 100_000_000,
+                log_limit_bytes: 4096,
+            },
+            env(tag),
+        );
+        Arc::new(host.load(bytes, MANIFEST).expect("the component links"))
+    }
+
+    /// The native half: the same crate's dispatch trait, in process.
+    ///
+    /// No completion backend is installed - deliberately: both halves then take
+    /// `run_compact`'s mechanical fallback, so the comparison is the **record
+    /// framing** (`kind`/`body` across the guest boundary against
+    /// `type_tag`/`serde_json` in the twin) and nothing else.
+    fn native(tag: &str) -> Arc<dyn ExtensionDispatch> {
+        let environment = env(tag);
+        let cap = Arc::new(lca_tools::Capabilities::new(
+            NAME,
+            compaction_default::manifest_grants(),
+            environment.roots.clone(),
+            environment.prompt.clone(),
+            environment.grant_store.clone(),
+            environment.project.clone(),
+            None,
+        ));
+        Arc::new(compaction_default::CompactionDefault::new(cap))
+    }
+
+    /// The scripted range: two user turns, an assistant answer carrying usage and
+    /// reasoning, and a tool call + result - the shapes `compaction-candidate` is
+    /// built from, so the mechanical fallback's "Requests:" line and its "Last:"
+    /// line both have something to read.
+    fn range() -> Vec<lca_protocol::Record> {
+        use lca_protocol::{FORMAT_VERSION, Record};
+        vec![
+            Record::User {
+                v: FORMAT_VERSION,
+                ts: 1,
+                id: "u1".into(),
+                parent: None,
+                content: "please tidy the parser".into(),
+                attachments: vec![],
+                queue: None,
+            },
+            Record::Assistant {
+                v: FORMAT_VERSION,
+                ts: 2,
+                id: "a1".into(),
+                parent: Some("u1".into()),
+                content: vec![lca_protocol::ContentBlock::Text {
+                    text: "I read the file and changed two lines.".into(),
+                }],
+                reasoning: Some("need to check line endings".into()),
+                reasoning_signature: None,
+                provider_thinking_level: None,
+                model: Some("test-model".into()),
+                provider: None,
+                usage: Some(lca_protocol::Usage {
+                    input: 100,
+                    output: 20,
+                    ..Default::default()
+                }),
+            },
+            Record::ToolCall {
+                v: FORMAT_VERSION,
+                ts: 3,
+                id: "c1".into(),
+                parent: Some("a1".into()),
+                call_id: "call-1".into(),
+                name: "read".into(),
+                arguments: r#"{"path":"src/parser.rs"}"#.into(),
+                source: lca_protocol::ToolSource::Builtin,
+            },
+            Record::ToolResult {
+                v: FORMAT_VERSION,
+                ts: 4,
+                id: "r1".into(),
+                parent: Some("c1".into()),
+                call_id: "call-1".into(),
+                status: lca_protocol::ToolResultStatus::Ok,
+                content: Some("fn parse() {\n    // ...\n}".into()),
+                attachment: None,
+                truncated: false,
+                duration_ms: Some(120),
+                exit_code: None,
+                full_output_path: None,
+                nested: vec![],
+                images: vec![],
+            },
+        ]
+    }
+
+    /// One summary from each side, with the divergence message naming the side and
+    /// both answers (this class is a divergence, never a crash).
+    async fn both_modes(committed: &[u8], label: &str) -> (String, String, String, String, String) {
+        let native = native(&format!("{label}-native"));
+        let sandboxed = wasm(committed, &format!("{label}-committed"));
+        assert_eq!(
+            sandboxed.name(),
+            NAME,
+            "the component links as the extension the manifest names"
+        );
+        assert_eq!(
+            sandboxed.delivery().label(),
+            "sandboxed",
+            "and it arrived through the sandbox"
+        );
+        assert_eq!(
+            native.delivery().label(),
+            "in-process (unsandboxed)",
+            "while the twin is the in-process one (FR-EXT-7: the labels differ by design)"
+        );
+        let range = range();
+        let native_summary = native.compact(&range).await.expect("native compaction");
+        let sandboxed_summary = sandboxed
+            .compact(&range)
+            .await
+            .expect("sandboxed compaction");
+        (
+            native.name().to_string(),
+            sandboxed.name().to_string(),
+            native_summary,
+            sandboxed_summary,
+            range.len().to_string(),
+        )
+    }
+
+    /// gh #597 row 1 - **the committed component answers like its native twin.**
+    ///
+    /// The comparison is the whole summary string, and the strategy **name** too:
+    /// a divergence in attribution ("summarised via X" vs Y) is a divergence even
+    /// where the text agrees, and a row that only compared the body would pass on
+    /// it. Pre-cycle this row could not exist: the committed file did not.
+    #[tokio::test]
+    async fn the_committed_compaction_component_answers_like_its_native_twin() {
+        let (native_name, sandboxed_name, native_summary, sandboxed_summary, count) =
+            both_modes(FIXTURE, "committed").await;
+        assert_eq!(
+            native_name, sandboxed_name,
+            "the two delivery modes report a different extension name"
+        );
+        assert_eq!(
+            native_summary, sandboxed_summary,
+            "the committed compaction component and its native twin disagree over \
+             {count} records.\n  committed \
+             extensions/{NAME}/fixtures/component.wasm: {sandboxed_summary:?}\n  \
+             in-process twin: {native_summary:?}"
+        );
+        // The mechanical path's own shape, so a component that answered an empty
+        // string (or a placeholder) cannot pass by agreeing with itself.
+        assert!(
+            sandboxed_summary.contains("Requests:"),
+            "the summary is the strategy's mechanical excerpt, not a stub: {sandboxed_summary:?}"
+        );
+        assert!(
+            sandboxed_summary.contains("please tidy the parser"),
+            "and it carries the range's own request: {sandboxed_summary:?}"
+        );
+    }
+
+    /// gh #597 row 2 - **a fresh build answers like its native twin too.**
+    ///
+    /// Skip-by-name when the artifact is absent (`scripts/wasm-check.sh` or
+    /// `cargo build --release --target wasm32-wasip2 -p compaction-default`
+    /// produces `target/wasm32-wasip2/release/compaction_default.wasm`),
+    /// `LCA_REQUIRE_WASM=1` turns that into a failure. The row reads the artifact
+    /// rather than building it: a nested cargo call inside a test is a build-system
+    /// dependency this suite deliberately does not have.
+    #[tokio::test]
+    async fn a_fresh_compaction_build_answers_like_its_native_twin() {
+        let Some(artifact) = super::artifact_or_skip_of(
+            "a_fresh_compaction_build_answers_like_its_native_twin",
+            NAME,
+        ) else {
+            return;
+        };
+        let bytes = std::fs::read(&artifact)
+            .unwrap_or_else(|err| panic!("read the fresh build {}: {err}", artifact.display()));
+        let (native_name, sandboxed_name, native_summary, sandboxed_summary, count) =
+            both_modes(&bytes, "fresh").await;
+        assert_eq!(native_name, sandboxed_name);
+        assert_eq!(
+            native_summary,
+            sandboxed_summary,
+            "a fresh build of today's source and its native twin disagree over {count} \
+             records.\n  fresh build ({}): {sandboxed_summary:?}\n  in-process twin: \
+             {native_summary:?}",
+            artifact.display()
+        );
+    }
+
+    /// gh #597 row 3 - **an empty range answers the same in both modes.**
+    ///
+    /// The boundary case, and the one where a guest's `Vec` handling and the twin's
+    /// own emptiness branch most easily disagree. Read from the strategy rather than
+    /// assumed: `run_compact` always asks the completion capability once per excerpt
+    /// set, so with no excerpts *and* no backend both modes report the same
+    /// mechanical "0 messages" answer. The row asserts **equality**, not a literal -
+    /// a future strategy that answers `Err` on emptiness would keep this row green
+    /// as long as both modes answer that error together, which is the property that
+    /// matters.
+    #[tokio::test]
+    async fn the_compaction_component_answers_an_empty_range_identically_in_both_modes() {
+        let native = native("empty-native");
+        let sandboxed = wasm(FIXTURE, "empty-committed");
+        let native_answer = format!("{:?}", native.compact(&[]).await);
+        let sandboxed_answer = format!("{:?}", sandboxed.compact(&[]).await);
+        assert_eq!(
+            native_answer, sandboxed_answer,
+            "an empty range diverges between the delivery modes.\n  committed component: \
+             {sandboxed_answer}\n  in-process twin: {native_answer}"
+        );
+    }
+
+    /// gh #597 row 4 - **the committed fixture exists, and these rows use it.**
+    ///
+    /// The unconsumed-twin mechanism (gh #427): an unreferenced fixture hid a stale
+    /// one for two weeks, because nothing read it and nothing refreshed it. This row
+    /// asserts the file is on disk **and** that this file names it (so deleting the
+    /// `include_bytes!` while leaving the bytes behind is caught), and the fixture's
+    /// presence is also what puts it under `wasm-check.sh`'s derived interface
+    /// comparison and `fixture_current.rs`'s walk.
+    #[test]
+    fn the_compaction_component_is_listed_as_a_committed_fixture() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../extensions/compaction-default/fixtures/component.wasm");
+        assert!(
+            path.is_file(),
+            "the committed compaction component is missing at {} - the rows above then \
+             have no artifact on a machine that has not run `scripts/wasm-check.sh`, and \
+             `scripts/wasm-check.sh` cannot guard it either",
+            path.display()
+        );
+        let bytes = FIXTURE.len();
+        assert!(
+            bytes > 10_000,
+            "the fixture is a real component, not a placeholder: {bytes} bytes"
+        );
+        // Referenced *as bytes* by this suite, not merely present on disk.
+        let source = include_str!("bundled_wasm.rs");
+        assert!(
+            source.contains("extensions/compaction-default/fixtures/component.wasm"),
+            "these rows must include_bytes! the fixture: a file nothing reads is the \
+             stale-twin shape gh #427 is about"
+        );
+        assert!(
+            source.contains("compaction_default::CompactionDefault"),
+            "and they must drive the native half too - the comparison is the point"
+        );
+        assert!(
+            source.contains("artifact_or_skip_of("),
+            "and the fresh-build row must consult the shared skip path, so a missing \
+             artifact is a named skip rather than a row that silently exercises nothing"
+        );
+    }
 }

@@ -1677,6 +1677,7 @@ name = "lca-ext-host"
 version = "0.6.0"
 dependencies = [
  "anyhow",
+ "compaction-default",
  "conformance",
  "lca-debug",
  "lca-ext-abi",

@@ -30,6 +30,12 @@ conformance = { path = "../../extensions/conformance" }
 # gh #34: the shipped provider in both delivery modes - the native
 # handle and the committed component, driven from one test.
 openai-compatible = { path = "../../extensions/openai-compatible" }
+# gh #597: the default compaction strategy in both delivery modes. The WASM half
+# is the one bundled extension whose native twin is covered by another crate's
+# suite (`lca-core`'s compaction tests) while the sandboxed half has no row at all;
+# this line is what lets the dual-mode suite drive its native handle next to the
+# committed component. Tests only - the product loads it through the registry.
+compaction-default = { path = "../../extensions/compaction-default" }
 lca-ext-native = { path = "../lca-ext-native" }
 lca-testkit = { path = "../lca-testkit" }
 tokio.workspace = true
