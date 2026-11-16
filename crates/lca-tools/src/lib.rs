@@ -61,7 +61,7 @@ pub use paths::{
     ScreenshotLookup, ScreenshotMiss, is_inside, resolve_target, screenshot_candidates, sha256_hex,
 };
 pub use process::{TreeChild, read_buffered, read_up_to, spawn_direct, write_all};
-pub use pty::PtyChild;
+pub use pty::{DrainDiagnostic, PtyChild};
 pub use reads::{
     edit_requires_read, has_fresh_read, note_read, reset_read_registry, set_edit_requires_read,
     stale_read_refusal,

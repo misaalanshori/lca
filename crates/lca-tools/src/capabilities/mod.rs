@@ -253,6 +253,8 @@ pub struct Capabilities {
     /// shutting-down runtime panics.
     cancelled_notify: Arc<tokio::sync::Notify>,
     handles: Arc<Mutex<HandleTable>>,
+    /// The last session's drain conclusion (gh #606's diagnostic).
+    last_drain: Arc<Mutex<Option<crate::pty::DrainDiagnostic>>>,
     client: HttpClient,
     /// Addresses already checked for a hostname, consulted by
     /// [`PinnedResolver`] so the connect uses the checked address.
@@ -316,6 +318,7 @@ impl Capabilities {
             cancelled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             cancelled_notify: Arc::new(tokio::sync::Notify::new()),
             handles: Arc::new(Mutex::new(HandleTable::default())),
+            last_drain: Arc::new(Mutex::new(None)),
             client: Client::builder(hyper_util::rt::TokioExecutor::new()).build(https),
             pins,
             flows: Arc::new(Mutex::new(HashMap::new())),
@@ -900,6 +903,12 @@ impl Capabilities {
     }
 
     /// Read up to `max` terminal bytes; `None` when the session ended.
+    ///
+    /// Gh #606: when a `None` rests on the drain window rather than on the kernel
+    /// naming the end, the conclusion is logged (`lca.host.log`, `pty.drain`) so a
+    /// sixth macOS firing of the conformance row names the attempt and byte counts
+    /// instead of repeating its empty payload. **The answer itself is unchanged**: the
+    /// ABI return is `option<list<u8>>`.
     pub fn pty_read(&self, handle: u32, max: usize) -> Result<Option<Vec<u8>>, CapabilityError> {
         let mut table = lock(&self.handles);
         let entry = table
@@ -911,7 +920,29 @@ impl Capabilities {
                 "handle {handle} is not a pty"
             )));
         };
-        Ok(pty.read(max)?)
+        let answer = pty.read(max)?;
+        #[cfg(unix)]
+        if answer.is_none()
+            && let Some(diagnostic) = pty.drain_diagnostic()
+        {
+            lca_debug::core::event(
+                "pty.drain",
+                &format!("pty_read handle={handle} {}", diagnostic.describe()),
+            );
+            // Kept on a per-engine cell so a test row (and, in a real session,
+            // `lca.host.log`) can quote it: `pty.read`'s answer carries bytes only.
+            *lock(&self.last_drain) = Some(diagnostic);
+        }
+        Ok(answer)
+    }
+
+    /// The last `pty.read` drain conclusion, for the host's log and for rows (gh #606).
+    ///
+    /// `None` until an `None`-answer rested on a drain window. One slot, not a per-handle
+    /// map: the diagnostic exists to explain a firing, and a session opening two ptys
+    /// still reports one shape at a time.
+    pub fn last_drain(&self) -> Option<crate::pty::DrainDiagnostic> {
+        *lock(&self.last_drain)
     }
 
     /// Forward keystrokes to the program.

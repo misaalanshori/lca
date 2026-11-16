@@ -27,6 +27,64 @@ impl Drop for PtyChild {
     }
 }
 
+/// How far the post-exit drain got when `pty.read` answered "the session ended"
+/// (gh #606).
+///
+/// **A diagnostic, not an answer.** `pty.read`'s ABI return is `option<list<u8>>` and
+/// does not change: a guest that loops until `None` must keep seeing exactly that.
+/// These fields exist so a *sixth* macOS firing of
+/// `pty_spawn_delivers_terminal_output` names how far the window got, instead of
+/// repeating `exit 0` with an empty payload five times - the row's own failure message
+/// carries them, and `lca.host.log` gets the same line at debug level.
+///
+/// The two facts the drain window cannot distinguish are (a) a tail in flight and (b)
+/// a master that is drained yet stays readable (macOS answers zero bytes forever).
+/// `slave_closed` is the fact that *does* distinguish them where the kernel offers it:
+/// Linux reports `POLLHUP` on a drained master, macOS never does.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DrainDiagnostic {
+    /// Attempts this **session** has spent in the drain phase, across every `read`
+    /// (not per call: a session that has answered `None` must not pay the window
+    /// again on the next call - gh #477's property, held at the session's scale).
+    pub attempts: u32,
+    /// Terminal bytes this session has delivered in total.
+    pub bytes: u64,
+    /// Whether the read path observed the slave side close (`POLLHUP`, or `EIO` on
+    /// Linux). `false` on a platform where a drained master does not say so.
+    pub slave_closed: bool,
+    /// Whether the window's ceiling was reached without the kernel naming an end -
+    /// i.e. the answer rests on elapsed time alone, which is the platform macOS.
+    pub exhausted: bool,
+    /// How many times this session **concluded** a drain phase. `1` is the gh #477
+    /// property: a caller polling a finished session must not pay the window again. This
+    /// field exists because `attempts` cannot see a per-call reset on a platform that
+    /// concludes at its first attempt (measured: Linux concludes at attempt 1, so a
+    /// counter reset every call leaves `attempts == 1` and looks healthy).
+    pub windows: u32,
+}
+
+impl DrainDiagnostic {
+    /// One line for the log and for a row's failure message.
+    ///
+    /// Worded so a reader can tell the two worlds apart without knowing this code:
+    /// `exhausted=true` with `bytes` unchanged is the firing's shape, while
+    /// `slave_closed=true` means the kernel named the end and no further tail can
+    /// arrive.
+    pub fn describe(&self) -> String {
+        let how = if self.slave_closed {
+            "slave closed (the kernel named the end)"
+        } else if self.exhausted {
+            "drain window exhausted (no end from the kernel; elapsed time alone)"
+        } else {
+            "no end recorded yet"
+        };
+        format!(
+            "attempts={} windows={} bytes={} slave_closed={} exhausted={} - {how}",
+            self.attempts, self.windows, self.bytes, self.slave_closed, self.exhausted
+        )
+    }
+}
+
 #[cfg(unix)]
 struct Inner {
     /// Master side: read output, write keystrokes, resize.
@@ -34,6 +92,24 @@ struct Inner {
     child: std::process::Child,
     /// The child's process group, for a whole-tree kill.
     pgid: u32,
+    /// Bytes delivered to callers this session (gh #606's diagnostic).
+    bytes_read: u64,
+    /// Drain attempts spent this **session**, and whether the ceiling was reached.
+    /// Session-scoped so a caller that keeps reading a finished session does not pay
+    /// the window once per call.
+    drain_attempts: u32,
+    drain_exhausted: bool,
+    /// The slave was observed closed (`POLLHUP`/`EIO`): a conclusive end on this
+    /// platform, unlike a macOS master that stays readable after it is drained.
+    slave_closed: bool,
+    /// The last drain conclusion, for [`PtyChild::drain_diagnostic`].
+    last_drain: Option<DrainDiagnostic>,
+    /// A drain has concluded: the session's end is a **fact** now, so a later call
+    /// answers `None` without re-entering the window (gh #606's `a_drained_master_…
+    /// row` measured the counter climbing one attempt per call without this).
+    drain_concluded: bool,
+    /// Drain windows this session has concluded (`DrainDiagnostic::windows`).
+    drain_windows: u32,
 }
 
 #[cfg(windows)]
@@ -73,6 +149,17 @@ impl PtyChild {
     /// Read up to `max` terminal bytes; `None` means the session ended.
     pub fn read(&mut self, max: usize) -> std::io::Result<Option<Vec<u8>>> {
         read_impl(&mut self.inner, max)
+    }
+
+    /// How far the session's post-exit drain got, as of the last `read` (gh #606).
+    ///
+    /// `None` until a drain phase has concluded. **Not part of `pty.read`'s answer** -
+    /// the guest still sees `option<list<u8>>` - so this is for the host's log and for a
+    /// row's failure message, which is where the five macOS firings needed it and had
+    /// nothing.
+    #[cfg(unix)]
+    pub fn drain_diagnostic(&self) -> Option<DrainDiagnostic> {
+        self.inner.last_drain
     }
 
     /// Forward keystrokes (or other input) to the program.
@@ -209,6 +296,37 @@ mod unsafe_ptmx {
     ///
     /// Interrupts are reported as "no data": a signal is not the session's
     /// state, and the caller's next read still sees whatever is really there.
+    /// Like [`Self::wait_readable`], but also reports whether the kernel named the
+    /// **end** (`POLLHUP`), which is the fact gh #606 needs: `POLLIN` alone cannot
+    /// distinguish a late tail from a drained-but-readable master, while `POLLHUP`
+    /// says the slave side is gone and no further bytes can arrive.
+    ///
+    /// `(readable, hung_up)`. Everywhere the old helper was used the answer it needs
+    /// is the first element, so the two stay one syscall rather than two.
+    pub(super) fn poll_state(
+        file: &std::fs::File,
+        timeout_ms: i32,
+    ) -> std::io::Result<(bool, bool)> {
+        let mut pfd = libc::pollfd {
+            fd: raw_fd(file),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: one valid pollfd, alive for the duration of the call.
+        let rc = unsafe { libc::poll(&mut pfd, 1, timeout_ms) };
+        if rc < 0 {
+            let err = std::io::Error::last_os_error();
+            if err.kind() == std::io::ErrorKind::Interrupted {
+                return Ok((false, false));
+            }
+            return Err(err);
+        }
+        let readable = rc > 0 && (pfd.revents & libc::POLLIN) != 0;
+        // `POLLHUP` and `POLLERR` both mean the other end is gone on a pty master.
+        let hung_up = rc > 0 && (pfd.revents & (libc::POLLHUP | libc::POLLERR)) != 0;
+        Ok((readable, hung_up))
+    }
+
     pub(super) fn wait_readable(file: &std::fs::File, timeout_ms: i32) -> std::io::Result<bool> {
         let mut pfd = libc::pollfd {
             fd: raw_fd(file),
@@ -276,6 +394,13 @@ fn spawn_impl(
         master,
         child,
         pgid,
+        bytes_read: 0,
+        drain_attempts: 0,
+        drain_exhausted: false,
+        slave_closed: false,
+        last_drain: None,
+        drain_concluded: false,
+        drain_windows: 0,
     })
 }
 
@@ -330,16 +455,17 @@ fn child_exited(inner: &mut Inner) -> std::io::Result<bool> {
 #[cfg(unix)]
 fn read_impl(inner: &mut Inner, max: usize) -> std::io::Result<Option<Vec<u8>>> {
     let deadline = std::time::Instant::now() + READY_WAIT;
-    // Post-exit drain attempts already spent (gh #535). Bounded by count *and*
-    // by the fact that each one waits, so a macOS master that stays readable
-    // after it is drained costs at most `DRAIN_ATTEMPTS * DRAIN_STEP` and never
-    // a spin - which is why this is not the loop gh #477 had to remove.
-    let mut drain_attempt = 0u32;
     loop {
         // Read first: output may already be buffered, and a read that returns
         // data costs nothing. Only an *empty* answer has to wait.
         let end_of_stream = match crate::process::read_up_to(&mut inner.master, max) {
-            Ok(Some(bytes)) if !bytes.is_empty() => return Ok(Some(bytes)),
+            Ok(Some(bytes)) if !bytes.is_empty() => {
+                inner.bytes_read += bytes.len() as u64;
+                if let Some(last) = inner.last_drain.as_mut() {
+                    last.bytes = inner.bytes_read;
+                }
+                return Ok(Some(bytes));
+            }
             // Unreachable today (`read_up_to` maps a zero-byte read to `None`),
             // but the arm is what keeps this match honest if that ever changes.
             Ok(Some(_)) => false,
@@ -349,15 +475,34 @@ fn read_impl(inner: &mut Inner, max: usize) -> std::io::Result<Option<Vec<u8>>> 
             // "exit 0, no output" shape gh #477 was filed for.
             Ok(None) => true,
             Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => false,
-            Err(err) if err.raw_os_error() == Some(5) => true,
+            // EIO is the kernel naming the end: on Linux/macOS every slave side
+            // is gone (gh #606's `slave_closed` - the fact `POLLIN` cannot give).
+            Err(err) if err.raw_os_error() == Some(5) => {
+                inner.slave_closed = true;
+                true
+            }
             Err(err) => return Err(err),
         };
         if end_of_stream {
+            // A concluded drain is sticky: the session's end is a fact from here on, and
+            // re-entering the window on every later call would make a caller that polls a
+            // finished session pay an attempt per call (measured, and the reason this
+            // branch exists).
+            if inner.drain_concluded {
+                return Ok(None);
+            }
             // Not the end while the child is still alive: it may write again.
             if !child_exited(inner)? {
                 // fall through to the wait below and look again
-            } else if drain_attempt >= DRAIN_ATTEMPTS {
+            } else if inner.drain_attempts >= DRAIN_ATTEMPTS {
                 // Child gone, drain phase spent: the buffer is genuinely empty.
+                inner.drain_exhausted = !inner.slave_closed;
+                inner.drain_concluded = true;
+                inner.drain_windows += 1;
+                // Snapshot **after** the counters move: the diagnostic is what a firing
+                // reads, so a window that concluded must already be counted in it.
+                inner.last_drain = Some(drain_diagnostic(inner));
+                lca_debug::core::event("pty.drain", &drain_diagnostic(inner).describe());
                 return Ok(None);
             } else {
                 // Child gone and an end seen - a late tail may still be in
@@ -372,11 +517,26 @@ fn read_impl(inner: &mut Inner, max: usize) -> std::io::Result<Option<Vec<u8>>> 
                 //   set and the sleep is the only source of elapsed time. The
                 //   sleep is therefore unconditional in this branch - the exact
                 //   opposite of gh #477's spin, which had no wait at all.
-                drain_attempt += 1;
-                if unsafe_ptmx::wait_readable(&inner.master, 0)? {
+                //
+                // Gh #606: the probe now also reports `POLLHUP`, because that is
+                // the one fact that separates "a tail is still coming" from "the
+                // master is drained and this platform will answer zero bytes
+                // forever". Where the kernel says it, the window ends immediately
+                // and `slave_closed` records that it did.
+                inner.drain_attempts += 1;
+                let (readable, hung_up) = unsafe_ptmx::poll_state(&inner.master, 0)?;
+                if hung_up {
+                    inner.slave_closed = true;
+                }
+                if readable && !hung_up {
                     std::thread::sleep(DRAIN_STEP);
                 } else {
                     // The kernel says nothing more is coming on this platform.
+                    inner.drain_exhausted = false;
+                    inner.drain_concluded = true;
+                    inner.drain_windows += 1;
+                    inner.last_drain = Some(drain_diagnostic(inner));
+                    lca_debug::core::event("pty.drain", &drain_diagnostic(inner).describe());
                     return Ok(None);
                 }
                 continue;
@@ -396,6 +556,18 @@ fn read_impl(inner: &mut Inner, max: usize) -> std::io::Result<Option<Vec<u8>>> 
             // be blocked for output that may never come.
             return Ok(Some(Vec::new()));
         }
+    }
+}
+
+/// Snapshot the session's drain facts (gh #606).
+#[cfg(unix)]
+fn drain_diagnostic(inner: &Inner) -> DrainDiagnostic {
+    DrainDiagnostic {
+        attempts: inner.drain_attempts,
+        bytes: inner.bytes_read,
+        slave_closed: inner.slave_closed,
+        exhausted: inner.drain_exhausted,
+        windows: inner.drain_windows,
     }
 }
 
