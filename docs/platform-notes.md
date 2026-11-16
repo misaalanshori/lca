@@ -480,6 +480,46 @@ it can. `tests/regressions/535-pty-drain-window.rs` pins all three properties st
 attempts, the wait, and the immediate exit — so a future simplification cannot quietly restore
 either the one-shot window or the spin.
 
+**Gh #606: instrumented, and the bound deliberately not widened.** The five firings:
+
+| run | head | shape |
+|---|---|---|
+| `42069077201` | — | `exit 0`, empty payload |
+| `42166657159` | — | `exit 0`, empty payload |
+| `43796693310` | `08c22855` | `exit 0`, empty payload |
+| `43804606795` | `330180a6` | `exit 0`, empty payload |
+| (fifth, same family) | — | `exit 0`, empty payload |
+
+Nothing recorded how far the drain window got, so all five produced the same line. The answer
+this cycle is a **diagnostic**, because a bigger number cannot be justified without one:
+`PtyChild::drain_diagnostic` carries `attempts` (this session, not per call), `windows` (how
+many drain phases concluded — the field that catches a per-call reset, which `attempts` cannot
+where a platform concludes at its first attempt), `bytes` (the session's total), and
+`slave_closed`/`exhausted`. It surfaces in two places and **never in `pty.read`'s answer** (the
+ABI return stays `option<list<u8>>`): a `pty.drain` event on the host's internal debug file, and
+— the one that matters for CI — the conformance row's own failure message, so a sixth firing reads
+e.g. `attempts=20 windows=1 bytes=0 slave_closed=false exhausted=true`, i.e. "the 100 ms window
+was spent and the kernel never named the end", instead of `exit 0`.
+
+Two production facts changed with it, both cheap and both asserted:
+
+* the probe now reports `POLLHUP`/`POLLERR` as well as `POLLIN`. `POLLIN` alone cannot separate
+  a live tail from a macOS master that is drained yet readable; where the kernel *does* name the
+  end the window stops instead of sleeping out its ceiling, and `slave_closed` records it.
+* a concluded drain is **sticky per session**. Without that, a caller polling a finished session
+  re-entered the window on every call — measured on Linux, where it concluded at attempt 1, so
+  the symptom was invisible until the `windows` field existed: 20 further reads drove `windows`
+  from 1 to 21 and `attempts` from 1 to 20. On macOS the same shape is 20 x 5 ms per call, a
+  shutdown cost nobody would have seen except as slowness.
+
+The rows that pin this live beside the engine (`crates/lca-tools/tests/pty.rs`):
+`the_drain_reports_how_far_it_got`, `a_tail_after_the_child_exits_is_still_read`,
+`a_drained_master_does_not_spin`. **What they cannot prove is stated in their own doc comment**:
+Linux names the end, so its drain concludes at the first attempt and the rows are green before
+and after the change. A macOS-shaped master (drained yet permanently readable) cannot be
+constructed here — which is exactly why the diagnostic is the deliverable and the bound waits for
+a number from it.
+
 ## Cross-cutting: what "works everywhere" actually means here
 
 A requirement stated as applying to all platforms, in the requirements and design document, means the behavior is identical from the perspective of the agent's own logic and the extension ABI; it does not mean the underlying mechanism is identical. The `fs` scope-escape check is one function with one contract everywhere and two different, platform-specific canonicalization implementations underneath it. The cancellation flow is one behavior, kill everything a turn started, with a process-group kill on POSIX and a Job Object kill on Windows underneath it. Extension authors and first-party contributors alike should write to the contract, not to a mechanism, and platform-specific tests, not just platform-specific code, are what keeps the two from drifting apart silently; the Windows CI job being non-optional, per the testing plan, is the concrete enforcement of that principle rather than a formality.
