@@ -433,11 +433,23 @@ fn pty_spawn_delivers_terminal_output() {
     // diagnosable in one read: an empty result with a zero exit code means the
     // session was called drained, while a non-zero code or a guest error means the
     // program itself failed.
+    // Gh #606: the failure message now names **how far the drain got**, because five
+    // macOS firings of this row produced the same uninformative `exit 0`. The host's
+    // diagnostic is the only place that fact exists - `pty.read`'s answer is bytes only -
+    // and it is read here from the same engine the guest drove.
+    let drain = extension.capabilities().last_drain();
     assert!(
         result.content.contains("pty-ok"),
         "the pty result lost the child's output: {result:?}. `exit 0` with no \
          text means the host declared the session drained before the tail was \
-         readable (a product defect, gh #535); any other shape is the program."
+         readable (a product defect, gh #535/#606); drain conclusion: {}. Say \
+         whether the window was exhausted (`exhausted=true` = elapsed time alone, \
+         the macOS shape) or the kernel named the end (`slave_closed=true` = no \
+         further tail can arrive).",
+        drain.map_or_else(
+            || "none recorded (no drain phase ran)".to_string(),
+            |d| d.describe()
+        )
     );
 }
 
