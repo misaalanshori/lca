@@ -11,45 +11,105 @@ use std::time::Duration;
 use super::*;
 use crate::widgets::autocomplete::{AutocompleteItem, AutocompleteProvider, Suggestions};
 
+/// How long a row waits for the fake's own "a query started" notification.
+///
+/// **An event, not a schedule** (gh #603). The rows used to spin
+/// `while asked_bodies().is_empty() { yield_now() }` - a wait on the *scheduler*,
+/// which on CI `43701559681` (macOS, head `5c7ef3c6`) had not scheduled the query
+/// thread before the row called `answer`, so the answer panicked, the panic
+/// poisoned the handle mutex, and the second thread's `expect("lock")` panicked
+/// on the poison. A `recv_timeout` on a notification the fake sends *from*
+/// `start` waits for the event itself, and a timeout is a **named harness
+/// failure** rather than a poisoned mutex.
+const START_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// A query whose answers the test releases by hand, so ordering is exact.
 struct Manual {
     /// Every handle handed out, in start order.
     started: Mutex<Vec<Sender<QueryResult>>>,
     /// How many bodies this query was asked for, in order.
     asked: Mutex<Vec<String>>,
+    /// One `()` per started query - the event the rows wait on instead of a spin.
+    notify: Sender<()>,
+    /// The receiving half of [`Self::notify`], read by [`Self::wait_until_started`].
+    notified: Mutex<mpsc::Receiver<()>>,
 }
 
 impl Manual {
     fn new() -> Arc<Self> {
+        let (notify, notified) = mpsc::channel();
         Arc::new(Self {
             started: Mutex::new(Vec::new()),
             asked: Mutex::new(Vec::new()),
+            notify,
+            notified: Mutex::new(notified),
         })
     }
 
-    /// Answer query `index` with rows.
-    fn answer(&self, index: usize, rows: Vec<AutocompleteItem>) {
-        let tx = self
-            .started
-            .lock()
-            .expect("lock")
-            .get(index)
-            .cloned()
-            .expect("that query started");
-        let _ = tx.send(QueryResult::Rows(rows));
+    /// Every lock in the fake tolerates a poisoned neighbour: a row that panicked
+    /// while holding one must not turn the *next* row's read into a `PoisonError`
+    /// (gh #603's cascading second panic).
+    fn lock<T>(cell: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+        cell.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// Whether the query at `index` was told it had been superseded.
+    /// Wait for **one more** query to have started, as an event.
+    ///
+    /// One call per query, in start order, because the notifications are a **stream**
+    /// rather than a level: a row that asked for "two more" after consuming the first
+    /// waits for a third that never comes (measured while writing this row - the first
+    /// version took a `count` and the superseded row deadlocked for its full timeout).
+    ///
+    /// `Err` is a named harness failure: the query thread was never scheduled within
+    /// [`START_TIMEOUT`]. It says so instead of letting the caller's `answer` panic
+    /// into a poisoned mutex, which is what CI `43701559681` showed (gh #603).
+    fn wait_until_started(&self) -> Result<(), String> {
+        self.wait_until_started_within(START_TIMEOUT)
+    }
+
+    /// [`Self::wait_until_started`] with the budget named by the caller, so the
+    /// timeout path itself is reachable in a unit row instead of costing ten seconds.
+    fn wait_until_started_within(&self, budget: Duration) -> Result<(), String> {
+        Self::lock(&self.notified)
+            .recv_timeout(budget)
+            .map_err(|_| {
+                format!(
+                    "the query never started within {budget:?}; this is the harness, not the cache (gh #603)"
+                )
+            })
+    }
+
+    /// Answer query `index` with rows.
+    ///
+    /// Returns `Err` rather than panicking when no such query has started: a panic
+    /// here is the class gh #603 removed, and the message names the fake, not the
+    /// cache.
+    fn answer(&self, index: usize, rows: Vec<AutocompleteItem>) -> Result<(), String> {
+        let tx = Self::lock(&self.started).get(index).cloned();
+        let Some(tx) = tx else {
+            return Err(format!(
+                "query {index} had not started ({} did); this is the harness, not the cache                  (gh #603) - wait for `wait_until_started` first",
+                self.asked_bodies().len()
+            ));
+        };
+        let _ = tx.send(QueryResult::Rows(rows));
+        Ok(())
+    }
+
+    /// The bodies this query was asked for, in order.
     fn asked_bodies(&self) -> Vec<String> {
-        self.asked.lock().expect("lock").clone()
+        Self::lock(&self.asked).clone()
     }
 }
 
 impl TriggerQuery for Manual {
     fn start(&self, token: &str, _signal: AbortSignal) -> QueryHandle {
         let (tx, rx) = mpsc::channel();
-        self.asked.lock().expect("lock").push(token.to_string());
-        self.started.lock().expect("lock").push(tx);
+        Self::lock(&self.asked).push(token.to_string());
+        Self::lock(&self.started).push(tx);
+        // After the handle is recorded: a row released by this signal must find it.
+        let _ = self.notify.send(());
         QueryHandle { rx }
     }
 }
@@ -193,23 +253,25 @@ fn a_slow_first_query_result_never_lands_after_a_second_keystroke() {
         let chain = Arc::clone(&chain);
         std::thread::spawn(move || chain.get_suggestions("fix #1", false))
     };
-    while manual.asked_bodies().is_empty() {
-        std::thread::yield_now();
-    }
+    manual.wait_until_started().expect("the first query starts");
 
     // Keystroke 2 supersedes it, and *its* query is answered first.
     let second = {
         let chain = Arc::clone(&chain);
         std::thread::spawn(move || chain.get_suggestions("fix #12", false))
     };
-    while manual.asked_bodies().len() < 2 {
-        std::thread::yield_now();
-    }
-    manual.answer(1, vec![row("#12")]);
+    manual
+        .wait_until_started()
+        .expect("the second query starts");
+    manual
+        .answer(1, vec![row("#12")])
+        .expect("the second query's handle is there once it has started");
     let second = second.join().expect("second finished").expect("answered");
 
     // Only now does the first query answer - about text the user no longer has.
-    manual.answer(0, vec![row("STALE")]);
+    manual
+        .answer(0, vec![row("STALE")])
+        .expect("the first query's handle is still there");
     let first = first.join().expect("first finished");
 
     assert_eq!(
@@ -381,10 +443,12 @@ fn an_unchanged_token_is_answered_from_the_cache_with_no_second_query() {
     let chain = Arc::new(chain);
     let c = chain.clone();
     let started = std::thread::spawn(move || c.get_suggestions("#1", false));
-    while manual.asked_bodies().is_empty() {
-        std::thread::yield_now();
-    }
-    manual.answer(0, vec![row("#12")]);
+    manual
+        .wait_until_started()
+        .expect("the first query starts before its handle is answered");
+    manual
+        .answer(0, vec![row("#12")])
+        .expect("and the handle is there once it has started");
     let first = started.join().expect("joined").expect("answered");
     assert_eq!(first.items[0].value, "#12");
 
@@ -398,6 +462,75 @@ fn an_unchanged_token_is_answered_from_the_cache_with_no_second_query() {
         manual.asked_bodies(),
         vec!["1".to_string()],
         "the query was asked once"
+    );
+}
+
+// Verifies: gh #603 row 4 - **the failure mode CI `43701559681` showed is now a named
+// message rather than a poisoned mutex.** That run's cascade was: the query thread had
+// not started, so `answer`'s `expect("that query started")` panicked while holding the
+// handle mutex, and the *second* thread's `expect("lock")` then panicked on the poison -
+// two failures, the second one hiding the first. Three clauses pin the remedy:
+//
+// 1. waiting for the event times out as a **harness** statement, not a cache claim;
+// 2. answering a query that never started returns `Err` naming what to do, and does
+//    **not** panic;
+// 3. the fake is still usable afterwards - the mutex was not poisoned, so the row that
+//    follows the failure reads real state instead of a `PoisonError`.
+#[test]
+fn a_query_that_never_starts_is_named_rather_than_poisoning_the_mutex() {
+    let manual = Manual::new();
+
+    // 1. Nothing has started, and the wait says so in its own words.
+    let timed_out = manual
+        .wait_until_started_within(Duration::from_millis(50))
+        .expect_err("no query was ever started, so the wait cannot be satisfied");
+    assert!(
+        timed_out.contains("this is the harness, not the cache"),
+        "the timeout must name the harness as the cause: {timed_out}"
+    );
+    assert!(
+        timed_out.contains("gh #603"),
+        "and point at the row that removed the poison: {timed_out}"
+    );
+
+    // 2. Answering a query that never started is an `Err`, never a panic.
+    let unanswered = manual
+        .answer(0, vec![row("#12")])
+        .expect_err("query 0 was never handed out");
+    assert!(
+        unanswered.contains("had not started"),
+        "the message must say the query had not started: {unanswered}"
+    );
+    assert!(
+        unanswered.contains("wait_until_started"),
+        "and what to do about it: {unanswered}"
+    );
+
+    // 3. The fake survived both failures: its own state is readable (a poisoned
+    //    mutex would panic here), and a query driven through the **real chain** can
+    //    still start and be answered. This is the clause a `PoisonError` fails, and
+    //    it is driven end to end rather than by poking the fake directly.
+    assert!(
+        manual.asked_bodies().is_empty(),
+        "the fake's own state is readable after the failures, not poisoned"
+    );
+    let (chain, _) = chain_with(manual.clone());
+    let chain = Arc::new(chain);
+    let asked = {
+        let chain = Arc::clone(&chain);
+        std::thread::spawn(move || chain.get_suggestions("#1", false))
+    };
+    manual
+        .wait_until_started()
+        .expect("the chain starts a query");
+    manual
+        .answer(0, vec![row("#12")])
+        .expect("and its handle is answerable once the query has started");
+    let answered = asked.join().expect("the answering thread finished");
+    assert_eq!(
+        answered.expect("the chain offers rows").items[0].value,
+        "#12",
+        "the fake still works after a named failure - it is not poisoned"
     );
 }
 
