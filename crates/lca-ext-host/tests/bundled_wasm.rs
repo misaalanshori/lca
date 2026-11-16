@@ -251,7 +251,6 @@ fn fresh_artifact_of(extension: &str) -> Option<PathBuf> {
     path.is_file().then_some(path)
 }
 
-
 /// The house rule for a harness that is not present: **skip by name**, never
 /// pass silently, and let an env flag turn it into a failure.
 ///
