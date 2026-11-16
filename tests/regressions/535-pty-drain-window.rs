@@ -33,6 +33,15 @@
 //!    "nothing more is coming" (Linux reports `POLLHUP` and never `POLLIN` on a
 //!    drained master), the phase exits at once instead of sleeping out its ceiling.
 //!
+//! **Gh #606 changed three identifiers, not three properties** (the rows below were
+//! updated with it, as the brief for that cycle required and named): the attempt counter
+//! is now `inner.drain_attempts` because it is **session-scoped** (a caller polling a
+//! finished session must not pay the window per call), the zero-timeout probe is
+//! `poll_state` because it must also report `POLLHUP` (the one fact that separates a
+//! live tail from a macOS master that is drained yet readable), and the conclusion is
+//! recorded rather than discarded. Every claim each row made is still made, and a new
+//! arm is asserted beside them.
+//!
 //! The behavioural halves live beside the code they drive: the rows in
 //! `crates/lca-tools/tests/tools.rs` (marker, not a byte count) and
 //! `crates/lca-ext-host/tests/capabilities.rs` (the finished result, with a message
@@ -76,11 +85,11 @@ fn the_drain_phase_is_a_bounded_number_of_attempts() {
     }
     let body = read_impl();
     assert!(
-        body.contains("drain_attempt >= DRAIN_ATTEMPTS"),
+        body.contains("drain_attempts >= DRAIN_ATTEMPTS"),
         "the loop stops at that count rather than at a single sample: {body}"
     );
     assert!(
-        body.contains("drain_attempt += 1"),
+        body.contains("drain_attempts += 1"),
         "and each attempt is counted, so the ceiling is arithmetic: {body}"
     );
     // The old single-shot flag must be gone: it is what made the window 4 ms wide.
@@ -101,7 +110,7 @@ fn the_drain_phase_is_a_bounded_number_of_attempts() {
 fn every_drain_attempt_waits_before_it_rereads() {
     let body = read_impl();
     let drain = body
-        .split("drain_attempt >= DRAIN_ATTEMPTS")
+        .split("drain_attempts >= DRAIN_ATTEMPTS")
         .nth(1)
         .unwrap_or_else(|| panic!("the drain branch exists: {body}"));
     let drain = drain.split("continue;").next().unwrap_or(drain);
@@ -112,10 +121,19 @@ fn every_drain_attempt_waits_before_it_rereads() {
     // And the sleep is not conditional on data arriving (that is #477's spin shape,
     // where a readable-but-empty master kept the loop hot).
     assert!(
-        drain.contains("wait_readable(&inner.master, 0)?"),
+        drain.contains("poll_state(&inner.master, 0)?"),
         "and it probes with a zero timeout, so the sleep is the only source of \\
          elapsed time: {drain}"
     );
+    // Gh #606: the probe’s other half is load-bearing - where the kernel names the
+    // slave’s end the window must stop rather than sleep out its ceiling, and the
+    // conclusion is recorded so a sixth firing can say which of the two happened.
+    for fact in ["hung_up", "slave_closed", "last_drain"] {
+        assert!(
+            drain.contains(fact),
+            "the drain branch records `{fact}`, the fact a sixth macOS firing needs: {drain}"
+        );
+    }
 }
 
 // Verifies: gh #535 - **the platforms still differ where they can.** Where the
@@ -132,7 +150,7 @@ fn a_conclusive_end_is_taken_immediately() {
     );
     // The `else` arm after the readable probe is that early exit.
     let probe = body
-        .split("wait_readable(&inner.master, 0)?")
+        .split("poll_state(&inner.master, 0)?")
         .nth(1)
         .unwrap_or_else(|| panic!("the zero-timeout probe exists: {body}"));
     let immediate = probe.split("continue;").next().unwrap_or(probe);
