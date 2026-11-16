@@ -23,9 +23,10 @@
 //! (already-cancelled fires immediately, a dropped listener is silent, one
 //! panicking listener does not stop the rest, a hundred registrations leave
 //! nothing behind) and `crates/lca-core/tests/turn_boundary.rs`
-//! (`a_cancel_interrupts_the_extension_before_cancel_returns` reads the engine's
-//! flag on the line after `cancel()`, which a poller cannot satisfy on any
-//! platform, and `a_cancel_after_a_finished_turn_does_not_reach_the_extension`).
+//! (`a_cancel_interrupts_the_extension_before_cancel_returns`, which as of gh #604
+//! reads its proof from the row's **own** `on_cancel` callback - registration order
+//! on the cancelling thread - instead of another object's flag on the line after
+//! `cancel()`, and `a_cancel_after_a_finished_turn_does_not_reach_the_extension`).
 //!
 //! The one structural claim is the issue's own: **the 1 ms poll thread is gone**,
 //! and it is gone for every crate, not just `lca-core`. A wall-clock assertion
