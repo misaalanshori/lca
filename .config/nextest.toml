@@ -54,3 +54,13 @@ slow-timeout = { period = "60s", terminate-after = 2 }
 [[profile.default.overrides]]
 filter = 'test(=a_clean_machine_installs_from_oci_and_https_then_runs_a_turn)'
 slow-timeout = { period = "210s", terminate-after = 1 }
+
+# gh #608: `tree_navigator`'s budgets are adaptive, bounded by the row's own
+# 300 s deadline (`Pace::ROW_DEADLINE`), so the ceiling here must sit just above
+# that or nextest would kill the test before the row can report which pane never
+# showed what. The measurement behind it: on a 4-core box shared with a build,
+# one `done` step needed more than 100 s (exactly `25 s x 4`, the harness cap) -
+# so the row's old ceiling was the binding constraint, not the box's signal.
+[[profile.default.overrides]]
+filter = 'test(=tree_navigator_folds_filters_and_selects_in_a_real_terminal)'
+slow-timeout = { period = "330s", terminate-after = 1 }

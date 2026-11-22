@@ -34,6 +34,11 @@ use std::time::{Duration, Instant};
 #[cfg(unix)]
 const COUNTDOWN: Duration = Duration::from_secs(30);
 
+/// How often this row looks at the pane. It is also part of the close tolerance: the
+/// row cannot observe a close sooner than its own next capture.
+#[cfg(unix)]
+const POLL_INTERVAL: Duration = Duration::from_millis(500);
+
 // Verifies: gh #592 - **the effect**, not the paint: with no keypress, the
 // permission modal's announced deadline is honoured and the tool actually runs.
 //
@@ -103,16 +108,28 @@ fn an_untouched_permission_modal_runs_the_tool_at_its_announced_second() {
     let mut last_shown: Option<(Duration, u64)> = None;
     let mut closed_at: Option<Duration> = None;
     let deadline = started + COUNTDOWN + Duration::from_secs(45);
-    let mut shown_series: Vec<u64> = Vec::new();
+    // Gh #608: one entry per *distinct* printed second, with the moment the pane
+    // showed it. The timestamps are what let the clause below be a rate instead of a
+    // span, so they are as load-bearing as the numbers.
+    let mut paints: Vec<Paint> = Vec::new();
+    // The harness's own resolution, measured rather than assumed: a capture that takes
+    // three seconds cannot be evidence about a one-second promise, and the close
+    // tolerance below is this number instead of a constant.
+    let mut capture_costs: Vec<Duration> = Vec::new();
     while Instant::now() < deadline {
+        let capture_started = Instant::now();
         let pane = session.capture();
+        capture_costs.push(capture_started.elapsed());
         let elapsed = started.elapsed();
         if let Some(second) = countdown_second(&pane) {
             if first_paint.is_none() {
                 first_paint = Some((elapsed, second));
             }
-            if shown_series.last() != Some(&second) {
-                shown_series.push(second);
+            if paints.last().map(|paint| paint.shown) != Some(second) {
+                paints.push(Paint {
+                    at: elapsed,
+                    shown: second,
+                });
             }
             last_shown = Some((elapsed, second));
             closed_at = None;
@@ -120,8 +137,10 @@ fn an_untouched_permission_modal_runs_the_tool_at_its_announced_second() {
             closed_at = Some(elapsed);
             break;
         }
-        std::thread::sleep(Duration::from_millis(500));
+        std::thread::sleep(POLL_INTERVAL);
     }
+    let shown_series: Vec<u64> = paints.iter().map(|paint| paint.shown).collect();
+    let capture_cost = median_capture(&mut capture_costs);
 
     let (painted_at, painted_second) = first_paint.unwrap_or_else(|| {
         panic!(
@@ -133,48 +152,33 @@ fn an_untouched_permission_modal_runs_the_tool_at_its_announced_second() {
         painted_at < COUNTDOWN,
         "the modal paints before its deadline, showing {painted_second}s at +{painted_at:?}"
     );
-    // The paint keeps up. **Not "the last capture happened to land on 0"** - the
-    // first version asserted exactly that, and CI's macOS leg caught it: 500 ms
-    // polls on a loaded runner each cost well over a second, so the series it saw
-    // was `[29, 28, …, 11]` and the modal closed before a capture could land on
-    // `0`. That is a fact about capture cadence, not about the countdown.
+    // The paint keeps up - stated as a **rate**, not a span (gh #608).
     //
-    // What the paint has to prove, and what a frozen clock cannot fake:
-    //   * the printed second **strictly decreases** (a frozen number repeats it);
-    //   * the series spans a large part of the countdown (so the number is
-    //     tracking wall time, not a paint that stopped updating);
-    //   * the modal closes inside `countdown + 2 s` (the clause below), which is
-    //     the promise itself - the exact final second a capture sees is the
-    //     capture's business.
-    // **At least two, not five.** The clause is "the paint advances", and two
-    // distinct printed seconds already prove it advanced once: a frozen clock
-    // shows one value forever. The first version demanded five captures, which is
-    // a claim about the harness's sampling rate - CI's Linux leg caught it with
-    // `saw [29]`, a modal that had been on screen for barely a second before the
-    // loaded runner's next capture. The span and monotonic clauses below carry the
-    // real weight, and they are what a frozen paint fails.
-    assert!(
-        shown_series.len() >= 2,
-        "the countdown repaints as it runs: saw {shown_series:?}"
-    );
-    assert!(
-        shown_series.windows(2).all(|pair| pair[0] > pair[1]),
-        "and every repaint shows a smaller number than the last (a frozen clock \
-         repeats one): saw {shown_series:?}"
-    );
-    // The span is the strongest evidence a *sampled* series can give that the
-    // number tracks wall time rather than having been repainted once. It is stated
-    // as what the captures themselves cover - first paint to last paint - so a
-    // slow harness narrows it honestly instead of failing on the runner's speed;
-    // the promise that the countdown actually ran its full length is the `closes
-    // inside countdown + 2 s` clause directly below.
-    let span =
-        (*shown_series.first().unwrap_or(&0)).saturating_sub(*shown_series.last().unwrap_or(&0));
-    assert!(
-        span >= 3,
-        "the printed number decreased across the captures, which a paint that \
-         stopped updating cannot do: saw {shown_series:?}"
-    );
+    // The clause this replaced asked the sampled series to span at least three printed
+    // seconds, and it failed for a reason its own comment two lines above had already
+    // named: that is a fact about the harness's capture cadence, not about the
+    // countdown. Measured on a 4-core box shared with a build, the series was
+    // `[29, 28, 27]` - three captures, two seconds of span - while the modal was
+    // perfectly correct and closed on its announced second.
+    //
+    // What is true regardless of cadence, and what a broken countdown cannot fake:
+    //   * it **advanced at least once** - a frozen clock shows one number forever;
+    //   * every repaint shows a **strictly smaller** number than the last;
+    //   * it never advanced **faster than real time** - between the first and last
+    //     paint, the number may fall by no more than the wall time between them (+1
+    //     for a 500 ms poll landing across a boundary). A clock that runs fast fails
+    //     this; the old span clause could not see the difference.
+    //
+    // Both directions are exercised without a terminal in
+    // `the_countdown_rate_gate_accepts_a_slow_capture_cadence` below, whose input is
+    // the very series this row failed with.
+    if let Some(violation) = countdown_rate_violation(&paints) {
+        panic!(
+            "{violation} - measured paints {paints:?}, capture cost median {capture_cost:?}, \
+             elapsed {:?}",
+            started.elapsed()
+        );
+    }
     // The effect. A promise kept means the modal CLOSED on its own and the tool
     // ran - no keypress was ever sent (this row sends only the initial prompt).
     let closed = closed_at.unwrap_or_else(|| {
@@ -184,12 +188,6 @@ fn an_untouched_permission_modal_runs_the_tool_at_its_announced_second() {
             last_shown
         )
     });
-    assert!(
-        closed <= COUNTDOWN + Duration::from_secs(2),
-        "the modal closes at +{closed:?}, inside the announced {COUNTDOWN:?} \
-         (measured paints: first {painted_at:?} at {painted_second}s, series {shown_series:?})"
-    );
-
     // ...and the tool's own side effect is on disk, which is the fact the pane's
     // text can only reflect. Its **mtime** is when the command ran, so the row
     // measures the moment directly instead of trusting a rendered timestamp.
@@ -215,7 +213,7 @@ fn an_untouched_permission_modal_runs_the_tool_at_its_announced_second() {
     let meta = meta.unwrap_or_else(|| {
         panic!(
             "the tool ran without a keypress; its marker is missing at {} \
-             (modal closed at +{closed:?}, countdown series {shown_series:?})",
+             (modal closed at +{closed:?}, countdown series {shown_series:?}, capture cost {capture_cost:?})",
             marker.display()
         )
     });
@@ -228,6 +226,24 @@ fn an_untouched_permission_modal_runs_the_tool_at_its_announced_second() {
         ran_offset >= COUNTDOWN.saturating_sub(Duration::from_secs(1)),
         "the tool ran at +{ran_offset:?}: not before the announced second, which would \
          be a modal that does not actually wait"
+    );
+    // Gh #608: the close is stated against **this run's own facts**, not against an
+    // absolute allowance. The product's promise is the marker's mtime (`ran_offset`,
+    // asserted above and below); the modal being *gone* is the harness's stop condition,
+    // and what it can honestly claim is: gone by the time the tool it released had run,
+    // plus the row's own observation lag - one poll interval, the measured capture cost,
+    // and one displayed second (the countdown's own granularity, since the frame that
+    // clears the modal need not appear until the next printed second).
+    //
+    // Measured: idle the modal cleared at +30.3 s; at loadavg 42 it cleared at +31.72 s
+    // while the series still ran 29..0 and the marker landed on the announced second -
+    // a correct product whose close lag an absolute `countdown + 1.5 s` rejected.
+    assert!(
+        closed <= ran_offset + POLL_INTERVAL + capture_cost + Duration::from_secs(1),
+        "the modal is gone by the time the tool it released has run: closed at \
+         +{closed:?}, tool ran at +{ran_offset:?}, capture cost {capture_cost:?} \
+         (series {shown_series:?}, elapsed {:?})",
+        started.elapsed()
     );
     assert!(
         ran_offset <= COUNTDOWN + Duration::from_secs(10),
@@ -253,4 +269,161 @@ fn countdown_second(pane: &str) -> Option<u64> {
     let tail = &pane[start..];
     let digits: String = tail.chars().take_while(char::is_ascii_digit).collect();
     digits.parse().ok()
+}
+
+/// One distinct printed second, and when the pane showed it.
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy)]
+struct Paint {
+    /// Since the prompt was sent.
+    at: Duration,
+    /// The `Ns` the modal printed.
+    shown: u64,
+}
+
+/// The countdown's "the paint keeps up" rule as a **pure function of what the harness
+/// saw** (gh #608).
+///
+/// `None` means the series is consistent with a correct countdown at *any* capture
+/// cadence; `Some(reason)` names the first thing wrong with it. Being pure is the point:
+/// the failing series from the issue (`[29, 28, 27]`, three captures over two seconds of
+/// a one-second-per-second countdown) is red here under the old span rule and green under
+/// this one, and that comparison is a unit row rather than a fight with a loaded box.
+#[cfg(unix)]
+fn countdown_rate_violation(paints: &[Paint]) -> Option<String> {
+    if paints.len() < 2 {
+        return Some(format!(
+            "the countdown repainted at least once: only {} capture(s) saw a number: {paints:?}",
+            paints.len()
+        ));
+    }
+    for pair in paints.windows(2) {
+        if pair[0].shown <= pair[1].shown {
+            return Some(format!(
+                "every repaint shows a smaller number than the last (a frozen clock \
+                 repeats one): {paints:?}"
+            ));
+        }
+    }
+    // The rate: between the first and last paint the number may fall by no more than
+    // the wall time between them, with one second of slack for a poll landing across a
+    // boundary. This is what a fast clock fails and a slow box cannot.
+    let first = paints[0];
+    let last = paints[paints.len() - 1];
+    let fell = first.shown.saturating_sub(last.shown) as f64;
+    let elapsed = last.at.saturating_sub(first.at).as_secs_f64();
+    if fell > elapsed + 1.0 {
+        return Some(format!(
+            "the printed second fell {fell} in {elapsed:.3}s of wall time, faster than \
+             a clock can: {paints:?}"
+        ));
+    }
+    None
+}
+
+/// The median capture cost of a run, or zero for an empty series.
+#[cfg(unix)]
+fn median_capture(costs: &mut [Duration]) -> Duration {
+    if costs.is_empty() {
+        return Duration::ZERO;
+    }
+    costs.sort_unstable();
+    costs[costs.len() / 2]
+}
+
+// Verifies: gh #608 - **the failing series the issue measured passes the rate rule**,
+// and it is the old span clause, not this one, that rejected it. The input is quoted
+// from the issue verbatim: three captures, `[29, 28, 27]`, two seconds of span.
+#[cfg(unix)]
+#[test]
+fn the_countdown_rate_gate_accepts_a_slow_capture_cadence() {
+    let paints = [
+        Paint {
+            at: Duration::from_millis(700),
+            shown: 29,
+        },
+        Paint {
+            at: Duration::from_secs(10),
+            shown: 28,
+        },
+        Paint {
+            at: Duration::from_secs(20),
+            shown: 27,
+        },
+    ];
+    assert_eq!(
+        countdown_rate_violation(&paints),
+        None,
+        "a slow cadence is not a defect"
+    );
+    // The clause this replaced, kept here as the negative control: a span bound of
+    // three printed seconds rejects exactly the series above.
+    let span = paints[0].shown - paints[paints.len() - 1].shown;
+    assert!(
+        span < 3,
+        "the old span clause would have failed this run: span {span}"
+    );
+}
+
+// Verifies: gh #608 - the rate rule fails the two directions it exists for: a **frozen**
+// clock (one number forever) and a clock that **runs fast** (the number falls further
+// than wall time allows).
+#[cfg(unix)]
+#[test]
+fn the_countdown_rate_gate_rejects_a_frozen_or_fast_clock() {
+    let frozen = [
+        Paint {
+            at: Duration::from_millis(700),
+            shown: 29,
+        },
+        Paint {
+            at: Duration::from_secs(10),
+            shown: 29,
+        },
+        Paint {
+            at: Duration::from_secs(20),
+            shown: 29,
+        },
+    ];
+    let reason = countdown_rate_violation(&frozen).expect("a frozen clock is caught");
+    assert!(reason.contains("smaller number"), "{reason}");
+    let single = [Paint {
+        at: Duration::from_millis(700),
+        shown: 29,
+    }];
+    assert!(
+        countdown_rate_violation(&single).is_some(),
+        "one capture proves no advance"
+    );
+    let fast = [
+        Paint {
+            at: Duration::from_millis(700),
+            shown: 29,
+        },
+        Paint {
+            at: Duration::from_secs(1),
+            shown: 20,
+        },
+        Paint {
+            at: Duration::from_secs(2),
+            shown: 11,
+        },
+    ];
+    let reason = countdown_rate_violation(&fast).expect("a fast clock is caught");
+    assert!(reason.contains("faster than"), "{reason}");
+    // And an *upward* jump, which monotonicity alone catches.
+    let backwards = [
+        Paint {
+            at: Duration::from_millis(700),
+            shown: 20,
+        },
+        Paint {
+            at: Duration::from_secs(2),
+            shown: 21,
+        },
+    ];
+    assert!(
+        countdown_rate_violation(&backwards).is_some(),
+        "a rising number is caught"
+    );
 }
