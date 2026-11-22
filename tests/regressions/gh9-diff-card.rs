@@ -93,9 +93,17 @@ fn an_edit_results_structured_diff_reaches_the_card() {
     let rows = chat.render(100);
     let joined = rows.join("\n");
     let plain = strip_terminal_sequences(&joined);
+    // Gh #392 slice A changed the row shape this row reads: the marker is now followed by a
+    // dim line-number gutter (`- 2 fn b() {}`), and the `@@`/`---`/`+++` chrome is no longer
+    // rendered at all. The claim - both sides reach the card - is unchanged; the needle
+    // follows the row, and the number is asserted so the change is visible here too.
     assert!(
-        plain.contains("-fn b() {}") && plain.contains("+fn bb() {}"),
-        "both changed lines render:\n{plain}"
+        plain.contains("- 2 fn b() {}") && plain.contains("+ 2 fn bb() {}"),
+        "both changed lines render, each with its line number:\n{plain}"
+    );
+    assert!(
+        !plain.contains("@@") && !plain.contains("--- src/main.rs"),
+        "and no hunk or file chrome: {plain}"
     );
     assert!(
         plain.contains("Successfully replaced 1 block(s) in src/main.rs."),

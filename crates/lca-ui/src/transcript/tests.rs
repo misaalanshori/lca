@@ -326,8 +326,12 @@ fn tool_card_titles_and_arguments_carry_the_roles_pi_gives() {
         "the editor's run titles itself in bashMode with its `!`: {header:?}"
     );
 
-    // An unknown tool: bold name, plain JSON arguments (pi's card
-    // fallback prints them unstyled).
+    // An unknown tool: bold name, plain arguments in the fallback grammar.
+    //
+    // **Gh #392 slice C changed what this row reads, and this is the deliberate change**: the
+    // card used to print the raw argument JSON here, which is the defect the issue files (a
+    // 400-character blob on a collapsed row). It now prints `key="value"` pairs, unstyled -
+    // the roles are still the claim under test, the text is the grammar's.
     let mut t = Transcript::new();
     t.start_tool("frobnicate", r#"{"target":"x"}"#);
     t.finish_tool(ToolStatus::Ok, Some("ok".into()));
@@ -337,8 +341,12 @@ fn tool_card_titles_and_arguments_carry_the_roles_pi_gives() {
         "the name is still toolTitle + bold: {header:?}"
     );
     assert!(
-        header.contains(r#"{"target":"x"}"#) && !header.contains("src/main.rs"),
-        "an unknown tool's arguments are plain: {header:?}"
+        header.contains(r#"target="x""#),
+        "an unknown tool's arguments read as `key=\"value\"` pairs: {header:?}"
+    );
+    assert!(
+        !header.contains(r#"{"target":"x"}"#),
+        "and the raw JSON blob is gone - that is gh #392 gap 8, not a regression: {header:?}"
     );
 }
 

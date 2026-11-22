@@ -22,6 +22,14 @@ use super::{Entry, ThinkingVisibility, ToolStatus};
 #[path = "diff_card.rs"]
 mod diff_card;
 
+// Gh #392 slice C: the card's argument grammar, moved out of this file at the ceiling and
+// beside its own rows (gh #574's rule). The public path is unchanged - `format_tool_args` is
+// re-exported below, which is what the header and the rows already name.
+#[path = "tool_args.rs"]
+mod tool_args;
+
+pub(crate) use tool_args::{format_tool_args, format_tool_args_expanded};
+
 /// Markdown options for the terminal: the link mode follows the terminal's
 /// OSC 8 capability, so a URL never vanishes on a terminal that swallows
 /// the hyperlink (pi's `markdown.md` §6).
@@ -526,102 +534,6 @@ fn render_assistant(
     thinking_rows
 }
 
-/// A one-line argument summary for a tool card (pi's per-tool formats,
-/// `messages.md` §6). Unknown tools fall back to the raw arguments.
-pub(super) fn format_tool_args(name: &str, args: &str) -> String {
-    if args.trim().is_empty() {
-        return String::new();
-    }
-    let summary = match name {
-        "read" | "write" | "edit" | "list" | "ls" | "glob" => {
-            json_string_field(args, "path").or_else(|| json_string_field(args, "file_path"))
-        }
-        "bash" | "shell" => json_string_field(args, "command"),
-        "grep" => json_string_field(args, "pattern").map(|pattern| format!("/{pattern}/")),
-        _ => None,
-    };
-    summary.unwrap_or_else(|| args.to_string())
-}
-
-/// Pull a string field out of a flat JSON object without a parser. Tool
-/// arguments are always a flat object the model emitted; a value that is
-/// not a plain string yields `None` and the caller keeps the raw args.
-fn json_string_field(args: &str, key: &str) -> Option<String> {
-    let needle = format!("\"{key}\"");
-    let start = args.find(&needle)? + needle.len();
-    let rest = args[start..].trim_start();
-    let rest = rest.strip_prefix(':')?.trim_start();
-    let mut chars = rest.strip_prefix('"')?.chars();
-    let mut out = String::new();
-    while let Some(c) = chars.next() {
-        match c {
-            '"' => return Some(out),
-            '\\' => match chars.next()? {
-                'n' => out.push('\n'),
-                't' => out.push('\t'),
-                'r' => out.push('\r'),
-                'b' => out.push('\u{8}'),
-                'f' => out.push('\u{c}'),
-                'u' => out.push(decode_unicode_escape(&mut chars)?),
-                other => out.push(other),
-            },
-            c => out.push(c),
-        }
-    }
-    None
-}
-
-/// Decode one `\\uXXXX` escape body (the `u` is already consumed) into its character.
-///
-/// Gh #405 gap 4: this used to skip the four hex digits and push `U+FFFD`, so **every
-/// non-ASCII character in a tool argument became a replacement character in the card's
-/// headline**. Measured live: a `printf '日本語…'` command painted as
-/// `printf '�����������'` while the command ran correctly and its output was right. JSON
-/// escapes every non-ASCII character by default, so this was not an edge case — it was
-/// every CJK, Cyrillic, Greek and emoji argument.
-///
-/// Surrogate pairs are decoded properly (`\\ud83c\\udf89` → 🎉), because half a pair
-/// is not a character and emitting one is how mojibake starts. A pair that is not well
-/// formed yields `U+FFFD` once for the pair, which is the honest answer for input that
-/// cannot be text.
-fn decode_unicode_escape(chars: &mut std::str::Chars<'_>) -> Option<char> {
-    /// Four hex digits, ASCII only.
-    fn four_hex(chars: &mut std::str::Chars<'_>) -> Option<u32> {
-        let mut value = 0u32;
-        for _ in 0..4 {
-            value = value.checked_mul(16)? + chars.next()?.to_digit(16)?;
-        }
-        Some(value)
-    }
-    let first = four_hex(chars)?;
-    // A high surrogate must be followed by `\u` and a low surrogate. The lookahead runs
-    // on a **clone** of the iterator so a byte that is not the start of a pair stays in
-    // the input: consuming it and finding "not a backslash" would silently eat the
-    // character after a malformed escape (measured: `"a\ud83cb"` lost the `b`).
-    if (0xD800..0xDC00).contains(&first) {
-        let mut lookahead = chars.clone();
-        let low = (|| {
-            if lookahead.next()? != '\\' || lookahead.next()? != 'u' {
-                return None;
-            }
-            four_hex(&mut lookahead)
-        })();
-        return match low {
-            Some(low) if (0xDC00..0xE000).contains(&low) => {
-                // Both halves are surrogates, so the combined scalar is in range.
-                *chars = lookahead;
-                char::from_u32(0x1_0000 + ((first - 0xD800) << 10) + (low - 0xDC00))
-            }
-            // A lone or mismatched high surrogate: replaced once, and the input after it
-            // is untouched.
-            _ => Some('\u{FFFD}'),
-        };
-    }
-    // `char::from_u32` already refuses a lone surrogate (and anything above `0x10FFFF`)
-    // by answering `None`, so that case is the replacement character and nothing else.
-    Some(char::from_u32(first).unwrap_or('\u{FFFD}'))
-}
-
 fn render_tool(
     entry: &Entry,
     expanded: bool,
@@ -701,6 +613,23 @@ fn render_tool(
     };
     let header = format!("{} {title}{args_span} {status_text}", (theme.tool)(">"));
     let mut rows = vec![truncate_to_width(&header, inner, "…", false)];
+    // Gh #392 slice C: an **expanded** card of a tool with no purpose-built summary lists
+    // its arguments one per line, while the collapsed card is capped at 100 characters.
+    // That is pi's grammar, and it is the half that makes the cap harmless: nothing is lost,
+    // it is one keystroke away.
+    if expanded {
+        for line in format_tool_args_expanded(name, args) {
+            rows.push(format!(
+                "  {}",
+                (theme.role(Role::Muted))(&truncate_to_width(
+                    &line,
+                    inner.saturating_sub(2),
+                    "…",
+                    false
+                ))
+            ));
+        }
+    }
     // Gh #214 + gh #391 gap 2: the timing line.
     //
     // A **settled** card shows its recorded duration and never moves again -
@@ -1039,10 +968,3 @@ pub(super) fn format_duration_ms(ms: u64) -> String {
         format!("{hours}h {minutes}m {seconds}s")
     }
 }
-
-// gh #405 gap 4: a tool argument's `\uXXXX` escapes must reach the card headline as
-// text. Registered here because `format_tool_args` lives here, and `mod.rs` is at the
-// 1,200-line ceiling (gate 11).
-#[cfg(test)]
-#[path = "tool_args_escape_tests.rs"]
-mod tool_args_escape_tests;
