@@ -274,3 +274,71 @@ fn a_truncated_patch_still_renders_what_it_has() {
     let rendered = strip(&render(&rows, 80, &theme));
     assert_eq!(rendered.len(), 2, "and both render: {rendered:?}");
 }
+
+// ---------------------------------------------------------------------------
+// Gh #392 fix-up: a content row that *begins* like the file header
+// ---------------------------------------------------------------------------
+//
+// `is_chrome` decides by prefix, and a content row carries the diff's own marker in front of
+// the file's text. So a removed line whose text begins `-- ` (a SQL/Ada/Haskell/Lua comment, a
+// `--` rule in prose) reaches `parse` as `--- drop the old table` - the **file header's** shape
+// - and the row vanished from the card entirely: no row, no number, and the "… N more lines"
+// arithmetic still counting it.
+//
+// The fix is positional, not textual: chrome is what appears **before** the first hunk header.
+
+// Verifies: gh #392 fix-up - **a removed line whose content starts with `-- ` survives.** The
+// three assertions are the whole claim: the row exists, it carries the hunk's old-side number,
+// and its text has the marker stripped **once** (`drop the old table`, not `- drop the old
+// table`) - a strip applied twice would be the mirrored bug.
+#[test]
+fn a_removed_line_whose_content_starts_with_two_dashes_survives() {
+    let rows = parse("--- src/q.sql\n+++ src/q.sql\n@@ -1,2 +1,1 @@\n--- drop the old table\n");
+    assert_eq!(
+        rows.len(),
+        1,
+        "the removal is a content row, not the file header: {rows:?}"
+    );
+    assert_eq!(rows[0].kind, Kind::Removed, "and it is a removal: {rows:?}");
+    assert_eq!(rows[0].old, Some(1), "with the hunk's old-side number");
+    // The file's line is `-- drop the old table`, and the producer wrote it as `-` + that, so
+    // **one** marker stripped leaves the file's own text - including the `--`. Stripping twice
+    // would delete a character the file really has, which is the mirrored bug this row also
+    // guards: the assert below is that the text is *not* `- drop the old table`.
+    assert_eq!(
+        rows[0].text, "-- drop the old table",
+        "exactly one marker stripped: {:?}",
+        rows[0].text
+    );
+    // The rendered card says so too - the user-visible claim.
+    let painted = strip(&render(&rows, 80, &Theme::plain()));
+    assert!(
+        painted
+            .iter()
+            .any(|row| row.contains("- 1 -- drop the old table")),
+        "the card shows the removed line and its number:\n{}",
+        painted.join("\n")
+    );
+}
+
+// Verifies: gh #392 fix-up - **an added line whose content starts with `++ ` survives**, the
+// mirror of the row above: the producer writes `+++ so is this` for an addition of that text,
+// which is the `+++` file header's shape.
+#[test]
+fn an_added_line_whose_content_starts_with_two_pluses_survives() {
+    let rows = parse("--- src/q.sql\n+++ src/q.sql\n@@ -1,1 +1,2 @@\n ctx\n+++ so is this\n");
+    assert_eq!(rows.len(), 2, "the addition is a content row: {rows:?}");
+    assert_eq!(rows[1].kind, Kind::Added, "and it is an addition: {rows:?}");
+    assert_eq!(rows[1].new, Some(2), "with the hunk's new-side number");
+    assert_eq!(
+        rows[1].text, "++ so is this",
+        "and one marker stripped, not two: {:?}",
+        rows[1].text
+    );
+    let painted = strip(&render(&rows, 80, &Theme::plain()));
+    assert!(
+        painted.iter().any(|row| row.contains("+ 2 ++ so is this")),
+        "the card shows the added line and its number:\n{}",
+        painted.join("\n")
+    );
+}

@@ -84,15 +84,36 @@ impl Kind {
 
 /// Is this line the unified diff's file/hunk **chrome** rather than content?
 ///
-/// Three shapes plus one git quirk: `--- a/x`, `+++ b/x`, `@@ -1,3 +1,3 @@`, and the
-/// `\ No newline at end of file` marker a diff may carry. None of them is a line of the
-/// file, so none of them may be printed as one - and each is a row the old renderer
-/// painted as *context*, i.e. as if the file contained it.
-fn is_chrome(line: &str) -> bool {
-    line.starts_with("--- ")
-        || line.starts_with("+++ ")
-        || line.starts_with("@@")
-        || line.starts_with("\\ No newline")
+/// The rule is **positional, not textual** (gh #392's fix-up). A content row carries the
+/// diff's own marker in front of the file's text, so a removed line whose text begins `-- `
+/// (a SQL/Ada/Haskell/Lua comment, a `--` rule in prose) reaches this function as
+/// `--- drop the old table`, i.e. the *file header's* shape. A prefix test cannot tell them
+/// apart, and it silently deleted the row from the card - no row, no number, while the
+/// "… N more lines" arithmetic still counted it. Measured before the fix: `parse` returned
+/// **0** rows for a one-removal diff.
+///
+/// What actually separates them is order. In every diff this producer emits, `--- path` and
+/// `+++ path` come **before** the first hunk header, and content only ever follows one. So:
+///
+/// * `--- `/`+++ ` is chrome **only while no hunk header has been seen** (`seen_hunk` false);
+///   afterwards it is content like any other line - which is the case the row above covers;
+/// * `@@` is chrome wherever it appears. A content row can never start with `@@`: every
+///   content row begins with its marker and a space (` `, `+`, `-`), so a removed line whose
+///   text starts with `@` is `-@…`, not `@@…`;
+/// * `\ No newline at end of file` is the producer's own marker and always chrome - no
+///   content row can produce it, for the same reason.
+///
+/// **The flag and the counters are set by different tests, deliberately.** `seen_hunk` is set
+/// by the `@@` *prefix*, because an unreadable hunk header is still punctuation rather than a
+/// line of the file (the display rule), while the line numbers are seeded only by
+/// [`hunk_starts`] succeeding, because a header this parser cannot read must leave the
+/// previous counters alone rather than reset them to zero (the numbering rule). One test would
+/// have to choose between those two behaviours and be wrong about one of them.
+fn is_chrome(line: &str, seen_hunk: bool) -> bool {
+    if line.starts_with("\\ No newline") || line.starts_with("@@") {
+        return true;
+    }
+    !seen_hunk && (line.starts_with("--- ") || line.starts_with("+++ "))
 }
 
 /// The two start numbers a hunk header declares.
@@ -127,8 +148,12 @@ pub(super) fn parse(diff: &str) -> Vec<Row> {
     // The counters a hunk header sets; `None` until one is seen.
     let mut old_next: Option<usize> = None;
     let mut new_next: Option<usize> = None;
+    let mut seen_hunk = false;
     for line in diff.lines() {
-        if is_chrome(line) {
+        if is_chrome(line, seen_hunk) {
+            if line.starts_with("@@") {
+                seen_hunk = true;
+            }
             if let Some((old, new)) = hunk_starts(line) {
                 old_next = Some(old);
                 new_next = Some(new);
