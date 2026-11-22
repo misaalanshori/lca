@@ -86,6 +86,13 @@ secrets.
 Every tool call lands on the transcript as its own card with its
 arguments, result, and cost. Click a card to collapse it; `Alt+T`
 toggles how much of a reasoning run shows (snippet, full, hidden).
+An `edit` shows its change as numbered rows — the file's own line numbers
+down a dim gutter, with no `@@`/`---`/`+++` chrome, because the card header
+already names the file — and when one line replaced another the changed
+words are inverted so a one-word fix reads as one word (gh #392). A `read`
+names the lines it asked for (`src/lib.rs:100-149`), and a tool with no
+purpose-built summary lists its arguments as `key="value"` on the card and
+one per line when expanded.
 The footer tracks the folder, session, model, context share, and
 accumulated cost.
 

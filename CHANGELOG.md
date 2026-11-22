@@ -95,6 +95,25 @@ Dates are UTC.
   reader is gone. Deleted, and a guard now walks `lca-ui`'s whole module tree so the next
   print macro cannot ship (no frame assertion can see one, which is why it survived).
 
+- **A diff card says *where* each line is, and a one-word change reads as one word**
+  (gh #392, interface). The card used to print the tool's unified diff line for line, so
+  `@@ -40,7 +40,7 @@`, `--- a/x` and `+++ b/x` came out as dim context rows and nothing said
+  where in the file a change landed. Now every row carries its file line number in a fixed
+  dim gutter (`- 341` / `+ 341` / `  341`), the chrome is gone (the card header already
+  names the file), and a single removed line next to a single added line paints its
+  differing words in inverse — so `let total = 1;` → `let total = 2;` highlights the `1`
+  and the `2` and leaves the line alone. Block rewrites stay line-level on purpose: word
+  alignment across a rewrite is a different problem, and a checkerboard is worse than two
+  solid rows.
+- **A `read` card names the lines it read, and an unknown tool's arguments are readable**
+  (gh #392, interface). `read` with an offset and limit shows `src/lib.rs:100-149`
+  (`:100` when only the offset was given, and no range at all for a whole-file read); a
+  path under your home directory is shortened to `~/…` and linked when the terminal keeps
+  hyperlinks. A tool with no purpose-built summary shows `key="value"` pairs capped at 100
+  characters instead of dumping its JSON on a collapsed row, lists one `key: value` per
+  line when expanded, says `[invalid arg]` for an argument that is not a string and `...`
+  for one that is still being filled in, and a shell call names its `(timeout 60s)`.
+
 - **The transcript search shows which match is current, and steps both ways** (gh #376,
   interface). The selected match paints bold-and-inverse and the rest underline
   (`Ctrl+R` previously painted one style for everything), the highlight closes only the
