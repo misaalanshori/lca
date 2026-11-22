@@ -51,7 +51,17 @@ lca-tools = { path = "crates/lca-tools" }
 # uncompressed size is gigabytes of zeros) to prove the read stays bounded.
 # `zip` is already in the shipped graph via lca-registry, so this adds no
 # package; it is BYO for the test's own packing.
-zip = { version = "2", default-features = false, features = ["deflate"] }
+#
+# gh #607: `zip` 9 renamed the deflate feature set and makes each backend its
+# own feature. `deflate-flate2` is the leanest one that still writes DEFLATE -
+# it turns on `_deflate-any` (the writer's deflate arm) and the `flate2`
+# dependency, and nothing else: no `zopfli` (the old `deflate` feature's slow
+# optimizer), no `rayon`, no `aes-crypto` (which would add six crates and put
+# an AES implementation in a binary that never reads an encrypted entry).
+# `lca-registry` carries the direct `flate2` edge that supplies the backend
+# (`rust_backend` -> miniz_oxide), which is also what the model catalog's gzip
+# inflate uses, so zip and the catalog share one decompressor.
+zip = { version = "9.8", default-features = false, features = ["deflate-flate2"] }
 lca-tui = { path = "crates/lca-tui" }
 lca-ui = { path = "crates/lca-ui" }
 # gh #342/#343: the debug-log redaction and permission guards drive the
@@ -194,7 +204,11 @@ sha2 = "0.10"
 sha1 = "0.10"
 # zip - the ADR-0010 HTTPS archive format; DEFLATE gets a maintained
 # implementation instead of a hand-written one (SRDD dependency rule).
-zip = { version = "2", default-features = false, features = ["deflate"] }
+# 9.x closes four `extract()` advisories, the AES auth-code check and the
+# local-header-vs-central-directory name mismatch; the feature choice and the
+# backend it shares with the model catalog are explained above the dev-dep of
+# the same name (gh #607).
+zip = { version = "9.8", default-features = false, features = ["deflate-flate2"] }
 # unicode-width / unicode-segmentation - East Asian width classes and
 # grapheme-cluster iteration for the pi TUI port's text measurement and
 # cursor motion (ADR-0036). Both are already in Cargo.lock transitively;

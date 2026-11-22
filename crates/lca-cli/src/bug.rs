@@ -414,7 +414,14 @@ mod tests {
         let mut archive = zip::ZipArchive::new(file).expect("zip");
         let mut names = Vec::new();
         for index in 0..archive.len() {
-            names.push(archive.by_index(index).expect("entry").name().to_string());
+            names.push(
+                archive
+                    .by_index(index)
+                    .expect("entry")
+                    .name()
+                    .expect("name")
+                    .to_string(),
+            );
         }
         names.sort();
         assert_eq!(names, vec!["meta.json", "report.txt", "session.jsonl"]);

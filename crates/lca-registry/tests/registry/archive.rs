@@ -20,7 +20,14 @@ fn the_archive_roundtrips_the_two_files() {
     let names: Vec<String> = {
         let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&packed)).expect("open");
         (0..archive.len())
-            .map(|i| archive.by_index(i).expect("entry").name().to_string())
+            .map(|i| {
+                archive
+                    .by_index(i)
+                    .expect("entry")
+                    .name()
+                    .expect("name")
+                    .to_string()
+            })
             .collect()
     };
     assert_eq!(names.len(), 2, "nothing else added (ADR-0010)");

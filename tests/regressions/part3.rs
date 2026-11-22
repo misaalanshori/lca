@@ -859,3 +859,9 @@ mod a_resumed_session_draws_tool_images;
 // a pane found in the shipped wizard path, and the walk that keeps the class out.
 #[path = "605-no-print-in-lca-ui.rs"]
 mod no_print_in_lca_ui;
+
+// Gh #607 / RUSTSEC-2026-0548: the `zip` 9 header-consistency check is **opt-in**, so the
+// registry's untrusted-archive read turns it on - a package whose local header names disagree
+// with its central directory is refused, not silently believed.
+#[path = "607-zip-local-header-consistency.rs"]
+mod zip_local_header_consistency;

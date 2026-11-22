@@ -48,6 +48,18 @@ Dates are UTC.
   is `/paste` and the right-button handler.
 
 ### Fixed
+- **The dependency audit is green again, and an extension package whose entry names disagree
+  with itself is refused** (gh #607, supply chain). Nothing in LCA changed — the advisory
+  database moved under the dependency set, and `cargo-deny` went red on `main` for two
+  releases in a row. The WASM engine is now `wasmtime` 49.0.7 (nine advisories: guest-triggered
+  aborts, a stale GC base pointer, a WASI filesystem escape on Windows through a
+  drive-prefixed path), `url` is 2.5.9, and the archive reader is `zip` 9, which closes four
+  extraction advisories, the AES authentication-code check, and the local-header-versus-
+  central-directory name mismatch that this last one is about. The `deny.toml` ledger drops
+  from six ignores and a yank-ignore to **one** (a `tokio` advisory with its own measured
+  blocker). What you gain: installing a package whose per-entry names disagree between the
+  two places a zip records them is now refused with a sentence saying so, instead of being
+  read under whichever name the reader happened to trust.
 - **A resumed session now shows the images tools returned, instead of only their text**
   (gh #602, interface). `--resume` and `/tree` replayed every record kind except a
   `tool-result`'s images: the bytes were on disk, `gc` kept them and `/export` named them,

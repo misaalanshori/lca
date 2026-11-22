@@ -72,14 +72,25 @@ pub fn read_archive(bytes: &[u8]) -> Result<Archive, Error> {
             archive.len()
         )));
     }
+    // Gh #607 / RUSTSEC-2026-0548: a zip names every entry **twice** - in the local header in
+    // front of its data, and in the central directory at the end. `ZipArchive` lists and opens
+    // by the central-directory name, while `read_zipfile_from_stream`-shaped readers use the
+    // local one, so an archive can show one set of names to a checker and write files under
+    // another to an extractor. We read packages we did not author (a registry extension, a
+    // fetched update) and act on the names it gives us, so the two must agree: refuse the
+    // archive before a single member is read. `zip` leaves this check **off by default**, so
+    // turning it on is part of this call site, not of the upgrade.
+    archive.validate_header_consistency().map_err(|err| {
+        Error::Invalid(format!(
+            "not a trustworthy zip archive: {err} - repackage it with a standard zip writer"
+        ))
+    })?;
     // Names first (owned), so the per-file borrow of the archive ends
     // before the next iteration starts.
     let names: Vec<String> = (0..archive.len())
         .filter_map(|index| {
-            archive
-                .by_index(index)
-                .ok()
-                .map(|file| file.name().to_string())
+            let file = archive.by_index(index).ok()?;
+            file.name().ok().map(|name| name.to_string())
         })
         .collect();
     let mut manifest = None;
