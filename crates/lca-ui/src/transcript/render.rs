@@ -16,6 +16,12 @@ use crate::theme::{Role, StyleFn, Theme};
 
 use super::{Entry, ThinkingVisibility, ToolStatus};
 
+// Gh #392 slices A+B: the diff card's chrome-free, numbered rows and the 1↔1 word
+// spotlight live in their own file - this one is at 1,052 lines and the rows are a
+// subject of their own (gate 11's ceiling, and the split-by-subject rule gh #574 states).
+#[path = "diff_card.rs"]
+mod diff_card;
+
 /// Markdown options for the terminal: the link mode follows the terminal's
 /// OSC 8 capability, so a URL never vanishes on a terminal that swallows
 /// the hyperlink (pi's `markdown.md` §6).
@@ -745,22 +751,26 @@ fn render_tool(
             if let Some(summary) = summary {
                 rows.push(format!("  {}", (theme.role(Role::ToolOutput))(summary)));
             }
-            let lines: Vec<&str> = diff.lines().collect();
-            let preview = if expanded {
-                lines.len()
-            } else {
-                DIFF_PREVIEW_LINES
-            };
-            for line in lines.iter().take(preview) {
-                let clipped = truncate_to_width(line, inner.saturating_sub(2), "…", false);
-                rows.push(format!("  {}", (theme.role(diff_role(line)))(&clipped)));
-            }
-            if lines.len() > preview {
+            // Gh #392 slice A: the producer's unified diff is parsed into rows that carry
+            // their **file line numbers**, with the `@@`/`---`/`+++` chrome dropped - the
+            // file is already named in this card's header, and a reader scrolling a change
+            // needs *where* in the file each row sits, not a second copy of the path. Slice
+            // B rides the same rows: a single removed line next to a single added line gets
+            // its changed words in inverse.
+            let parsed = diff_card::parse(diff);
+            let lines = parsed.len();
+            let preview = if expanded { lines } else { DIFF_PREVIEW_LINES };
+            rows.extend(diff_card::render(
+                &parsed[..preview.min(lines)],
+                inner,
+                theme,
+            ));
+            if lines > preview {
                 let key = render_key_hint(theme, keybindings, "app.tools.expand", None);
                 let shape = if key.is_empty() {
-                    format!("… ({} more lines)", lines.len() - preview)
+                    format!("… ({} more lines)", lines - preview)
                 } else {
-                    format!("… ({} more lines, {key} to expand)", lines.len() - preview)
+                    format!("… ({} more lines, {key} to expand)", lines - preview)
                 };
                 rows.push(format!("  {}", (theme.role(Role::Muted))(&shape)));
             }
@@ -1011,20 +1021,6 @@ fn split_summary_and_note(result: &str, diff: &str) -> (Option<String>, Option<S
 /// The collapsed preview length for a structured diff (gh #9): enough
 /// rows to show the change, bounded like every other tool preview.
 const DIFF_PREVIEW_LINES: usize = 10;
-
-/// One diff line's role, decided by its unified-diff marker - pi's
-/// `renderDiff` parses the same shape: `+` is added, `-` is removed, and
-/// everything else (context lines, the `@@`/`---`/`+++` headers) is
-/// context.
-fn diff_role(line: &str) -> Role {
-    if line.starts_with('+') && !line.starts_with("+++") {
-        Role::ToolDiffAdded
-    } else if line.starts_with('-') && !line.starts_with("---") {
-        Role::ToolDiffRemoved
-    } else {
-        Role::ToolDiffContext
-    }
-}
 
 /// pi's `formatToolDuration` tiers (`render-utils.ts:95-170`): `4.2s` under a
 /// minute, `1m 30s` under an hour, `2h 3m 4s` above. Sub-second durations keep

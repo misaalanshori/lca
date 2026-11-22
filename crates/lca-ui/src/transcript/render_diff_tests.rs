@@ -50,13 +50,13 @@ fn an_expanded_diff_card_renders_its_changes_once() {
     t.tools_expanded = true;
     let rows = t.render(80, &theme);
     assert_eq!(
-        count_rows(&rows, "-fn b() {}"),
+        count_rows(&rows, "- 2 fn b() {}"),
         1,
         "the removed line appears exactly once:\n{}",
         strip(&rows).join("\n")
     );
     assert_eq!(
-        count_rows(&rows, "+fn bb() {}"),
+        count_rows(&rows, "+ 2 fn bb() {}"),
         1,
         "and so does the added line:\n{}",
         strip(&rows).join("\n")
@@ -94,7 +94,7 @@ fn a_collapsed_diff_card_is_unchanged() {
         strip(&rows).join("\n")
     );
     assert_eq!(
-        count_rows(&rows, "-fn b() {}"),
+        count_rows(&rows, "- 2 fn b() {}"),
         1,
         "and the preview shows the change:\n{}",
         strip(&rows).join("\n")
@@ -157,7 +157,7 @@ fn a_partly_diff_result_keeps_its_trailing_note() {
         strip(&rows).join("\n")
     );
     assert_eq!(
-        count_rows(&rows, "-fn b() {}"),
+        count_rows(&rows, "- 2 fn b() {}"),
         1,
         "and the diff is still once:\n{}",
         strip(&rows).join("\n")
@@ -212,21 +212,27 @@ fn a_result_that_is_the_diff_is_not_printed_twice() {
     t.tools_expanded = true;
     let rows = t.render(80, &theme);
     // Every distinctive line of the diff, not just the change rows: a summary taken from
-    // the result's first line would be a *header* copy, which counting only `-fn b() {}`
+    // the result's first line would be a *header* copy, which counting only the change row
     // would miss. This is why the row asserts all four.
-    for line in [
-        "--- src/main.rs",
-        "+++ src/main.rs",
-        "@@ -1,3 +1,3 @@",
-        "-fn b() {}",
-    ] {
+    //
+    // **Gh #392 slice A** turned the three chrome claims from "once, not twice" into
+    // "**never**": the hunk and file headers are no longer rows at all, so the dedup
+    // property for them is now a stronger statement, and the content row still carries the
+    // original claim unchanged.
+    for chrome in ["--- src/main.rs", "+++ src/main.rs", "@@ -1,3 +1,3 @@"] {
         assert_eq!(
-            count_rows(&rows, line),
-            1,
-            "{line:?} prints once, not once per path:\n{}",
+            count_rows(&rows, chrome),
+            0,
+            "{chrome:?} is chrome and must never be a row:\n{}",
             strip(&rows).join("\n")
         );
     }
+    assert_eq!(
+        count_rows(&rows, "- 2 fn b() {}"),
+        1,
+        "the change row prints once, not once per path:\n{}",
+        strip(&rows).join("\n")
+    );
 }
 
 // Verifies: gh #328 design point 5 - a **nested** call does not duplicate either.
@@ -256,7 +262,7 @@ fn a_nested_call_does_not_duplicate_a_diff() {
     t.tools_expanded = true;
     let rows = t.render(80, &theme);
     assert_eq!(
-        count_rows(&rows, "-fn b() {}"),
+        count_rows(&rows, "- 2 fn b() {}"),
         1,
         "the parent's diff prints once:\n{}",
         strip(&rows).join("\n")

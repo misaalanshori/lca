@@ -129,9 +129,15 @@ fn headings_and_quotes_carry_their_roles() {
 
 // Verifies: gh #9 / EFG-016 (the diff card) - an `edit` result's
 // structured diff renders inside the tool card: `-` rows in
-// `toolDiffRemoved`, `+` rows in `toolDiffAdded`, context and the
-// `@@`/`---`/`+++` headers in `toolDiffContext`, all inside the state
-// band every card already wears (raw SGR, cycle-9 style).
+// `toolDiffRemoved`, `+` rows in `toolDiffAdded` and context rows in
+// `toolDiffContext`, all inside the state band every card already wears
+// (raw SGR, cycle-9 style).
+//
+// **Gh #392 slice A changed the row shape this row reads**: the `-`/`+` marker is now
+// followed by a dim line-number gutter (`- 2 fn b() {}`), and the `@@`/`---`/`+++` chrome
+// is no longer rendered at all rather than painted as context. The colour assertions are
+// unchanged - the roles are the same three - and the needles follow the row, with the
+// gutter's own number asserted so the change is visible in the test rather than implied.
 #[test]
 fn an_edit_result_renders_as_a_diff_card_in_the_two_diff_roles() {
     let theme = Theme::colored();
@@ -147,37 +153,42 @@ fn an_edit_result_renders_as_a_diff_card_in_the_two_diff_roles() {
     );
     let rows = t.render(80, &theme);
 
+    let shown = |row: &&String| lca_tui::engine::text::strip_terminal_sequences(row);
     let removed = rows
         .iter()
-        .find(|row| row.contains("-fn b() {}"))
-        .expect("the removed line is rendered");
+        .find(|row| shown(row).contains("- 2 fn b() {}"))
+        .expect("the removed line is rendered, with its old-side line number");
     assert!(
         removed.contains("38;2;204;102;102"),
         "removed lines carry toolDiffRemoved (#cc6666): {removed:?}"
     );
     let added = rows
         .iter()
-        .find(|row| row.contains("+fn bb() {}"))
-        .expect("the added line is rendered");
+        .find(|row| shown(row).contains("+ 2 fn bb() {}"))
+        .expect("the added line is rendered, with its new-side line number");
     assert!(
         added.contains("38;2;181;189;104"),
         "added lines carry toolDiffAdded (#b5bd68): {added:?}"
     );
     let context = rows
         .iter()
-        .find(|row| row.contains(" fn a() {}"))
-        .expect("the context line is rendered");
+        .find(|row| shown(row).contains("  1 fn a() {}"))
+        .expect("the context line is rendered, with a blank marker and its number");
     assert!(
         context.contains("38;2;128;128;128"),
         "context carries toolDiffContext (#808080): {context:?}"
     );
-    let hunk = rows
-        .iter()
-        .find(|row| row.contains("@@ -1,3 +1,3 @@"))
-        .expect("the hunk header is rendered");
+    // Gh #392 slice A replaced the old "the hunk header is context too" clause: the
+    // chrome is **gone**, which is the stronger claim and the one the issue asks for. The
+    // gutter is what a reader gets instead - a number per row, never `@@`.
     assert!(
-        hunk.contains("38;2;128;128;128"),
-        "the hunk header is context too: {hunk:?}"
+        !rows.iter().any(|row| {
+            let text = lca_tui::engine::text::strip_terminal_sequences(row);
+            text.contains("@@")
+                || text.contains("--- src/main.rs")
+                || text.contains("+++ src/main.rs")
+        }),
+        "no hunk or file chrome is rendered: {rows:?}"
     );
     // The card is still a tool card: the state band frames it.
     let strip = |row: &str| lca_tui::engine::text::strip_terminal_sequences(row);
@@ -230,7 +241,16 @@ fn a_long_diff_truncates_with_the_usual_more_lines_hint() {
         ),
         "and the key that shows it: {joined}"
     );
-    let collapsed = rows.iter().filter(|row| row.contains("+new")).count();
+    // Gh #392 slice A: the marker is followed by the line-number gutter, so the needle is
+    // the body text rather than the marker-glued form the old row used - and it is read off
+    // the **stripped** row, because these `-old N`/`+new N` pairs are 1↔1 replacements and
+    // slice B therefore paints the changed word in inverse *inside* the body (`\x1b[7mnew\x1b[27m 0`),
+    // which breaks a raw `"new "` needle.
+    let plain: Vec<String> = rows
+        .iter()
+        .map(|row| lca_tui::engine::text::strip_terminal_sequences(row))
+        .collect();
+    let collapsed = plain.iter().filter(|row| row.contains("new ")).count();
     assert!(
         collapsed > 0 && collapsed < 20,
         "a bounded preview, not the whole diff: {collapsed} rows"
@@ -238,9 +258,14 @@ fn a_long_diff_truncates_with_the_usual_more_lines_hint() {
 
     // Ctrl+O expands to every line.
     t.toggle_tools_expanded();
-    let expanded = t.render(80, &theme).join("\n");
-    let shown = expanded.matches("+new 19").count();
-    assert!(shown == 1, "expanded shows the last line: {expanded}");
+    let muted = t
+        .render(80, &theme)
+        .into_iter()
+        .map(|row| lca_tui::engine::text::strip_terminal_sequences(&row))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let shown = muted.matches("new 19").count();
+    assert!(shown == 1, "expanded shows the last line: {muted}");
 }
 
 // Verifies: R1 - "Tool name/args lines get the roles pi gives them",
