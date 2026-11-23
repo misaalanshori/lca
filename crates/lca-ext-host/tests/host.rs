@@ -132,9 +132,17 @@ fn fuel_budget_cancels_a_spinning_call() {
         .execute(&call("loop"))
         .expect_err("runs out of fuel");
     assert!(matches!(err, CallError::FuelExhausted), "got {err:?}");
+    // Gh #609 review verdict: this is a **hang guard**, not a performance claim.
+    // `FuelExhausted` above is the product's statement; with 2M fuel units the call
+    // takes milliseconds, and with enforcement removed the guest loops forever, so this
+    // bound separates "returns" from "never returns" - there is no machine-speed claim
+    // for a loaded box to move. Kept as-is deliberately (the audit listed it as
+    // review-only).
     assert!(
         started.elapsed() < std::time::Duration::from_secs(5),
-        "bounded work"
+        "bounded work: the call returns at all, which it cannot do without fuel \
+         enforcement (took {:?})",
+        started.elapsed()
     );
 }
 

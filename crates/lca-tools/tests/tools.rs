@@ -498,9 +498,17 @@ async fn a_per_call_timeout_kills_the_command_tree() {
         ),
     )
     .await;
+    // Gh #609: the bound is the **default this row is about**, not a stopwatch. The
+    // claim is "the 1 s per-call timeout wins over the 120 s configured default", so
+    // the separation is the default itself, with half of it as the margin: the fix
+    // returns in about a second, a call that ignored the per-call value waits the full
+    // 120 s. Nothing here is a claim about how fast this box schedules a thread - the
+    // effect below (status `Timeout`, the message naming it, the grandchild gone) is
+    // what says the timeout fired at all.
     assert!(
-        started.elapsed() < Duration::from_secs(10),
-        "the per-call timeout fires, not the 120s default"
+        started.elapsed() < Duration::from_secs(60),
+        "the 1s per-call timeout fired, not the 120s default: {:?}",
+        started.elapsed()
     );
     assert_eq!(
         result.status,
@@ -723,9 +731,14 @@ async fn shell_timeout_kills_the_process_tree() {
         ),
     )
     .await;
+    // Gh #609: the bound is the **fixture's own runtime** - the command sleeps 30 s, and
+    // a configured 500 ms timeout must beat it by a wide margin, so half the command's
+    // lifetime is the separation. A stopwatch of 5 s said the same thing but tied the row
+    // to this box's scheduler; the effect below is what proves the timeout fired.
     assert!(
-        started.elapsed() < Duration::from_secs(5),
-        "the timeout fires"
+        started.elapsed() < Duration::from_secs(15),
+        "the configured 500ms timeout beat the command's own 30s run: {:?}",
+        started.elapsed()
     );
     assert_eq!(
         result.status,
@@ -912,12 +925,15 @@ async fn cancellation_stops_a_running_command() {
     });
     tokio::time::sleep(Duration::from_millis(200)).await;
     cancel.cancel();
-    let started = std::time::Instant::now();
+    // Gh #609: the caller's own `timeout(5 s)` **is** the bound, and the
+    // `elapsed < 5 s` that used to sit next to it measured the same wall clock twice.
+    // What the cancel owes the user is the effect: the call returns, and it is not a
+    // success. A command that ignored the cancel would run its own 30 s and the wrapper
+    // below would redden.
     let result = tokio::time::timeout(Duration::from_secs(5), handle)
         .await
-        .expect("returns promptly")
+        .expect("the cancelled shell returns inside the caller's own 5 s wait")
         .expect("join");
-    assert!(started.elapsed() < Duration::from_secs(5));
     assert_ne!(
         result.status,
         ToolResultStatus::Ok,
