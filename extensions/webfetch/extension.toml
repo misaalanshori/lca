@@ -1,6 +1,6 @@
 name = "webfetch"
 version = "0.1.0"
-abi = "0.6"
+abi = "0.7"
 worlds = ["tool"]
 description = "Fetches HTTP/HTTPS URLs and converts content to clean, bounded Markdown."
 

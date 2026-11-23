@@ -1,6 +1,6 @@
 name = "hash-edit"
 version = "0.1.0"
-abi = "0.6"
+abi = "0.7"
 worlds = ["tool", "hooks-tool-result"]
 description = "High-precision content-hash anchored file editor."
 

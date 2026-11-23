@@ -1,0 +1,6 @@
+name = "tool-legacy"
+version = "0.1.0"
+abi = "0.6"
+worlds = ["tool"]
+description = "Pre-catalog single-tool fixture (gh #77 compat)."
+license = "Apache-2.0"

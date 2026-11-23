@@ -9,21 +9,27 @@
 //! questionnaire: func(title: string, questions: list<question>) -> result<option<list<answer>>, string>;
 //! ```
 //!
-//! ## What "additive for old artifacts" has to mean, again
+//! ## What "additive for old artifacts" means now that 0.7 exists
 //!
 //! The interface is one every `tool` and `tool-catalog` guest already imports
-//! (gh #172), so a *rebuilt* guest sees the new member - and a guest built
-//! before this line imports the same interface and never calls it. The host
-//! satisfies an import whether or not the guest calls it (the rule `tools`
-//! established in gh #77 and `net` repeated in gh #302), so the old artifact
-//! must still link **and** still run. That is the whole claim, so it is proven
-//! here rather than asserted.
+//! (gh #172), so a *rebuilt* guest sees the new member - and a guest that never
+//! calls it is unaffected, because the host satisfies an import whether or not
+//! the guest calls it (the rule `tools` established in gh #77 and `net`
+//! repeated in gh #302). That is a **within-line** property: it held while the
+//! package stayed `lca:host@0.6.0`.
+//!
+//! Opening the 0.7 line changes that, and this file was rewritten to say so
+//! rather than keep a proof that stopped being true. Renaming the package
+//! (`lca:host@0.6.0` -> `@0.7.0`) renames every imported and exported instance,
+//! so an artifact built for 0.6 no longer links: the window admits its
+//! *manifest*, and the link refuses its *bytes* with advice to rebuild. That is
+//! what a line move is, and it is why a released line is frozen.
 //!
 //! ## What this guard pins
 //!
-//! 1. **Old-guest compatibility.** `extensions/tool-legacy`'s committed
-//!    component predates the questionnaire; it loads, reports its tool, and
-//!    runs a call.
+//! 1. **The line move is legible.** A 0.6-built component (the frozen artifact
+//!    in `tests/data/abi-0.6/`) passes the manifest window and is then refused
+//!    at link with a message naming the line and the fix.
 //! 2. **The seam is nameable from outside.** The two records are
 //!    `lca-permissions` types, so an asker can build them without depending on
 //!    `lca-ext-host` (the brief's rule, and what `question`'s native and WASM
@@ -32,19 +38,20 @@
 //!    `None`, never a hang - the headless contract, one rung deeper than the
 //!    `confirm`/`select`/`input` rows.
 //!
-//! Verifies: gh #407's ABI claim, ADR-0028 (in-place window), FR-EXT-1.
+//! Verifies: gh #407's ABI claim, ADR-0028 (the 0.7 line opens in place of a
+//! frozen 0.6), FR-EXT-1, NFR-19 (the window), NFR-20 (a breaking change is a line).
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 
-use lca_ext_abi::ExtensionDispatch as _;
 use lca_permissions::{Answer, DialogPrompt, Question, SharedDialogs};
 use std::sync::{Arc, Mutex};
 
-/// The fixture built **before** the questionnaire existed: `tool-legacy` is the
-/// single-tool guest kept precisely as a pre-import artifact (gh #77's
-/// precedent, reused by gh #302's `net` row).
-const LEGACY: &[u8] = include_bytes!("../../extensions/tool-legacy/fixtures/component.wasm");
-const LEGACY_MANIFEST: &str = include_str!("../../extensions/tool-legacy/extension.toml");
+/// A component built for **0.6**, frozen before this cycle's line move and kept
+/// outside `extensions/*/fixtures/` for that reason alone
+/// (`tests/data/abi-0.6/README.md` says why it cannot be rebuilt).
+const FROZEN_0_6: &[u8] = include_bytes!("../data/abi-0.6/tool-legacy.wasm");
+/// Its manifest, which declares `abi = "0.6"` - inside the window, on purpose.
+const FROZEN_0_6_MANIFEST: &str = include_str!("../data/abi-0.6/tool-legacy.manifest.toml");
 
 struct Allow;
 impl lca_permissions::PermissionPrompt for Allow {
@@ -92,26 +99,37 @@ fn host(tag: &str) -> lca_ext_host::ExtHost {
 // 1. Additivity: an old guest without the member still loads and runs
 // ---------------------------------------------------------------------------
 
-/// **The claim the word "additive" rests on.** `tool-legacy` was built against
-/// a `tool` world whose `ui-dialogs` had no `questionnaire`. If adding the
-/// member broke old artifacts, this would fail to link - and every installed
-/// tool extension would break at once, which is the difference between an
-/// additive window change and a label bump.
+/// **What a line move does to an installed extension**, proven on the artifact
+/// that used to prove the opposite. `tests/data/abi-0.6/tool-legacy.wasm` was
+/// the witness for "adding an import or a member does not break an old guest"
+/// (gh #77, gh #302, and this file's first version). On a 0.7 host it must still
+/// *pass the manifest window* - that is the promise NFR-19 makes - and must then
+/// be refused at link, because the component's type names `lca:host@0.6.0` and
+/// this host provides `@0.7.0`.
+///
+/// Both halves matter: a manifest-only refusal would be a different (and
+/// weaker) rule than the one the window states, and a silent load would mean the
+/// version in the package name is not load-bearing at all.
 #[test]
-fn a_tool_guest_built_before_the_questionnaire_still_loads_and_runs() {
-    let mut host = host("legacy");
-    let extension = host.load(LEGACY, LEGACY_MANIFEST).unwrap_or_else(|err| {
-        panic!(
-            "a tool-world guest built before the questionnaire must still load (gh #407's \
-             additivity claim): {err}"
-        )
-    });
-    assert_eq!(extension.name(), "tool-legacy");
-    assert!(extension.is_enabled(), "and it comes up enabled");
-    let specs = extension.tool_specs().expect("its schema still reads");
+fn a_component_built_for_the_previous_line_is_admitted_by_the_window_and_refused_at_link() {
+    let declaration =
+        lca_ext_host::Manifest::parse(FROZEN_0_6_MANIFEST).expect("the 0.6 manifest parses");
+    assert_eq!(declaration.abi, "0.6");
     assert!(
-        !specs.is_empty(),
-        "the old guest still registers its tool: {specs:?}"
+        declaration.abi_in_window(),
+        "the window admits the 0.6 line (NFR-19); that is what makes the link refusal \
+         the interesting half"
+    );
+
+    let mut host = host("frozen-0-6");
+    let err = match host.load(FROZEN_0_6, FROZEN_0_6_MANIFEST) {
+        Ok(_) => panic!("a 0.6-built component cannot link on a 0.7 host"),
+        Err(err) => err,
+    };
+    let text = err.to_string();
+    assert!(
+        text.contains("Rebuild it"),
+        "the refusal tells the author what to do: {text}"
     );
 }
 

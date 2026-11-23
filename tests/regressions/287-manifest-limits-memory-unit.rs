@@ -87,7 +87,7 @@ fn manifest(memory_mb: u32, with_capabilities: bool) -> String {
         ""
     };
     format!(
-        "name = \"conformance\"\nversion = \"0.1.0\"\nabi = \"0.5\"\nworlds = [\"tool\"]\n{caps}\n[limits]\nmemory_mb = {memory_mb}\nfuel_per_call = 100000000\n"
+        "name = \"conformance\"\nversion = \"0.1.0\"\nabi = \"0.6\"\nworlds = [\"tool\"]\n{caps}\n[limits]\nmemory_mb = {memory_mb}\nfuel_per_call = 100000000\n"
     )
 }
 

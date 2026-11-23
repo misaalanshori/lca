@@ -245,9 +245,14 @@ fn a_local_directory_resolves_as_a_data_only_package() {
 // (default tag tracks the ABI line); explicit refs pass through.
 #[test]
 fn bare_names_expand_to_the_official_repository() {
+    // The default tag tracks the ABI line, so it is derived: a literal here
+    // would redden on every line move while saying nothing about the rule.
     assert_eq!(
         lca_registry::expand_shorthand("antigravity"),
-        "ghcr.io/misaalanshori/lca/antigravity:abi-0.6"
+        format!(
+            "ghcr.io/misaalanshori/lca/antigravity:abi-{}",
+            lca_ext_abi::ABI_VERSION
+        )
     );
     assert_eq!(
         lca_registry::expand_shorthand("antigravity:unstable"),

@@ -368,8 +368,11 @@ fn version_prints_all_four_facts() {
     let output = box_.run(None, &["--version"]);
     assert_eq!(output.status.code(), Some(0));
     let text = stdout(&output);
+    // The live line, from the contract crate: `--version` prints what this host
+    // implements, and a literal here would have to be edited at every line move
+    // (it said 0.6 until the 0.7 opener, which is what this row caught).
     assert!(
-        text.contains("abi 0.6"),
+        text.contains(&format!("abi {}", lca_ext_abi::ABI_VERSION)),
         "the window's live ABI line: {text}"
     );
     assert!(text.contains("target"), "{text}");

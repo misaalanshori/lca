@@ -1,4 +1,4 @@
-package lca:ext@0.6.0;
+package lca:ext@0.7.0;
 
 /// The `hooks-tool-result` world: composable `tool_result` mutation
 /// (gh #45, pi's `tool_result`). Every registered handler runs in
@@ -7,7 +7,7 @@ package lca:ext@0.6.0;
 /// Opt-in by declaring it in the manifest; the six-point `hooks`
 /// world's observe-only `post-tool-use` is unchanged.
 world hooks-tool-result {
-  import lca:host/log@0.6.0;
+  import lca:host/log@0.7.0;
   export hook-tool-result;
 }
 

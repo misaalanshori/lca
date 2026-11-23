@@ -1,4 +1,4 @@
-package lca:ext@0.6.0;
+package lca:ext@0.7.0;
 
 /// The `hooks-cache` world: `cache_warming_decision` (gh #45, pi's
 /// event). The host plants prompt-cache breakpoints on
@@ -8,7 +8,7 @@ package lca:ext@0.6.0;
 /// breakpoints: request bytes are exactly what they were before
 /// this world existed. Opt-in by declaring it in the manifest.
 world hooks-cache {
-  import lca:host/log@0.6.0;
+  import lca:host/log@0.7.0;
   export hook-cache-warming;
 }
 

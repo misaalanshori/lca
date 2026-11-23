@@ -9,12 +9,12 @@ wit_bindgen::generate!({
     world: "provider",
     export_macro_name: "export_provider",
     with: {
-        "lca:host/log@0.6.0": generate,
-        "lca:host/net@0.6.0": generate,
-        "lca:host/oauth@0.6.0": generate,
-        "lca:host/credentials@0.6.0": generate,
-        "lca:host/resources@0.6.0": generate,
-        "lca:host/state@0.6.0": generate,
+        "lca:host/log@0.7.0": generate,
+        "lca:host/net@0.7.0": generate,
+        "lca:host/oauth@0.7.0": generate,
+        "lca:host/credentials@0.7.0": generate,
+        "lca:host/resources@0.7.0": generate,
+        "lca:host/state@0.7.0": generate,
     },
 });
 

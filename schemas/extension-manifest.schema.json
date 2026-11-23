@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://lca.example/schemas/extension-manifest/0.6.json",
+  "$id": "https://lca.example/schemas/extension-manifest/0.7.json",
   "title": "LCA extension manifest",
-  "description": "Schema for the parsed form of extension.toml. The manifest is written in TOML and validated against this schema after parsing. Version 0.6, targets ABI 0.6.",
+  "description": "Schema for the parsed form of extension.toml. The manifest is written in TOML and validated against this schema after parsing. Version 0.7, targets ABI 0.7.",
   "type": "object",
   "required": [
     "name",

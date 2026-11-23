@@ -1,6 +1,6 @@
 name = "github-copilot"
 version = "0.1.0"
-abi = "0.6"
+abi = "0.7"
 worlds = ["provider"]
 description = "GitHub Copilot subscription provider."
 

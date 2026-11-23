@@ -681,7 +681,7 @@ mod wasm_mode {
             world: "hooks-tool-result",
             export_macro_name: "export_formatter_hook",
             with: {
-                "lca:host/log@0.6.0": generate,
+                "lca:host/log@0.7.0": generate,
             },
         });
 
@@ -727,7 +727,7 @@ mod wasm_mode {
             world: "command",
             export_macro_name: "export_formatter_command",
             with: {
-                "lca:host/ui-dialogs@0.6.0": generate,
+                "lca:host/ui-dialogs@0.7.0": generate,
             },
         });
 

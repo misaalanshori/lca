@@ -1,4 +1,4 @@
-package lca:ext@0.6.0;
+package lca:ext@0.7.0;
 
 /// The `hooks-tool-call` world: composable `tool_call` mutation and
 /// block (gh #45, pi's `tool_call`). Every registered handler runs in
@@ -8,7 +8,7 @@ package lca:ext@0.6.0;
 /// declaring it in the manifest; the six-point `hooks` world is
 /// unchanged.
 world hooks-tool-call {
-  import lca:host/log@0.6.0;
+  import lca:host/log@0.7.0;
   export hook-tool-call;
 }
 

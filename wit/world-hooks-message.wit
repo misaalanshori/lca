@@ -1,4 +1,4 @@
-package lca:ext@0.6.0;
+package lca:ext@0.7.0;
 
 /// The `hooks-message` world: message-lifecycle observation with a
 /// `message_end` replace (gh #45, pi's `message_end`). Opt-in by
@@ -6,7 +6,7 @@ package lca:ext@0.6.0;
 /// unchanged. The replacement keeps the original role: the guest
 /// returns text, never a role.
 world hooks-message {
-  import lca:host/log@0.6.0;
+  import lca:host/log@0.7.0;
   export hook-message-end;
 }
 

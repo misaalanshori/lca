@@ -452,7 +452,7 @@ fn the_export_fragment_table_matches_the_wit_worlds() {
 #[test]
 fn a_component_exporting_a_hook_world_is_detected_from_its_exports() {
     // The reference ui component's real export set.
-    let ui_component = ["lca:ext/render@0.6.0", "lca:ext/interaction@0.6.0"];
+    let ui_component = ["lca:ext/render@0.7.0", "lca:ext/interaction@0.7.0"];
     let fragments = exported_fragments(ui_component);
     assert_eq!(fragments, vec!["interaction", "render"]);
     let worlds = exported_worlds(&fragments);
@@ -466,9 +466,9 @@ fn a_component_exporting_a_hook_world_is_detected_from_its_exports() {
     // A component that also carries the session-close hook - the shape that would
     // be dead under a `worlds = [\"ui\"]` manifest.
     let contradicting = [
-        "lca:ext/render@0.6.0",
-        "lca:ext/interaction@0.6.0",
-        "lca:ext/hook-session-close@0.6.0",
+        "lca:ext/render@0.7.0",
+        "lca:ext/interaction@0.7.0",
+        "lca:ext/hook-session-close@0.7.0",
     ];
     let fragments = exported_fragments(contradicting);
     let worlds = exported_worlds(&fragments);

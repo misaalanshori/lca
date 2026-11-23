@@ -71,6 +71,12 @@ fn close_writes_the_session_end_marker() {
 // Verifies: session-log-format - the session-start record carries the
 // extension ABI version from the contract crate. It used to be a stale local
 // "0.1" while `lca:ext` was frozen at "1.0".
+//
+// The literal is the **current line**, so it moves when the line does (0.6 ->
+// 0.7 at gh #407's 0.7 opener). Both halves are asserted on purpose: the
+// relative one keeps the row honest about *where* the value comes from, and the
+// literal is what catches a constant that silently stopped matching the line
+// this build actually implements.
 #[test]
 fn session_start_records_the_contract_abi_version() {
     let store = store("abi-version");
@@ -79,7 +85,7 @@ fn session_start_records_the_contract_abi_version() {
     match store.raw_start(&session).expect("start") {
         lca_protocol::Record::SessionStart { abi_version, .. } => {
             assert_eq!(abi_version, lca_ext_abi::ABI_VERSION);
-            assert_eq!(abi_version, "0.6");
+            assert_eq!(abi_version, "0.7");
         }
         other => panic!("not a session-start: {other:?}"),
     }

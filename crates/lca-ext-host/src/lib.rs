@@ -95,7 +95,14 @@ pub(crate) fn lock<T: ?Sized>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<
 
 /// The ABI lines this host loads: the current minor and the one before it
 /// (NFR-19).
-pub const SUPPORTED_ABI_WINDOW: &str = "0.5..=0.6, plus the 1.0 freeze line";
+///
+/// A **string**, and a literal, because thiserror's `#[error]` needs a named
+/// field to print - so it is the one place the window is written down twice
+/// (`abi_in_window` is the rule). It went stale across the 0.6 line and again
+/// before the 0.7 opener (`0.5..=0.6` was still here when the host accepted
+/// `0.7`), which is why a row now pins it to [`lca_ext_abi::ABI_VERSION`] by
+/// exact equality instead of trusting it.
+pub const SUPPORTED_ABI_WINDOW: &str = "0.6..=0.7, plus the 1.0 freeze line";
 
 /// Default per-call fuel for production hosts (gh #236). Measured
 /// 2026-10-10 against the shipped Antigravity component: a 12 KiB /
@@ -479,7 +486,7 @@ impl ExtHost {
         worlds
             .iter()
             .any(|declared| declared == world)
-            .then(|| construct(pre.clone()).map_err(|err| LoadError::Link(err.to_string())))
+            .then(|| construct(pre.clone()).map_err(LoadError::link))
             .transpose()
     }
 
@@ -558,8 +565,8 @@ impl ExtHost {
             None => env_grant::declared_env_from_process(manifest_text)?,
         };
         let engine = build_engine()?;
-        let component = wasmtime::component::Component::new(&engine, wasm)
-            .map_err(|err| LoadError::Link(err.to_string()))?;
+        let component =
+            wasmtime::component::Component::new(&engine, wasm).map_err(LoadError::link)?;
         let mut linker: HostLinker = Linker::new(&engine);
         // Gh #553: every `add_to_linker` below returns `Result` and reports a
         // duplicate definition - a programming error, but one that reached a
@@ -603,7 +610,7 @@ impl ExtHost {
         let declares_provider = declared.contains(&lca_ext_abi::World::Provider);
         let pre = linker
             .instantiate_pre(&component)
-            .map_err(|err| LoadError::Link(err.to_string()))?;
+            .map_err(LoadError::link)?;
         let hooks_message = Self::hooks_pre(
             &pre,
             &manifest.worlds,
@@ -654,55 +661,46 @@ impl ExtHost {
         )?;
         let tool = declared
             .contains(&lca_ext_abi::World::Tool)
-            .then(|| ToolPre::new(pre.clone()).map_err(|err| LoadError::Link(err.to_string())))
+            .then(|| ToolPre::new(pre.clone()).map_err(LoadError::link))
             .transpose()?;
         let tool_catalog = declared
             .contains(&lca_ext_abi::World::ToolCatalog)
             .then(|| {
                 lca_ext_abi::host::tool_catalog::ToolCatalogPre::new(pre.clone())
-                    .map_err(|err| LoadError::Link(err.to_string()))
+                    .map_err(LoadError::link)
             })
             .transpose()?;
         let command = declared
             .contains(&lca_ext_abi::World::Command)
             .then(|| {
-                lca_ext_abi::host::command::CommandPre::new(pre.clone())
-                    .map_err(|err| LoadError::Link(err.to_string()))
+                lca_ext_abi::host::command::CommandPre::new(pre.clone()).map_err(LoadError::link)
             })
             .transpose()?;
         let provider = declares_provider
-            .then(|| ProviderPre::new(pre.clone()).map_err(|err| LoadError::Link(err.to_string())))
+            .then(|| ProviderPre::new(pre.clone()).map_err(LoadError::link))
             .transpose()?;
         let hooks = declared
             .contains(&lca_ext_abi::World::Hooks)
-            .then(|| {
-                lca_ext_abi::host::hooks::HooksPre::new(pre.clone())
-                    .map_err(|err| LoadError::Link(err.to_string()))
-            })
+            .then(|| lca_ext_abi::host::hooks::HooksPre::new(pre.clone()).map_err(LoadError::link))
             .transpose()?;
         let compaction = declared
             .contains(&lca_ext_abi::World::Compaction)
-            .then(|| {
-                CompactionPre::new(pre.clone()).map_err(|err| LoadError::Link(err.to_string()))
-            })
+            .then(|| CompactionPre::new(pre.clone()).map_err(LoadError::link))
             .transpose()?;
         let context_transform = declared
             .contains(&lca_ext_abi::World::ContextTransform)
-            .then(|| {
-                ContextTransformPre::new(pre.clone())
-                    .map_err(|err| LoadError::Link(err.to_string()))
-            })
+            .then(|| ContextTransformPre::new(pre.clone()).map_err(LoadError::link))
             .transpose()?;
         let serve_http = declared
             .contains(&lca_ext_abi::World::ServeHttp)
             .then(|| {
                 lca_ext_abi::host::serve_http::ServeHttpPre::new(pre.clone())
-                    .map_err(|err| LoadError::Link(err.to_string()))
+                    .map_err(LoadError::link)
             })
             .transpose()?;
         let ui = declared
             .contains(&lca_ext_abi::World::Ui)
-            .then(|| UiPre::new(pre).map_err(|err| LoadError::Link(err.to_string())))
+            .then(|| UiPre::new(pre).map_err(LoadError::link))
             .transpose()?;
 
         Ok(WasmExtension {

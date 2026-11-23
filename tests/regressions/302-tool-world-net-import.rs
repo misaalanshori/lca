@@ -21,12 +21,20 @@
 //! artifacts*, because the host satisfies every import whether the guest calls
 //! it or not (the rule established for `tools` in gh #77). That distinction is
 //! the whole claim, so it is proven here rather than asserted: a component
-//! built before the import still loads and runs.
+//! built before the import loads and runs.
+//!
+//! **That was true within the 0.6 line, and this file's first two rows proved it
+//! on `tool-legacy`'s committed component.** The 0.7 opener (gh #407) renamed the
+//! WIT package, so a 0.6-built component no longer links; the claim is now
+//! scoped to artifacts built against the same line, and the frozen 0.6 build is
+//! kept as the witness for what a line move does (`tests/data/abi-0.6/`).
+//! Without a witness for that, "rebuilt against the same line" would be an
+//! unstated precondition of the rows below.
 //!
 //! ## What this guard pins
 //!
-//! 1. **Old-guest compatibility.** A committed fixture whose component predates
-//!    the import loads and executes.
+//! 1. **A line move is admitted by the window and refused at link**, with the
+//!    rebuild advice - the honest successor to "an old guest still loads".
 //! 2. **The matrix.** Granted host, denied host and unlisted host each produce
 //!    the same answer in WASM and native mode against one mock — because both
 //!    halves run the *same* pipeline over a `NetView` their mode supplies
@@ -39,21 +47,25 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 
-use lca_ext_abi::ExtensionDispatch as _;
 use std::sync::{Arc, Mutex};
 
 /// The conformance package's manifest: it declares `net` with a host list,
 /// which is what makes the granted-row meaningful.
 const MANIFEST: &str = include_str!("../../extensions/conformance/extension.toml");
 
-/// The fixture built **before** the `net` import existed on the tool world.
-///
-/// `extensions/tool-legacy` is the single-tool guest kept precisely as a
-/// pre-import artifact (gh #77's precedent for `tools`); it is the honest
-/// witness for "an old component still loads", because it was built against a
-/// `tool` world that had no network at all.
+/// The current-line single-tool guest: one `get-schema` plus `run`, no
+/// `tool-catalog` world, no capabilities in its manifest. It is rebuilt with the
+/// tree (`extensions/tool-legacy`, kept as the pre-catalog shape's reference),
+/// and its manifest is what the capability row below reads.
 const LEGACY: &[u8] = include_bytes!("../../extensions/tool-legacy/fixtures/component.wasm");
 const LEGACY_MANIFEST: &str = include_str!("../../extensions/tool-legacy/extension.toml");
+
+/// A **0.6-built** copy of the same guest, frozen before the 0.7 opener
+/// (`tests/data/abi-0.6/README.md`). This is the artifact the old rows used, and
+/// it is kept because what it proves changed, not because it is still useful as
+/// a load target.
+const FROZEN_0_6: &[u8] = include_bytes!("../data/abi-0.6/tool-legacy.wasm");
+const FROZEN_0_6_MANIFEST: &str = include_str!("../data/abi-0.6/tool-legacy.manifest.toml");
 
 struct Allow;
 impl lca_permissions::PermissionPrompt for Allow {
@@ -118,30 +130,37 @@ fn host(
 }
 
 // ---------------------------------------------------------------------------
-// 1. Additivity: an old guest without the import still loads and runs
+// 1. What a line move does to the old artifact this file used to load
 // ---------------------------------------------------------------------------
 
-/// **The claim the word "additive" rests on.** `tool-legacy` was built against
-/// a `tool` world with no `net` import. If adding the import broke old
-/// artifacts, this would fail to link — and everything downstream of it would
-/// be a missing-feature bug in every installed tool extension at once.
+/// **The successor to the claim the word "additive" rested on.** `tool-legacy`'s
+/// 0.6 component was the witness that adding an import does not break an old
+/// guest, because the host satisfies imports the guest never calls. Opening the
+/// 0.7 line renames the package, so that witness now fails to link - and the
+/// failure is the point: it is admitted by the manifest window and refused at
+/// link with the fix named.
 #[test]
-fn a_tool_guest_built_before_the_net_import_still_loads_and_runs() {
-    let (mut host, _asked) = host("legacy");
-    let extension = host.load(LEGACY, LEGACY_MANIFEST).unwrap_or_else(|err| {
-        panic!(
-            "a tool-world guest built before the net import must still load (gh #302's \
-             additivity claim): {err}"
-        )
-    });
-    assert_eq!(extension.name(), "tool-legacy");
-    assert!(extension.is_enabled(), "and it comes up enabled");
-    // It runs, not merely loads: the world's exports are still satisfiable.
-    let specs = extension.tool_specs().expect("its schema still reads");
+fn a_tool_guest_built_for_the_previous_line_is_admitted_then_refused_legibly() {
+    let declaration =
+        lca_ext_host::Manifest::parse(FROZEN_0_6_MANIFEST).expect("the 0.6 manifest parses");
     assert!(
-        !specs.is_empty(),
-        "the old guest still registers its tool: {specs:?}"
+        declaration.abi_in_window(),
+        "the window admits an installed 0.6 extension (NFR-19), which is what makes the \
+         link refusal legible rather than a manifest rejection"
     );
+    let (mut host, _asked) = host("legacy");
+    let err = match host.load(FROZEN_0_6, FROZEN_0_6_MANIFEST) {
+        Ok(_) => panic!("a 0.6-built component cannot link on a 0.7 host"),
+        Err(err) => err,
+    };
+    let text = err.to_string();
+    assert!(
+        text.contains("Rebuild it"),
+        "the refusal says what to do about it: {text}"
+    );
+    // And the guest would still be the same shape if it *were* rebuilt: the
+    // crate's current fixture loads and serves its one tool, which is the row
+    // below's job.
 }
 
 // ---------------------------------------------------------------------------

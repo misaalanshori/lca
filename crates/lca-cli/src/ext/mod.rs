@@ -119,7 +119,7 @@ mod tests {
 
     const VALID: &str = r#"name = "word-count"
 version = "1.0.0"
-abi = "0.5"
+abi = "0.6"
 worlds = ["tool"]
 description = "Counts words."
 
@@ -135,7 +135,7 @@ workspace = "read"
             parse_manifest_strict(VALID).expect("valid manifest parses");
         assert_eq!(name, "word-count");
         assert_eq!(version, "1.0.0");
-        assert_eq!(abi, "0.5");
+        assert_eq!(abi, "0.6");
         assert_eq!(description, "Counts words.");
     }
 
@@ -177,15 +177,18 @@ redirect_path = "/callback"
     // an artifact this host can never run is refused up front.
     #[test]
     fn an_out_of_window_abi_is_refused() {
-        let err = parse_manifest_strict(&VALID.replace("abi = \"0.5\"", "abi = \"9.9\""))
+        let err = parse_manifest_strict(&VALID.replace("abi = \"0.6\"", "abi = \"9.9\""))
             .expect_err("out-of-window ABI refused");
         assert!(
             err.to_string()
                 .contains("outside this host's supported window"),
             "{err}"
         );
+        // Both accepted lines, from the window rather than from literals: this
+        // assertion said `0.5`/`0.6` and went stale at the 0.7 opener, which is
+        // exactly the failure mode a literal pair has.
         assert!(
-            err.to_string().contains("0.5") && err.to_string().contains("0.6"),
+            err.to_string().contains("0.6") && err.to_string().contains("0.7"),
             "the refusal names the accepted lines: {err}"
         );
     }
@@ -253,7 +256,7 @@ redirect_path = "/callback"
         std::fs::create_dir_all(pkg.join("resources/skills/demo")).expect("mkdir");
         std::fs::write(
             pkg.join("extension.toml"),
-            "name = \"demo-pack\"\nversion = \"1.0.0\"\nabi = \"0.5\"\nworlds = []\nresources = [\"skills\"]\n",
+            "name = \"demo-pack\"\nversion = \"1.0.0\"\nabi = \"0.6\"\nworlds = []\nresources = [\"skills\"]\n",
         )
         .expect("manifest");
         let skill = pkg.join("resources/skills/demo/SKILL.md");

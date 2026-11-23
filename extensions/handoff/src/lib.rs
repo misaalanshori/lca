@@ -277,7 +277,7 @@ mod wasm_mode {
         world: "command",
         export_macro_name: "export_handoff",
         with: {
-            "lca:host/ui-dialogs@0.6.0": generate,
+            "lca:host/ui-dialogs@0.7.0": generate,
         },
     });
 

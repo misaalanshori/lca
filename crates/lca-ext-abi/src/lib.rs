@@ -10,15 +10,22 @@
 /// The ABI version this build implements (`major.minor`, per the manifest's
 /// `abi` field and the support window in `docs/abi-versioning.md`).
 ///
-/// `0.6` is the line the 0.6 release train carries, and the label no longer
-/// tracks the product minor: since the 2026-10-05 owner annotation it bumps only on a
-/// real breaking change, so `lca 0.6.x` ships `abi 0.6` for the whole line
-/// (`docs/abi-versioning.md`). Breaking changes still land **inside** the line under
-/// ADR-0028's development window - each with its own dated annotation there - which is
-/// why the value below can be `0.6` while `wit/` advertises `@0.6.0`. This comment
-/// previously said `0.4` and listed the 0.2 train's breaking items (gh #339 finding 8):
-/// two release trains stale, in the constant that decides what loads.
-pub const ABI_VERSION: &str = "0.6";
+/// `0.7` is the line this build opens. The label no longer tracks the product
+/// minor - since the 2026-10-05 owner annotation it moves only for a real
+/// interface change - and the 2026-10-08 freeze makes that stricter still: a
+/// **released** line is frozen, so the next WIT addition opens the next line
+/// rather than riding a patch. gh #407's `ui-dialogs.questionnaire` is that
+/// addition, which is why this reads `0.7` while `wit/` advertises `@0.7.0`.
+///
+/// Nothing special-cases the previous line here: [`abi_in_window`] already
+/// answers "current and the one before it", so `abi = "0.6"` components keep
+/// loading on a 0.7 host with no code change - the window is the rule, not a
+/// constant per line. Read that function's comment for why 1.0 stays amnestied.
+///
+/// This comment has been stale twice (gh #339 finding 8: it said `0.4` and
+/// listed the 0.2 train's items, two release trains behind, in the constant that
+/// decides what loads), so it names the change that moved it.
+pub const ABI_VERSION: &str = "0.7";
 
 /// The WIT package name that crosses every manifest and registry tag.
 pub const PACKAGE: &str = "lca:ext";
@@ -28,6 +35,14 @@ pub const PACKAGE: &str = "lca:ext";
 /// line while the 0.x development window is open. The single source
 /// for the window rule; the host's manifest check and the catalog
 /// filter both answer through it.
+///
+/// The window is *relative* to [`ABI_VERSION`] on purpose: a line move
+/// (`0.6` → `0.7`) needs no edit here, and a hard-coded pair would be the
+/// second place to forget. Its two edges: the previous line is accepted only
+/// while the current minor is above zero (`0.x` is the development window;
+/// `1.0` is the freeze), and `1.0` itself is accepted for the whole `0.x`
+/// window because an extension installed against the 1.0-freeze host declares
+/// it - the same amnesty the pre-freeze 0.1 line had on a 1.0 host.
 pub fn abi_in_window(declared: &str) -> bool {
     fn parse_abi(value: &str) -> Option<(u64, u64)> {
         let (major, minor) = value.split_once('.')?;

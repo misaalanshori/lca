@@ -1,4 +1,4 @@
-package lca:ext@0.6.0;
+package lca:ext@0.7.0;
 
 /// The `hooks-settle` world: actionable `turn_end` and
 /// `agent_before_settle` (gh #45, pi's 0.87 pair). A handler may
@@ -7,7 +7,7 @@ package lca:ext@0.6.0;
 /// agent. Opt-in by declaring it in the manifest; the six-point
 /// `hooks` world's observe-only `post-turn-end` is unchanged.
 world hooks-settle {
-  import lca:host/log@0.6.0;
+  import lca:host/log@0.7.0;
   export hook-turn-end;
   export hook-agent-before-settle;
 }

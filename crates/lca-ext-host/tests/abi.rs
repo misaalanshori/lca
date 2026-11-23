@@ -27,6 +27,21 @@ fn the_window_accepts_the_current_and_previous_minor_only() {
         SUPPORTED_ABI_WINDOW.contains('.'),
         "the window announces itself as a range: {SUPPORTED_ABI_WINDOW}"
     );
+    // The announcement is a literal (thiserror needs a named field), so it is
+    // the one place the window is written twice. Pinned by **exact** equality:
+    // it still said `0.5..=0.6` while `abi_in_window` accepted `0.7`, and a
+    // `contains` check would have kept saying so.
+    assert_eq!(
+        SUPPORTED_ABI_WINDOW,
+        format!(
+            "{}.{}..={}.{}, plus the 1.0 freeze line",
+            major,
+            minor - 1,
+            major,
+            minor
+        ),
+        "the announced window matches the rule's current line"
+    );
 
     // Current line: loads.
     assert!(
@@ -89,9 +104,81 @@ fn a_stale_line_is_refused_legibly_at_the_manifest_check() {
     };
     let text = err.to_string();
     assert!(text.contains(&stale), "names the declared line: {text}");
+    // Both accepted lines, derived from the window rather than written down:
+    // a literal pair reddens on every line move while saying nothing the rule
+    // does not (this row's literals were `0.5`/`0.6` before the 0.7 opener).
+    let accepted: Vec<&str> = SUPPORTED_ABI_WINDOW.split("..=").collect();
+    assert_eq!(
+        accepted.len(),
+        2,
+        "the window is a range: {SUPPORTED_ABI_WINDOW}"
+    );
+    for line in accepted {
+        assert!(
+            text.contains(line),
+            "names the accepted line {line}: {text}"
+        );
+    }
+}
+
+// Verifies: gh #407's line move - **the window is about manifests, and a
+// component built for the previous line does not link.** Opening a line renames
+// the WIT package (`lca:host@0.6.0` -> `lca:host@0.7.0`), and a component's type
+// names the versions it imports, so an older artifact fails at instantiation
+// with wasmtime's own sentence about a missing import instance. That sentence
+// names the mechanism and not the fix, so `LoadError::link` re-words it into
+// what the user can do. The two halves are pinned here: the real wasmtime text
+// (captured from this cycle's 0.6-built artifact) becomes guidance, and anything
+// that is not a foreign interface line passes through untouched - a genuine
+// defect must never be rewritten into advice about rebuilding.
+#[test]
+fn a_link_error_naming_an_older_interface_line_tells_the_author_to_rebuild() {
+    let raw = "component imports instance `lca:host/log@0.6.0`, but a matching \
+               implementation was not found in the linker";
+    let text = lca_ext_host::LoadError::link(raw).to_string();
     assert!(
-        text.contains("0.5") && text.contains("0.6"),
-        "names the accepted lines: {text}"
+        text.contains("built for interface line 0.6") && text.contains("Rebuild it"),
+        "the refusal names the line and the fix: {text}"
+    );
+    assert!(
+        text.contains(ABI_VERSION),
+        "and names this host's line, so the author knows what to rebuild against: {text}"
+    );
+    assert!(
+        text.contains("lca:host/log@0.6.0"),
+        "wasmtime's own sentence survives, because it names the exact interface: {text}"
+    );
+
+    // The exports side says the same thing with a different sentence.
+    let export = "no exported instance named `lca:ext/hook-message-end@0.5.0`";
+    let text = lca_ext_host::LoadError::link(export).to_string();
+    assert!(text.contains("interface line 0.5"), "{text}");
+    assert!(text.contains("Rebuild it"), "{text}");
+
+    // A failure that is not about a line keeps its own words: duplicate
+    // definitions, engine setup, a guest that is not a component at all.
+    for raw in [
+        "world imports: duplicate definition for `lca:host/log`",
+        "wasmtime engine setup failed: out of memory",
+        "component is not valid: missing export `execute`",
+    ] {
+        let text = lca_ext_host::LoadError::link(raw).to_string();
+        assert!(
+            text.contains(raw),
+            "a non-line failure is passed through unchanged: {text}"
+        );
+        assert!(
+            !text.contains("Rebuild it"),
+            "and gains no rebuild advice it did not earn: {text}"
+        );
+    }
+
+    // This host's own line is not foreign.
+    let ours = format!("component imports instance `lca:host/log@{ABI_VERSION}.0`");
+    let text = lca_ext_host::LoadError::link(&ours).to_string();
+    assert!(
+        !text.contains("Rebuild it"),
+        "a link failure on our own line is a defect, not a stale artifact: {text}"
     );
 }
 

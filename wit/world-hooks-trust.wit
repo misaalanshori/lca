@@ -1,4 +1,4 @@
-package lca:ext@0.6.0;
+package lca:ext@0.7.0;
 
 /// The `hooks-trust` world: `project_trust` (gh #45, pi's event).
 /// Consulted where the host would otherwise ask the operator whether
@@ -10,7 +10,7 @@ package lca:ext@0.6.0;
 /// newly opened project, `/trust`). Opt-in by declaring it in the
 /// manifest.
 world hooks-trust {
-  import lca:host/log@0.6.0;
+  import lca:host/log@0.7.0;
   export hook-project-trust;
 }
 

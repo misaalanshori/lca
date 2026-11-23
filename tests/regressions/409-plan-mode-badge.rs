@@ -73,9 +73,12 @@ fn the_badge_adds_no_region_and_no_widget_kind() {
     // it, so its absence is the proof the vocabulary sufficed.
     let wit = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/wit/types.wit"))
         .expect("the widget vocabulary is readable");
+    // The package line names the *current* ABI line, whatever it is: the claim
+    // is that this slice did not move it, not that it is a particular value
+    // (which went stale the moment the 0.7 line opened).
     assert!(
-        wit.contains("package lca:ext@0.6.0;"),
-        "the WIT package line is unchanged"
+        wit.contains(&format!("package lca:ext@{}.0;", lca_ext_abi::ABI_VERSION)),
+        "the WIT package line is unchanged by this slice"
     );
     for invented in ["plan-badge", "plan_badge", "hud"] {
         assert!(

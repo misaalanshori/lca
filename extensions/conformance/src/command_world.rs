@@ -3,7 +3,7 @@ wit_bindgen::generate!({
     world: "command",
     export_macro_name: "export_command",
     with: {
-        "lca:host/ui-dialogs@0.6.0": generate,
+        "lca:host/ui-dialogs@0.7.0": generate,
     },
 });
 

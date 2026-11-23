@@ -6,7 +6,9 @@
 
 use std::task::{Context, Poll};
 
-use lca_ext_abi::{ABI_VERSION, DeliveryMode, DispatchFuture, ExtensionDispatch, PACKAGE, World};
+use lca_ext_abi::{
+    ABI_VERSION, DeliveryMode, DispatchFuture, ExtensionDispatch, PACKAGE, World, abi_in_window,
+};
 use lca_protocol::{
     ChatMessage, CommandEffect, CommandSpec, DispatchError, EventSink, HookAction,
     PostToolObservation, Record, StreamEvent, ToolCall, ToolResult, ToolSpec,
@@ -124,6 +126,50 @@ fn the_package_name_and_abi_version_are_stable_shapes() {
         minor.parse::<u32>().is_ok(),
         "minor is numeric: {ABI_VERSION}"
     );
+}
+
+// Verifies: NFR-19's two special cases, read against whatever the current line
+// is. The window is relative (current minus one), so a line move needs no edit
+// here - but the two *edges* are absolute facts about the 0.x development
+// window and would not be visible in a purely relative reading, so they get
+// their own row.
+#[test]
+fn the_window_edges_are_the_development_window_and_the_one_before_it() {
+    // `1.0` is special: an extension installed against the 1.0-freeze host
+    // declares `1.0`, and it keeps loading for the whole 0.x window (the same
+    // amnesty the pre-freeze 0.1 line had on a 1.0 host). This is not "the line
+    // after 1.x" - it is a freeze snapshot, which is why it loads *below* the
+    // version it names.
+    assert!(abi_in_window("1.0"), "the 1.0 freeze line is amnestied");
+
+    // The previous line is accepted only while the current minor is above zero:
+    // that is the development window, and it is what makes `current - 1`
+    // meaningful at all.
+    let (major, minor) = ABI_VERSION
+        .split_once('.')
+        .unwrap_or_else(|| panic!("ABI_VERSION is `major.minor`, got {ABI_VERSION:?}"));
+    let major: u32 = major.parse().unwrap_or_else(|_| panic!("{ABI_VERSION}"));
+    let minor: u32 = minor.parse().unwrap_or_else(|_| panic!("{ABI_VERSION}"));
+    assert!(minor > 0, "0.x is the development window: {ABI_VERSION}");
+    let previous = format!("{major}.{}", minor - 1);
+    assert!(abi_in_window(&previous), "{previous} is the previous line");
+    assert!(
+        !abi_in_window(&format!("{major}.{}", minor + 1)),
+        "a line from the future does not load"
+    );
+
+    // And the major rules: `1.0` is amnestied, `1.1` is not, and a component
+    // declaring a major this line is not part of does not load. (`1.0` is
+    // deliberately *not* derived as `major + 1`: for a 0.x host that is exactly
+    // the amnestied snapshot, which is the point of the assertion above.)
+    let _ = major;
+    assert!(!abi_in_window("1.1"), "only the 1.0 snapshot is amnestied");
+    assert!(
+        !abi_in_window("2.0"),
+        "a different major is a different line"
+    );
+    assert!(!abi_in_window("9.9"));
+    assert!(!abi_in_window("garbage"), "garbage is not a line");
 }
 
 // Verifies: FR-EXT-7 (the list labels native and sandboxed deliveries).

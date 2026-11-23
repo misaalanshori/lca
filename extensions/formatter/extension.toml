@@ -1,6 +1,6 @@
 name = "formatter"
 version = "0.1.0"
-abi = "0.6"
+abi = "0.7"
 worlds = ["hooks-tool-result", "command"]
 description = "Automatically formats files modified by edit and write tool calls."
 

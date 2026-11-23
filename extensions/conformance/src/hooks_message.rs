@@ -3,7 +3,7 @@ wit_bindgen::generate!({
     world: "hooks-message",
     export_macro_name: "export_hooks_message",
     with: {
-        "lca:host/log@0.6.0": generate,
+        "lca:host/log@0.7.0": generate,
     },
 });
 

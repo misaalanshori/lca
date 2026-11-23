@@ -633,3 +633,90 @@ pub enum LoadError {
     #[error("cannot link extension: {0}")]
     Link(String),
 }
+
+impl LoadError {
+    /// A link or instantiation failure, re-worded when the cause is the
+    /// **interface line** the component was built for rather than this host's.
+    ///
+    /// Opening a line renames the WIT package (`lca:host@0.6.0` ->
+    /// `lca:host@0.7.0`), and a component's type names the versions it imports
+    /// and exports. A component built for the previous line therefore fails to
+    /// link with wasmtime's own sentence - "component imports instance
+    /// `lca:host/log@0.6.0`, but a matching implementation was not found in the
+    /// linker" - which names the mechanism and not the fix. The fix is one
+    /// thing, so the copy says it (AGENTS.md's rule: error text tells the user
+    /// what to **do**). Anything that does not name a foreign line passes
+    /// through unchanged, including every failure that is a real defect.
+    ///
+    /// A note on what this cannot say: the host cannot tell whether the guest's
+    /// *behaviour* is stale, only that its interface identity is, so the
+    /// message never claims the extension is broken - a rebuild may still be
+    /// enough, and a world it declares is checked by the load itself.
+    pub fn link(err: impl std::fmt::Display) -> LoadError {
+        let raw = err.to_string();
+        let ours = lca_ext_abi::ABI_VERSION;
+        let rebuild = |cause: &str| {
+            LoadError::Link(format!(
+                "{cause} Rebuild it against this host's `wit/` \
+                 (docs/extension-authoring.md, `Getting wit/`) and declare `abi = \"{ours}\"`. \
+                 Opening a line renames the WIT package, so a component built for an older \
+                 line does not simply keep linking. wasmtime: {raw}"
+            ))
+        };
+        if let Some(line) = foreign_interface_line(&raw) {
+            // The import side: wasmtime names the instance the *component* wants.
+            return rebuild(&format!(
+                "this extension was built for interface line {line} and this host provides \
+                 {ours}, so its imported interfaces cannot be satisfied."
+            ));
+        }
+        if raw.contains(MISSING_EXPORT) && raw.contains("lca:") {
+            // The export side: wasmtime names the instance the *host* looked for,
+            // which is this host's own line - so it reads as "a new host is
+            // missing something" unless the cause is spelled out. It is the same
+            // cause (a different `wit/`), reached from the other direction.
+            return rebuild(&format!(
+                "this extension exports none of this host's interface line {ours}, so it was \
+                 built against a different `wit/` - an older line, or a world set this host \
+                 does not provide."
+            ));
+        }
+        LoadError::Link(raw)
+    }
+}
+
+/// wasmtime's wording when a component exports no instance with the name the
+/// host asked for. Matched as a phrase rather than parsed: it is the engine's
+/// sentence, and [`LoadError::link`] only uses it to choose the *cause* wording -
+/// never to decide that a load succeeded.
+const MISSING_EXPORT: &str = "no exported instance named";
+
+/// The first `lca:ext`/`lca:host` interface line named in `text` that is not
+/// this host's current one.
+///
+/// Hand-written scanning rather than a regex: the tokens are
+/// `lca:host/log@0.6.0` or `lca:ext/render@0.6.0`, the string is wasmtime's,
+/// and a dependency for eight lines of parsing would be the bigger cost. A
+/// token with no `@major.minor.patch` is not an interface line and is skipped,
+/// so nothing but a real version match can rewrite a message.
+fn foreign_interface_line(text: &str) -> Option<String> {
+    text.match_indices("lca:").find_map(|(at, _)| {
+        let tail = &text[at + 4..];
+        let end = tail
+            .find(|ch: char| {
+                ch.is_whitespace() || ch == '\'' || ch == '"' || ch == '`' || ch == ',' || ch == ';'
+            })
+            .unwrap_or(tail.len());
+        let (_, version) = tail[..end].rsplit_once('@')?;
+        let parts: Vec<&str> = version.split('.').collect();
+        if parts.len() != 3
+            || !parts
+                .iter()
+                .all(|part| !part.is_empty() && part.chars().all(|ch| ch.is_ascii_digit()))
+        {
+            return None;
+        }
+        let line = format!("{}.{}", parts[0], parts[1]);
+        (line != lca_ext_abi::ABI_VERSION).then_some(line)
+    })
+}

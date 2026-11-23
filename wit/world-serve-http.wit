@@ -1,4 +1,4 @@
-package lca:ext@0.6.0;
+package lca:ext@0.7.0;
 
 /// The `serve-http` world: answer HTTP requests the *host* accepted (gh
 /// #363, ADR-0049).
@@ -15,7 +15,7 @@ package lca:ext@0.6.0;
 /// calls nothing the host must gate: the grant *is* the permission to be
 /// asked. `log` is imported because every world carries it.
 world serve-http {
-  import lca:host/log@0.6.0;
+  import lca:host/log@0.7.0;
   export handler;
 }
 

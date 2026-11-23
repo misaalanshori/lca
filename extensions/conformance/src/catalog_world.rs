@@ -3,14 +3,14 @@ wit_bindgen::generate!({
     world: "tool-catalog",
     export_macro_name: "export_tool_catalog",
     with: {
-        "lca:host/log@0.6.0": generate,
-        "lca:host/fs@0.6.0": generate,
-        "lca:host/process@0.6.0": generate,
-        "lca:host/pty@0.6.0": generate,
-        "lca:host/ui-dialogs@0.6.0": generate,
-        "lca:host/resources@0.6.0": generate,
-        "lca:host/state@0.6.0": generate,
-        "lca:host/tools@0.6.0": generate,
+        "lca:host/log@0.7.0": generate,
+        "lca:host/fs@0.7.0": generate,
+        "lca:host/process@0.7.0": generate,
+        "lca:host/pty@0.7.0": generate,
+        "lca:host/ui-dialogs@0.7.0": generate,
+        "lca:host/resources@0.7.0": generate,
+        "lca:host/state@0.7.0": generate,
+        "lca:host/tools@0.7.0": generate,
     },
 });
 

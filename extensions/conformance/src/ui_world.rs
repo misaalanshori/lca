@@ -3,11 +3,11 @@ wit_bindgen::generate!({
     world: "ui",
     export_macro_name: "export_ui",
     with: {
-        "lca:host/log@0.6.0": generate,
-        "lca:host/ui@0.6.0": generate,
-        "lca:host/ui-dialogs@0.6.0": generate,
-        "lca:host/resources@0.6.0": generate,
-        "lca:host/state@0.6.0": generate,
+        "lca:host/log@0.7.0": generate,
+        "lca:host/ui@0.7.0": generate,
+        "lca:host/ui-dialogs@0.7.0": generate,
+        "lca:host/resources@0.7.0": generate,
+        "lca:host/state@0.7.0": generate,
     },
 });
 

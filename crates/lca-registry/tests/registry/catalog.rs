@@ -102,6 +102,12 @@ fn catalog_merging_marks_every_provenance() {
 
 // Verifies: #227 - ABI filtering follows the host window: current and
 // previous minors load, older lines and garbage do not.
+//
+// The two lines are **derived** from the contract's current one rather than
+// written down: the row is about the rule ("current and the one before"), and a
+// literal pair would redden on every line move without telling anyone anything
+// the rule does not. The 1.0 amnesty is asserted by name because it is a
+// special case, not a relative one.
 #[test]
 fn catalog_abi_filtering_follows_the_host_window() {
     let entry = |abi: &str| lca_registry::CatalogEntry {
@@ -113,13 +119,22 @@ fn catalog_abi_filtering_follows_the_host_window() {
         oci_ref: String::new(),
         capabilities: Vec::new(),
     };
-    for abi in ["0.6", "0.5", "1.0"] {
+    let (major, minor) = lca_ext_abi::ABI_VERSION
+        .split_once('.')
+        .and_then(|(major, minor)| Some((major, minor.parse::<u32>().ok()?)))
+        .expect("the contract states `major.minor`");
+    let current = format!("{major}.{minor}");
+    let previous = format!("{major}.{}", minor - 1);
+    let two_back = format!("{major}.{}", minor - 2);
+    let next = format!("{major}.{}", minor + 1);
+    for abi in [current.as_str(), previous.as_str(), "1.0"] {
         assert!(
             lca_registry::abi_supported(&entry(abi)),
             "{abi} loads on this host"
         );
     }
-    for abi in ["0.4", "0.7", "1.1", "nope", ""] {
+    let refused = [two_back.as_str(), next.as_str(), "1.1", "nope", ""];
+    for abi in refused {
         assert!(
             !lca_registry::abi_supported(&entry(abi)),
             "{abi} is filtered out"

@@ -1,6 +1,13 @@
 # Changelog
 
-## 0.6 development window — gh #407: `ui-dialogs` gains the tabbed questionnaire
+## 0.7 line — gh #407: `ui-dialogs` gains the tabbed questionnaire
+
+**This change opens the 0.7 line.** The 0.6 line was frozen for interface
+changes on 2026-10-08 (`docs/abi-versioning.md`), and the freeze says the next
+WIT addition opens the next line with its own annotation — so the package
+version moves `0.6.0` → `0.7.0` and every manifest rebuilt against this `wit/`
+declares `abi = "0.7"`. The label moves; the support window does not shrink:
+0.6 components keep loading on a 0.7 host (current line plus the one before).
 
 One function and two records added to a host import interface:
 
@@ -23,13 +30,16 @@ questionnaire: func(title: string, questions: list<question>) -> result<option<l
 
 **Breaking for the contract, additive for old artifacts.** A guest rebuilt
 against this `wit/` sees the new function and records on
-`lca:host/ui-dialogs@0.6.0` — the interface it already imports — so a guest
+`lca:host/ui-dialogs@0.7.0` — the interface it already imports — so a guest
 that wants the questionnaire has to be rebuilt, and one that does not is
 untouched. A component built *before* this line imports the same interface and
 never calls the new member, which the host satisfies whether or not it is
 called (the rule `tools` established in gh #77 and `net` repeated in gh #302);
 `tests/regressions/407-questionnaire-abi.rs` loads such a component and drives
-its tool, so the claim is proven rather than asserted.
+its tool, so the claim is proven rather than asserted. That argument is about
+**link** compatibility, and it is why the *window* keeps 0.6 artifacts loading;
+it is not what decides which line a change belongs to — the freeze does, and
+the freeze is why this is 0.7 rather than a quiet addition to a released 0.6.
 
 **Why:** today a model asking three clarifications costs three sequential host
 pickers - `extensions/question`'s `ask_all` loops `select`/`input` once per
@@ -40,8 +50,12 @@ before it fires, and an inline "type your own" editor per tab. The chrome stays
 the host's (an extension still never draws a modal, `docs/extension-authoring.md`
 §dialogs), so the spoof-proofing does not change with the answer count.
 
-**No label bump.** This is an in-place window addition (ADR-0028); `lca 0.6.x`
-ships `abi 0.6`.
+**What an author must do:** rebuild against the new `wit/` and declare
+`abi = "0.7"`. No other source change is needed for any world — every export in
+every `world-*.wit` is byte-identical to 0.6's; the only interface change is the
+one recorded here, and it is an addition to a host import. An extension that
+declares `abi = "0.6"` keeps loading on a 0.7 host (the window) but cannot use
+`questionnaire`.
 
 ## 0.6 development window — gh #302: the `tool` world imports `net`
 

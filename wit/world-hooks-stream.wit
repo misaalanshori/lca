@@ -1,4 +1,4 @@
-package lca:ext@0.6.0;
+package lca:ext@0.7.0;
 
 /// The `hooks-stream` world: `provider_stream_event` observation
 /// (gh #45, pi's `provider_stream_event`). The host's events are the
@@ -9,7 +9,7 @@ package lca:ext@0.6.0;
 /// the stream closes: observation never steers or stalls a live
 /// stream. Opt-in by declaring it in the manifest.
 world hooks-stream {
-  import lca:host/log@0.6.0;
+  import lca:host/log@0.7.0;
   export hook-stream-event;
 }
 

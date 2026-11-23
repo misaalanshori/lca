@@ -96,7 +96,7 @@ fn limits() -> ExtensionLimits {
 
 fn manifest_with(caps: &str) -> String {
     format!(
-        "name = \"conformance\"\nversion = \"0.1.0\"\nabi = \"0.5\"\nworlds = [\"tool\"]\n{caps}"
+        "name = \"conformance\"\nversion = \"0.1.0\"\nabi = \"0.6\"\nworlds = [\"tool\"]\n{caps}"
     )
 }
 

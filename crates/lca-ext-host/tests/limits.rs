@@ -252,7 +252,10 @@ fn a_component_with_limits_instantiates_and_runs_a_call() {
     // code ignored `[limits]` entirely and the host defaults hid the
     // arithmetic bug. Declaring a capability takes the parse path that did
     // run, so this row isolates the unit defect (gh #287 #1).
-    let manifest = "name = \"conformance\"\nversion = \"0.1.0\"\nabi = \"0.5\"\nworlds = [\"tool\"]\n\n[capabilities.completion]\nreason = \"Summarizes older parts of the conversation.\"\n\n[limits]\nmemory_mb = 64\nfuel_per_call = 100000000\n";
+    // `abi = "0.6"` on purpose: the previous line is inside the window, so this
+    // row keeps loading a manifest that is not the current line's - which is
+    // what most installed manifests are right after a line move.
+    let manifest = "name = \"conformance\"\nversion = \"0.1.0\"\nabi = \"0.6\"\nworlds = [\"tool\"]\n\n[capabilities.completion]\nreason = \"Summarizes older parts of the conversation.\"\n\n[limits]\nmemory_mb = 64\nfuel_per_call = 100000000\n";
     let extension = host
         .load(FIXTURE, manifest)
         .expect("a manifest with [limits] and [capabilities] loads");

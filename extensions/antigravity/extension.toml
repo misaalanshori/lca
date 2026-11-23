@@ -1,6 +1,6 @@
 name = "antigravity"
 version = "1.0.1"
-abi = "0.6"
+abi = "0.7"
 worlds = ["provider"]
 description = "Google Antigravity's Gemini and Claude models, via subscription login."
 
