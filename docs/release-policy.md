@@ -10,7 +10,7 @@ Three things version independently, and conflating them causes confusion that is
 
 The agent version is what `lca --version` reports first and what a user names in a bug report. It covers the binary and everything in it.
 
-The ABI version governs the extension interface. It moves slowly. It froze at 1.0 in Phase 8, that freeze was reopened by the ADR-0028 development window, and it freezes for good at product 1.0. On the 0.x line its label tracks the product minor (`0.x.y` ships `abi 0.x`); the numbers join at 1.0 and stay joint for majors afterward. See the ABI versioning policy.
+The ABI version governs the extension interface. It moves slowly. It froze at 1.0 in Phase 8, that freeze was reopened by the ADR-0028 development window, and it freezes for good at product 1.0. **The label does not track the product minor** (the 2026-10-05 owner annotation in the versioning policy superseded that): it moves only for a real interface change, and a *released* line is frozen, so the next interface change opens the next line instead of riding a patch. That is why `lca 0.6.x` ships `abi 0.7`: the questionnaire opened the 0.7 line (`docs/abi-versioning.md`, 2026-11-23 annotation), the numbers join at 1.0, and they stay joint for majors afterward. See the ABI versioning policy.
 
 Crate versions govern the workspace crates. Only `lca-ext-abi` is published to a registry, so only it needs a version an outsider reads. The others carry the workspace version and move together.
 

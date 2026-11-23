@@ -356,10 +356,10 @@ gh attestation verify ./lca --repo misaalanshori/lca
 ```
 
 Extensions publish to `ghcr.io` under an immutable version tag and a moving
-ABI-line tag (`abi-0.6`), and load by digest afterwards:
+ABI-line tag (`abi-0.7`), and load by digest afterwards:
 
 ```sh
-lca ext install ghcr.io/misaalanshori/lca/antigravity:abi-0.6
+lca ext install ghcr.io/misaalanshori/lca/antigravity:abi-0.7
 ```
 
 Versioning, the artifact matrix, the gate list, and the manual release gate

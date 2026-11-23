@@ -38,9 +38,13 @@ you copy it next to your crate and point `wit_bindgen::generate!` at the path.
 Two facts decide which copy to take.
 
 **The package line names the ABI line, not the release.** Every `wit/*.wit` starts
-`package lca:ext@0.6.0;`, and the host's line is `0.6` (`ABI_VERSION` in
-`crates/lca-ext-abi`). Manifest `abi = "0.6"`. A patch release does not move
-this: `docs/abi-versioning.md` bumps the label only on a real interface break.
+`package lca:ext@0.7.0;`, and the host's line is `0.7` (`ABI_VERSION` in
+`crates/lca-ext-abi`). Manifest `abi = "0.7"`. A patch release does not move
+this: `docs/abi-versioning.md` moves the label only for a real interface change,
+and a **released line is frozen**, so the next interface change opens the next
+line. The 0.7 line opened exactly that way (the `ui-dialogs` questionnaire), and
+`v0.6.0`'s snapshot is 0.6 and stays 0.6 — vendoring that tag gives you a 0.6
+contract, which a 0.7 host accepts by manifest but cannot link without a rebuild.
 
 **A release tag is a snapshot, so its `wit/` can lag the line.** Publishing a
 release does not rewrite `wit/`, and the extras imported since the last tag are
@@ -70,7 +74,7 @@ Confirm it before you write code against it:
 
 ```
 wasm-tools component wit wit/ | head -1
-# package lca:ext@0.6.0;
+# package lca:ext@0.7.0;
 ```
 
 If you are targeting the moving line rather than a release, clone the default branch
@@ -83,7 +87,7 @@ the `grep` above tells you which you have. Do not reach for the repository's
 ### Why not `wkg get`
 
 Earlier revisions of this guide told you to run
-`wkg get lca:ext@0.6.0 --format wit --output wit/`. **Nothing serves that
+`wkg get lca:ext@0.7.0 --format wit --output wit/`. **Nothing serves that
 package.** No registry is named anywhere in this repository, and the release
 pipeline publishes built *components* to `ghcr.io/misaalanshori/lca/<name>` —
 never the WIT package itself. The command resolves against the default registry
@@ -151,7 +155,7 @@ model; `execute`'s `run` does the work. Both are exported *interfaces*, so the
 
 Two details will stop you if you do not know them. The `lca:host/*` imports must
 be mapped to `generate` in the `with:` block — without it the macro refuses with
-`missing 'with' mapping for the key lca:host/log@0.6.0`, because it will not
+`missing 'with' mapping for the key lca:host/log@0.7.0`, because it will not
 guess whether you want the generated bindings or your own. **Map exactly the
 imports your `wit/` declares, no more and no fewer**: an extra entry is refused
 with `unused remappings provided via 'with'`, which is what happens if you copy
@@ -164,23 +168,27 @@ grep -h 'import lca:host' wit/world-tool.wit
 And `ToolResult` is a plain record (`call-id`, `status`, `content`,
 `truncated`, `extras`), not a constructor: there is no `ToolResult::text`.
 
-The block below matches the imports in the `v0.6.0` tag's `wit/`, which is the
-snapshot the vendoring command above produces. If you cloned the default branch
-instead, it declares one more (`lca:host/net@0.6.0`) — add that line.
+The block below matches the imports on the **current line**, which is what cloning
+the default branch gives you. If you vendored a release tag instead, compare it
+against `grep -h 'import lca:host' wit/world-tool.wit`: a 0.6-era tag declares no
+`lca:host/net` line and its keys read `@0.6.0`. The keys must match the version
+your `wit/` advertises — a mapping spelled `@0.6.0` against a 0.7 `wit/` is
+refused, and so is one for an interface that world does not import.
 
 ```rust
 wit_bindgen::generate!({
     path: "wit",
     world: "tool",
     with: {
-        "lca:host/log@0.6.0": generate,
-        "lca:host/fs@0.6.0": generate,
-        "lca:host/process@0.6.0": generate,
-        "lca:host/pty@0.6.0": generate,
-        "lca:host/ui-dialogs@0.6.0": generate,
-        "lca:host/tools@0.6.0": generate,
-        "lca:host/resources@0.6.0": generate,
-        "lca:host/state@0.6.0": generate,
+        "lca:host/log@0.7.0": generate,
+        "lca:host/fs@0.7.0": generate,
+        "lca:host/process@0.7.0": generate,
+        "lca:host/pty@0.7.0": generate,
+        "lca:host/ui-dialogs@0.7.0": generate,
+        "lca:host/tools@0.7.0": generate,
+        "lca:host/resources@0.7.0": generate,
+        "lca:host/state@0.7.0": generate,
+        "lca:host/net@0.7.0": generate,
     },
 });
 
@@ -296,7 +304,7 @@ Write the manifest as `extension.toml` next to `Cargo.toml`.
 ```toml
 name = "word-count"
 version = "0.1.0"
-abi = "0.6"
+abi = "0.7"
 worlds = ["tool"]
 description = "Counts words in a workspace file."
 license = "MIT"
@@ -784,7 +792,7 @@ An extension is an OCI artifact. Any registry that implements the OCI distributi
 
 ```
 wkg oci push ghcr.io/yourname/word-count:0.1.0 word_count.wasm
-wkg oci push ghcr.io/yourname/word-count:abi-0.6 word_count.wasm
+wkg oci push ghcr.io/yourname/word-count:abi-0.7 word_count.wasm
 ```
 
 Push two tags. The version tag is immutable and identifies this exact release. The ABI line tag moves and is what the update resolver reads.
@@ -800,7 +808,7 @@ links against its own copy.
 Users install with the reference.
 
 ```
-lca ext install ghcr.io/yourname/word-count:abi-0.6
+lca ext install ghcr.io/yourname/word-count:abi-0.7
 ```
 
 First-party extensions take the shorthand (gh #252): a bare name
@@ -810,7 +818,7 @@ repository (`ghcr.io/misaalanshori/lca/<name>[:tag]`), the tag
 defaulting to the current ABI line. Anything with a slash stays
 exact.
 
-An OCI registry is not the only option. Any HTTPS host works: zip the component and `extension.toml` together with nothing else added, publish two URLs the same way, one for the fixed version and one that always points at the current release, and a user installs with `lca ext install https://yourhost.example/word-count-abi-0.6.zip`. The update mechanics are identical either way; see ADR-0010.
+An OCI registry is not the only option. Any HTTPS host works: zip the component and `extension.toml` together with nothing else added, publish two URLs the same way, one for the fixed version and one that always points at the current release, and a user installs with `lca ext install https://yourhost.example/word-count-abi-0.7.zip`. The update mechanics are identical either way; see ADR-0010.
 
 A git repository works too (gh #59): `lca ext install git+https://git.example.com/team/pack` clones the repo, checks out the default branch, and pins the commit in the lockfile like an OCI digest pins bytes. Append `#<rev>` for a branch, tag, or commit (`git+https://...#v1.2.0`); the lockfile keeps the typed ref (branches advance on `ext update`) and the resolved commit separately. The checkout reads like a local package directory: one top-level `extension.toml`, at most one top-level `*.wasm`, `resources/**` below it — anything else a repo carries (README, CI configs) is ignored. The `git` command must be on PATH.
 

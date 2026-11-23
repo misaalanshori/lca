@@ -6,6 +6,23 @@ Dates are UTC.
 
 ## [Unreleased]
 
+### Changed
+- **The extension ABI line is now 0.7, and 0.6 extensions must be rebuilt to run**
+  (gh #407, interface/breaking). The tabbed questionnaire's `ui-dialogs.questionnaire`
+  landed on the 0.6 line, which is **frozen**: `docs/abi-versioning.md` says the next
+  interface change opens the next line, and `v0.6.0` is released, so the change could not
+  ride a 0.6 patch. Opening the line renamed the WIT package (`lca:host@0.6.0` →
+  `@0.7.0`), and a component's type names the versions it imports and exports - so a
+  0.6-built extension no longer *links*. Its **manifest** is still accepted (the window
+  is the current line plus the one before it, and `abi_in_window` needed no change for
+  the move), and the load now fails with a sentence that says what to do: "this extension
+  was built for interface line 0.6 and this host provides 0.7 … Rebuild it against this
+  host's `wit/` … and declare `abi = "0.7"`". What you get by rebuilding: the
+  questionnaire (N questions in one modal, one submit) and nothing else changed - every
+  world's exports are identical to 0.6's. `lca --version` prints `abi 0.7`; the extension
+  authoring guide, the manifest schema's own `$id` and the eight committed first-party
+  components all moved with it.
+
 ### Added
 - **Several questions from the model open one tabbed modal, one submit** (gh #407,
   interface). A model asking three clarifications used to cost three sequential host
