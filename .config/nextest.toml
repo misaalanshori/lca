@@ -64,3 +64,39 @@ slow-timeout = { period = "210s", terminate-after = 1 }
 [[profile.default.overrides]]
 filter = 'test(=tree_navigator_folds_filters_and_selects_in_a_real_terminal)'
 slow-timeout = { period = "330s", terminate-after = 1 }
+
+# gh #611: **every row in `lca-ext-host` that loads an extension compiles it.** A
+# `wasmtime::component::Component::new` on one of the fixture components costs 13-30 s
+# in a test build (against 1.7 s in release), and it is >96% of the row's wall clock -
+# `instantiate_pre` plus the per-world `*Pre::new` work measures 3-6 ms beside it.
+# Measured on this 4-core box (2026-11-23):
+#
+#   * sequential, loadavg ~10: 13.3, 13.5, 15.1, 15.9, 16.9, 17.1, 17.3, 20.1, 20.4,
+#     24.8, 30.0 s for the twelve compile-bearing rows (mean ~18 s);
+#   * under twelve hogs plus the suite's own parallelism: **one compile took 62.8 s**,
+#     and the rows that compile **twice** (`host::a_trapping_call_...`,
+#     `bundled_wasm::the_committed_component_and_a_fresh_build_...`) crossed 120 s and
+#     were killed at the default ceiling - three times in the #609 cycle's gate runs.
+#
+# Why not share the compile instead (gh #611's candidate A, measured and rejected): a
+# compiled `Component` belongs to its `Engine`, so sharing one means sharing the engine
+# - and wasmtime's epoch interruption is **engine-global**. `WasmExtension::interrupt`
+# bumps `engine.increment_epoch()` (`dispatch_hooks.rs`), so two extensions on one
+# engine would trap each other, which is exactly what `stateful`'s
+# `an_epoch_bump_for_one_guest_leaves_an_idle_guest_usable`,
+# `one_guests_trap_never_touches_another_guest` and `a_sibling_cancel_never_traps_a_running_guest`
+# forbid. The supported alternative, wasmtime's compilation cache (`wasmtime/cache`),
+# pulls `wasmtime-cache` -> `zstd-sys`, a C build dependency this tree deliberately does
+# not carry (the SRDD's flate2 row pins the rust backend for the same reason).
+#
+# The ceiling, then. `terminate-after = 1` rather than 2: the rows' normal cost is 13-30 s
+# and their worst measured cost under load is ~125 s (two compiles at ~62 s), so 240 s is
+# nearly 2x the worst case, while a genuine hang - a deadlock, an endless guest loop, a
+# test waiting on a channel nothing sends - never ends on its own and is still killed at
+# 240 s. Doubling the period with `terminate-after = 2` would keep such a hang for eight
+# minutes to protect rows that need two. The filter is the crate's whole binary set
+# rather than four row names: `ExtHost::load` is what costs this, and a new compile-bearing
+# row should inherit the ceiling rather than be re-discovered by a red run.
+[[profile.default.overrides]]
+filter = 'binary_id(/^lca-ext-host/)'
+slow-timeout = { period = "240s", terminate-after = 1 }
