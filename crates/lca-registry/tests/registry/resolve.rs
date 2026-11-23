@@ -272,3 +272,91 @@ fn bare_names_expand_to_the_official_repository() {
         assert_eq!(lca_registry::expand_shorthand(untouched), untouched);
     }
 }
+
+// ---------------------------------------------------------------------------
+// gh #615: what a registry status *means*, in the user's words
+//
+// The line move (gh #407) published no `abi-0.7` artifact yet, so a bare name
+// failed with `fetch failed: ...: HTTP401 and the token endpoint answered 403
+// Forbidden` - two registry statuses and no next step. The three shapes below
+// are the ones a registry actually produces, and each has a different fix, so
+// each gets its own sentence.
+// ---------------------------------------------------------------------------
+
+/// A missing tag is reported as a **missing tag**, naming the line and what to
+/// do: the same sentence for both wire shapes, because the meaning is the same
+/// - a `404` (a plain registry) and ghcr's `401`-then-refused-anonymous-token
+/// dance for an absent package are the same fact.
+#[tokio::test]
+async fn a_missing_abi_line_tag_names_the_line_and_the_next_release() {
+    let line = lca_ext_abi::ABI_VERSION;
+    for statuses in [
+        // A registry that answers 404 for an absent tag.
+        vec!["404 Not Found"],
+        // ghcr's shape: challenge, then the anonymous token is refused.
+        vec!["401 Unauthorized", "403 Forbidden"],
+    ] {
+        let (base, server) = super::support::mock_statuses(statuses.clone()).await;
+        let err = resolve_oci(&format!("{base}/example/word-count:abi-{line}"))
+            .await
+            .expect_err("an absent tag cannot resolve");
+        let text = err.to_string();
+        assert!(
+            text.contains(&format!(
+                "no artifact for word-count at ABI line {line} yet"
+            )),
+            "names the extension and the line ({statuses:?}): {text}"
+        );
+        assert!(
+            text.contains("`lca ext install word-count:unstable`"),
+            "names the escape hatch ({statuses:?}): {text}"
+        );
+        assert!(
+            !text.contains("HTTP") && !text.contains("token endpoint"),
+            "no registry statuses in the user's sentence ({statuses:?}): {text}"
+        );
+        server.abort();
+    }
+}
+
+/// The control: a tag that **does** exist still fetches through the very same
+/// code path - the classification must not swallow success.
+#[tokio::test]
+async fn an_existing_tag_still_fetches_and_prompts() {
+    let (reference, server) = mock_oci(false).await;
+    let resolved = resolve_oci(&format!("{reference}:abi-0.6"))
+        .await
+        .expect("an existing tag resolves");
+    assert_eq!(resolved.manifest, MANIFEST);
+    assert_eq!(resolved.component, component());
+    assert_eq!(
+        resolved.source,
+        format!("{reference}:abi-0.6"),
+        "the control keeps the ref it was given"
+    );
+    server.abort();
+}
+
+/// A token *was* issued and the pull was still refused: a different sentence,
+/// because the fix is different. Reaching this wire shape takes a registry that
+/// authenticates and then denies the artifact, which is what a private package
+/// looks like.
+#[tokio::test]
+async fn a_refused_authorized_pull_names_the_refusal_not_the_absence() {
+    let (base, server) =
+        super::support::mock_statuses(vec!["401 Unauthorized", "200 OK", "401 Unauthorized"]).await;
+    let tag = format!("abi-{}", lca_ext_abi::ABI_VERSION); // derived: a literal reddens on a line move
+    let err = resolve_oci(&format!("{base}/example/word-count:{tag}"))
+        .await
+        .expect_err("a refused pull cannot resolve");
+    let text = err.to_string();
+    assert!(
+        text.contains(&format!("refused to pull word-count:{tag}")),
+        "names the refusal and the ref: {text}"
+    );
+    assert!(
+        !text.contains("no artifact"),
+        "a refusal is not an absence: {text}"
+    );
+    server.abort();
+}

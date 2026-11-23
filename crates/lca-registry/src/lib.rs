@@ -65,7 +65,7 @@ pub use oci::{
     ARCHIVE_TIMEOUT, OCI_MAX_BYTES, OCI_MAX_REDIRECTS, OCI_TIMEOUT, fetch_oci_public,
     fetch_oci_within, fetch_oci_within_capped,
 };
-use oci::{fetch_bytes, fetch_oci};
+use oci::{Artifact, fetch_bytes, fetch_oci};
 pub use proxy::{Proxies, ProxyEndpoint, ProxyStream, ProxyTcp, parse_proxy_for_tests};
 pub use store::InstallTree;
 
@@ -175,6 +175,31 @@ pub enum Error {
     /// Transport, HTTP status, or malformed registry response.
     #[error("fetch failed: {0}")]
     Fetch(String),
+    /// The registry has nothing to pull for this name at this tag: a `404`, or
+    /// ghcr's `401`-then-refused-anonymous-token dance for a package or tag it
+    /// does not serve. Named by the **extension** (what the user typed and what
+    /// the fix refers to), not by the image path the request carried - and it
+    /// says what to do next instead of quoting two registry statuses (#615).
+    #[error("{}", missing_artifact_copy(name, tag))]
+    MissingArtifact {
+        /// The extension name (`openai-compatible`).
+        name: String,
+        /// The tag asked for (`abi-0.7`, `unstable`, `b9653a3e`).
+        tag: String,
+    },
+    /// The registry refused an authorized pull: the package is private, or this
+    /// host is not allowed to read it. Distinct from [`Error::MissingArtifact`]
+    /// on purpose - the fix is not "install from another channel", it is
+    /// "this repo cannot be pulled", so one sentence for both would mislead.
+    #[error(
+        "the registry refused to pull {name}:{tag} - the package is not public, or this host is not allowed to read it"
+    )]
+    PullRefused {
+        /// The extension name.
+        name: String,
+        /// The tag asked for.
+        tag: String,
+    },
     /// The digest did not match the bytes (FR-DIST-4's caller deletes).
     #[error("digest mismatch: expected {expected}, got {actual}")]
     DigestMismatch {
@@ -197,6 +222,27 @@ pub enum Error {
 impl From<std::io::Error> for Error {
     fn from(err: std::io::Error) -> Self {
         Error::Io(err.to_string())
+    }
+}
+
+/// The user-visible sentence for [`Error::MissingArtifact`].
+///
+/// A line tag and a channel tag are different promises, so they get different
+/// sentences: `abi-0.7` is *ours* and will be published by the next release,
+/// while an arbitrary tag (`b9653a3e`, a version) is only ever wrong typing or
+/// a pruned pin. `docs/installation.md` carries the channel table this copy
+/// matches (gh #615).
+fn missing_artifact_copy(name: &str, tag: &str) -> String {
+    match tag.strip_prefix("abi-") {
+        Some(line) => format!(
+            "no artifact for {name} at ABI line {line} yet - the extension registry publishes this \
+             line with the next release; `lca ext install {name}:unstable` has the unstable \
+             channel's build"
+        ),
+        None => format!(
+            "no artifact for {name} at tag `{tag}` - check the tag; `lca ext install \
+             {name}:unstable` has the unstable channel's build"
+        ),
     }
 }
 
@@ -457,12 +503,17 @@ pub async fn resolve_oci(reference: &str) -> Result<Resolved, Error> {
     let base = format!("{scheme}://{host}/v2/{name}");
     let image = name;
     let mut token: Option<String> = None;
+    // The manifest is the one request whose failure carries the absence
+    // meaning, so it is the one that names the artifact (gh #615). Blobs below
+    // ask with no identity: a missing blob is a broken registry, not "not
+    // published yet", and saying otherwise would send a user to rebuild.
     let (manifest_bytes, _headers) = fetch_oci(
         &client,
         &format!("{base}/manifests/{tag}"),
         MANIFEST_MEDIA_TYPES,
         image,
         &mut token,
+        Some(Artifact { image, tag }),
     )
     .await?;
     let manifest_json: serde_json::Value = serde_json::from_slice(&manifest_bytes)
@@ -489,6 +540,7 @@ pub async fn resolve_oci(reference: &str) -> Result<Resolved, Error> {
         "*",
         image,
         &mut token,
+        None,
     )
     .await
     {
@@ -506,6 +558,7 @@ pub async fn resolve_oci(reference: &str) -> Result<Resolved, Error> {
                 "*/*",
                 image,
                 &mut token,
+                None,
             )
             .await?;
             verify_digest(&digest, &found.0)?;
@@ -542,6 +595,7 @@ pub async fn resolve_oci(reference: &str) -> Result<Resolved, Error> {
         "*/*",
         image,
         &mut token,
+        None,
     )
     .await?;
     verify_digest(&layer_digest, &component)?;

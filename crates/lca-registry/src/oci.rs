@@ -8,6 +8,60 @@
 use super::Error;
 use super::http::{HttpsClient, http_client};
 
+/// Which artifact a request is asking for, when the caller knows: this is what
+/// turns a bare registry status into a sentence a user can act on.
+///
+/// `oci.rs` deliberately knows the *status*, not the meaning: a `404` on a
+/// manifest means "this line is not published yet", while the same `404` on a
+/// blob means the registry is inconsistent and the artifact cannot be
+/// assembled. Only the caller - `resolve_oci`, which knows the name, the tag,
+/// and which document it asked for - can assign that meaning (gh #615).
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Artifact<'a> {
+    /// The image path the request carried (`misaalanshori/lca/openai-compatible`).
+    pub image: &'a str,
+    /// The tag the reference named (`abi-0.7`, `unstable`, `b9653a3e`).
+    pub tag: &'a str,
+}
+
+impl Artifact<'_> {
+    /// The extension name (`openai-compatible`): the last path segment of the
+    /// image, because the copy has to name what the user typed rather than the
+    /// registry path behind it.
+    fn name(&self) -> &str {
+        self.image.rsplit('/').next().unwrap_or(self.image)
+    }
+
+    /// The absence sentence for this artifact. Also emitted to the debug log,
+    /// where the raw statuses live (the tree's rule: internals go to
+    /// `LCA_LOG`, the user gets what to do next).
+    fn missing(&self, detail: &str) -> Error {
+        lca_debug::emit(
+            lca_debug::Domain::Registry,
+            "resolve.absent",
+            &format!("{}:{} {detail}", self.image, self.tag),
+        );
+        Error::MissingArtifact {
+            name: self.name().to_string(),
+            tag: self.tag.to_string(),
+        }
+    }
+
+    /// The refusal sentence: the registry saw a credential story it did not
+    /// accept, which is a different fix from "this line is not published".
+    fn refused(&self, detail: &str) -> Error {
+        lca_debug::emit(
+            lca_debug::Domain::Registry,
+            "resolve.refused",
+            &format!("{}:{} {detail}", self.image, self.tag),
+        );
+        Error::PullRefused {
+            name: self.name().to_string(),
+            tag: self.tag.to_string(),
+        }
+    }
+}
+
 /// The most one OCI document may retain, and how long one fetch may take
 /// (gh #308). A manifest or config is kilobytes; a layer archive is bounded
 /// separately by [`crate::MAX_ARCHIVE_BYTES`]. The cap is enforced *while
@@ -66,8 +120,15 @@ pub async fn fetch_oci_within_capped(
 ) -> Result<(Vec<u8>, hyper::HeaderMap), Error> {
     let client = http_client()?;
     let mut token: Option<String> = None;
-    let work =
-        async { fetch_oci_once(&client, url, accept, image, &mut token, timeout, max_bytes).await };
+    let work = async {
+        // A bounds row measures the transport (`fetch_oci_within*`), so it
+        // asks with no artifact identity: the generic statuses are what it
+        // asserts, and the absence copy is `resolve_oci`'s to own.
+        fetch_oci_once(
+            &client, url, accept, image, &mut token, timeout, max_bytes, None,
+        )
+        .await
+    };
     match tokio::time::timeout(timeout, work).await {
         Ok(outcome) => outcome,
         Err(_) => Err(Error::Fetch(format!(
@@ -159,6 +220,7 @@ pub(super) async fn fetch_oci(
     accept: &str,
     image: &str,
     token: &mut Option<String>,
+    artifact: Option<Artifact<'_>>,
 ) -> Result<(Vec<u8>, hyper::HeaderMap), Error> {
     fetch_oci_once(
         client,
@@ -168,11 +230,13 @@ pub(super) async fn fetch_oci(
         token,
         OCI_TIMEOUT,
         OCI_MAX_BYTES,
+        artifact,
     )
     .await
 }
 
 /// [`fetch_oci`] with explicit bounds; the caller owns the deadline.
+#[allow(clippy::too_many_arguments)] // the seam's own bounds plus the identity
 async fn fetch_oci_once(
     client: &HttpsClient,
     url: &str,
@@ -181,6 +245,7 @@ async fn fetch_oci_once(
     token: &mut Option<String>,
     timeout: std::time::Duration,
     max_bytes: usize,
+    artifact: Option<Artifact<'_>>,
 ) -> Result<(Vec<u8>, hyper::HeaderMap), Error> {
     let authorization = |token: &Option<String>| -> Result<hyper::HeaderMap, Error> {
         let mut headers = hyper::HeaderMap::new();
@@ -199,7 +264,18 @@ async fn fetch_oci_once(
     if response.status() != hyper::StatusCode::UNAUTHORIZED {
         if !response.status().is_success() {
             let status = response.status();
-            return Err(Error::Fetch(format!("{url}: HTTP {status}")));
+            return Err(match artifact {
+                // A manifest answered `404`/`403`: the tag is not served. A
+                // `403` with no challenge is "readable by someone else", which
+                // is the refusal sentence, not the absence one.
+                Some(artifact) if status == hyper::StatusCode::NOT_FOUND => {
+                    artifact.missing(&format!("manifest HTTP {status}"))
+                }
+                Some(artifact) if status == hyper::StatusCode::FORBIDDEN => {
+                    artifact.refused(&format!("manifest HTTP {status}, no challenge"))
+                }
+                _ => Error::Fetch(format!("{url}: HTTP {status}")),
+            });
         }
         let headers = response.headers().clone();
         let body = collect_body(response, max_bytes).await?;
@@ -249,10 +325,22 @@ async fn fetch_oci_once(
         .await
         .map_err(|err| Error::Fetch(format!("{token_url}: {err}")))?;
     if !token_response.status().is_success() {
-        return Err(Error::Fetch(format!(
-            "{url}: HTTP401 and the token endpoint answered {}",
-            token_response.status()
-        )));
+        // The anonymous token was refused for this pull scope. ghcr does this
+        // for a package or tag it does not serve (the dance is how it says
+        // "absent"), so a manifest request lands on the absence sentence. A
+        // real credential problem reaches here too, which is why the sentence
+        // names the pull scope and the channel escape rather than claiming the
+        // tag never existed (gh #615).
+        return Err(match artifact {
+            Some(artifact) => artifact.missing(&format!(
+                "anonymous token refused: {}",
+                token_response.status()
+            )),
+            None => Error::Fetch(format!(
+                "{url}: HTTP401 and the token endpoint answered {}",
+                token_response.status()
+            )),
+        });
     }
     let body = collect_body_bounded(token_response, max_bytes, &token_url, OCI_TIMEOUT).await?;
     let json: serde_json::Value = serde_json::from_slice(&body)
@@ -281,9 +369,18 @@ async fn fetch_oci_once(
     let retry = get_following_redirects(client, url, accept, &authorization(token)?).await?;
     if !retry.status().is_success() {
         let status = retry.status();
-        return Err(Error::Fetch(format!(
-            "{url}: HTTP {status} after authorization"
-        )));
+        // A token was issued and the pull still failed: that is a refusal, not
+        // an absence - the registry knows what the artifact is and will not
+        // hand it over.
+        return Err(match artifact {
+            Some(artifact)
+                if status == hyper::StatusCode::UNAUTHORIZED
+                    || status == hyper::StatusCode::FORBIDDEN =>
+            {
+                artifact.refused(&format!("manifest HTTP {status} after a token"))
+            }
+            _ => Error::Fetch(format!("{url}: HTTP {status} after authorization")),
+        });
     }
     let headers = retry.headers().clone();
     let body = collect_body(retry, max_bytes).await?;

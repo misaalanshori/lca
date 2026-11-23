@@ -200,3 +200,52 @@ pub(super) fn head_sha(dir: &std::path::Path) -> String {
         .expect("git runs");
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
+
+/// A loopback registry that answers one scripted *status* per connection, in
+/// order (gh #615: the absence rows need the `401`/`403`/`404` shapes the
+/// all-200 mock above cannot say).
+///
+/// `401` carries the standard `www-authenticate` challenge pointing back at
+/// this listener's `/token`; `200` answers a token document. Anything else is
+/// answered verbatim with an empty body. The returned string is the bare
+/// `host:port` (the shape `mock_oci` returns: `resolve_oci` picks `http` for a
+/// loopback host), so a row calls `resolve_oci("{addr}/example/word-count:abi-0.7")`.
+pub(super) async fn mock_statuses(
+    statuses: Vec<&'static str>,
+) -> (String, tokio::task::JoinHandle<()>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let realm = format!("http://{addr}");
+    let handle = tokio::spawn(async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for status in statuses {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                break;
+            };
+            let mut buf = vec![0u8; 8192];
+            let _ = stream.read(&mut buf).await;
+            let (headers, body): (String, &[u8]) = if status.starts_with("401") {
+                (
+                    format!(
+                        "www-authenticate: Bearer realm=\"{realm}/token\",service=\"mock\",scope=\"repository:x/y:pull\"\r\n"
+                    ),
+                    b"",
+                )
+            } else if status.starts_with("200") {
+                (String::new(), br#"{"token":"tok-615"}"#)
+            } else {
+                (String::new(), b"")
+            };
+            let head = format!(
+                "HTTP/1.1 {status}\r\n{headers}content-length: {}\r\nconnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(head.as_bytes()).await;
+            let _ = stream.write_all(body).await;
+            let _ = stream.shutdown().await;
+        }
+    });
+    (addr.to_string(), handle)
+}
