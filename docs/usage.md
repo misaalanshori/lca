@@ -137,6 +137,25 @@ LCA does not ask before every tool call. Watch the transcript,
 review diffs, and keep credentials out of the room (see
 [Security](security.md)).
 
+## Answer a model's question
+
+An extension can ask you something mid-turn (the bundled `question` tool is the one
+that does), and the model then continues with your answer. One question is a single
+picker. **Several questions open one modal with a tab per question and one submit**,
+so three clarifications cost one visit rather than three:
+
+    ←  ■ Scope   □ Priority   □ Retries   ✓ Submit  →
+
+`Tab`/`Shift+Tab` and `←`/`→` move between tabs and `↑`/`↓` pick inside one; the
+`■`/`□` marks show which are answered. The last row of every list is
+`Type your own answer...`, which opens a one-line field (`Enter` submits it, `Esc`
+goes back to the list without closing anything). `Enter` on the `✓ Submit` tab shows
+a review of every answer, marks the ones you typed `(wrote)`, and lists what is still
+missing — pressing `Enter` there goes to the first unanswered question instead of
+submitting, so the refusal is somewhere to go. A second `Esc` (from the list) or
+`Esc` on the review abandons the whole ask, and the model is told you declined.
+A question with several choices takes `Space` to tick a row and `Enter` to finish.
+
 ## Steer a running turn
 
 You can type while the model works. `Enter` steers the current task

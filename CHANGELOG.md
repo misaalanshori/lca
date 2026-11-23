@@ -7,6 +7,21 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Added
+- **Several questions from the model open one tabbed modal, one submit** (gh #407,
+  interface). A model asking three clarifications used to cost three sequential host
+  pickers - one per question, with no progress, no per-question state and no review -
+  because the extension looped `select`/`input`. Now an ask with more than one question
+  opens **one** modal with a tab per question (`■` answered, `□` pending) and a
+  `✓ Submit` end-cap: `Tab`/`Shift+Tab` and `←`/`→` move between tabs while
+  `↑`/`↓`/`PgUp`/`PgDn`/`Enter` stay inside the active one, each tab keeps its own
+  highlight, scroll, draft and answer when you leave and come back, the last row of
+  every list is `Type your own answer...` (a one-line field; `Esc` goes back without
+  closing the modal), a multi-choice question ticks with `Space` and finishes with
+  `Enter`, and the review marks what you typed `(wrote)` and **refuses to submit**
+  while anything is unanswered - jumping to the first gap instead of just beeping. A
+  single question still opens the plain picker: a tab and a review step for one answer
+  is chrome nobody asked for. The host chrome owns it, so an extension still never
+  draws a modal; headless still answers "declined" without asking.
 - **`s` in `/tree` summarizes the branch you are leaving before the fork** (gh #601,
   interface). A branch summary - what an abandoned path learned, framed for the model
   where the new branch continues - had a replay card and a context injection but no way
