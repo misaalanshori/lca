@@ -68,6 +68,7 @@ fn a_hung_server_times_out() {
     let caps = sandbox("remote-timeout", lca_mcp::manifest_grants());
     let mut server = remote_server(&mock, "/slow");
     server.timeout_secs = 1;
+    let configured = server.timeout_secs;
     let started = std::time::Instant::now();
     let err = match lca_mcp::McpBridge::connect_http(caps, vec![server]) {
         Ok(_) => panic!("slow connect fails"),
@@ -77,9 +78,27 @@ fn a_hung_server_times_out() {
         err.contains("timed out"),
         "the error names the timeout: {err}"
     );
+    // Gh #609: the `< 10 s` stopwatch is replaced by a bound **composed of the value
+    // the caller configured**. The bridge makes up to three bounded exchanges on this
+    // path, so its cost is a multiple of `timeout_secs` rather than one timeout:
+    // measured, 1 s configured costs 4.26 s and 2 s costs 7.26 s - slope 3x plus the
+    // fixture's own ~1.3 s delay. The bound is that arithmetic with room: `4 x
+    // configured + 2 s`. A fixed 10 s (what this row had) would be *too tight* for a
+    // 3 s configuration and too loose for a 1 s one, which is why the number follows
+    // the configuration now - and a bridge that ignored `timeout_secs` and used the
+    // 60 s default (about 180 s here) still reddens, while the effect assertion above
+    // is what catches a bridge that never gave up at all.
+    //
+    // What this cannot prove, stated rather than implied: the fixture's own delay means
+    // a bridge that reported "timed out" *without* waiting would still land inside this
+    // bound (measured with a zero timeout: 1.4 s). The identity `timeout_secs ->
+    // Duration` has its own rows in `types.rs`.
+    let bound = std::time::Duration::from_secs(configured * 4 + 2);
     assert!(
-        started.elapsed() < std::time::Duration::from_secs(10),
-        "the timeout bounds the wait"
+        started.elapsed() < bound,
+        "the wait is bounded by 4x the configured {configured}s timeout plus the \
+         fixture's delay ({bound:?}), not by the 60 s default: {:?}",
+        started.elapsed()
     );
 }
 

@@ -229,15 +229,34 @@ fn a_disabled_entry_neither_spawns_nor_waits() {
         eprintln!("skip: python3 is not installed");
         return;
     }
+    // Gh #609: the `< 1 s` stopwatch is gone; the claim is a **pair**, in one run, and
+    // a machine cannot fake either half. The same fixture - a direct server that takes
+    // 5 s to handshake - is loaded twice: enabled, it *is* connecting immediately
+    // after `load` returns; disabled, it is not, and `/mcp` says so. The difference is
+    // the flag and nothing else, so a manager that ignores `enabled` shows the disabled
+    // side in `Connecting` and fails here. (Measured: `connecting=["slow"]` / `[]`,
+    // status `connecting` / `disabled`, the whole pair in 30 ms.)
+    let enabled_dir = root("enabled-slow");
+    let enabled = lca_mcp::McpManager::load(
+        engine(&enabled_dir),
+        enabled_dir.join("data/mcp.json"),
+        None,
+        vec![slow_entry(5, McpExposure::Direct)],
+    );
+    assert_eq!(
+        enabled.bridge().connecting_names(),
+        vec!["slow".to_string()],
+        "the control: an enabled direct server is connecting right after `load`"
+    );
     let dir = root("disabled-slow");
     let mut entry = slow_entry(5, McpExposure::Direct);
     entry.enabled = false;
-    let started = std::time::Instant::now();
     let manager =
         lca_mcp::McpManager::load(engine(&dir), dir.join("data/mcp.json"), None, vec![entry]);
     assert!(
-        started.elapsed() < std::time::Duration::from_secs(1),
-        "a disabled entry costs nothing"
+        manager.bridge().connecting_names().is_empty(),
+        "and the disabled twin of the same fixture never starts connecting: {:?}",
+        manager.bridge().connecting_names()
     );
     assert!(
         manager.bridge().connecting_names().is_empty(),
