@@ -55,6 +55,8 @@ pub use turn::{
     QueueMode, QueuedMessage, SteerQueue, StopReason, SubmitMode, TurnEvent, TurnOutcome,
     TurnStatus, steer_queue,
 };
-pub use ui::{DialogAnswer, TextStyle, UiDialog, UiEffect, UiInput, Widget, WidgetTree};
+pub use ui::{
+    DialogAnswer, TextStyle, UiAnswer, UiDialog, UiEffect, UiInput, UiQuestion, Widget, WidgetTree,
+};
 pub use usage::Usage;
 pub use utf8::{REPLACEMENT, Utf8Stream};

@@ -44,6 +44,8 @@ imports are host-satisfied), and eight opt-in hooks worlds
 world are byte-identical: single-tool and old-hook guests rebuild with
 no source change.
 
+**Annotated 2026-11-23 (0.6 line, gh #407):** no label bump. `lca:host/ui-dialogs` gains `questionnaire(title, questions)` plus the `question` and `answer` records, so an extension can ask N questions in one modal instead of N sequential pickers. The interface is one every `tool` and `tool-catalog` guest already imports, so a component built before this line keeps linking and running - the function is a member the host satisfies whether or not it is called - and a guest that wants it rebuilds. Proven, not asserted: `tests/regressions/407-questionnaire-abi.rs` loads `extensions/tool-legacy`'s committed pre-import component and drives its tool. `wit/CHANGELOG.md` carries the snippet and the reasoning; `lca 0.6.x` ships `abi 0.6`.
+
 **Frozen 2026-10-08 (0.6 line):** after cycle 4, `wit/` + `schemas/`
 freeze for the 0.6 line. No WIT addition, removal, rename, or
 shape change rides a 0.6 patch; no manifest-schema key is added or

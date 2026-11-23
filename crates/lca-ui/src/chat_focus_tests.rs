@@ -170,6 +170,7 @@ fn input_dialog_chat() -> crate::chat::Chat {
         matches: Vec::new(),
         selected: 0,
         input: String::new(),
+        questionnaire: None,
     });
     chat
 }
@@ -190,6 +191,7 @@ fn select_dialog_chat() -> crate::chat::Chat {
         matches: vec![0, 1],
         selected: 0,
         input: String::new(),
+        questionnaire: None,
     });
     chat
 }
@@ -604,6 +606,7 @@ fn a_fieldless_surface_keeps_the_composers_marker_by_design() {
         matches: Vec::new(),
         selected: 0,
         input: String::new(),
+        questionnaire: None,
     });
     let frame = paint(&mut chat);
     assert_eq!(

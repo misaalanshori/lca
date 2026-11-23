@@ -126,6 +126,9 @@ pub struct DialogModal {
     pub selected: usize,
     /// The input buffer.
     pub input: String,
+    /// The open questionnaire's per-tab state (gh #407), when the dialog is
+    /// one. `None` for every other dialog kind.
+    pub questionnaire: Option<crate::chat_questionnaire::Questionnaire>,
 }
 
 /// The permission modal: what is being asked, and how to answer.

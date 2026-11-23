@@ -66,6 +66,8 @@ pub(crate) enum Field {
     DialogInput,
     /// A host dialog's `Select` search.
     DialogSelect,
+    /// A questionnaire's inline editor (gh #407).
+    DialogWrite,
     /// The `/mcp` sign-in screen's pasted redirect URL.
     McpRedirect,
     /// The `Ctrl+R` transcript search readout.
@@ -183,6 +185,13 @@ impl Chat {
                 // field, so the frame carries no marker - anchoring to nothing
                 // beats anchoring to a field nobody is typing into.
                 UiDialog::Select { .. } if !dialog.query.is_empty() => Some(Field::DialogSelect),
+                // Gh #407: the questionnaire's field is its inline editor, and
+                // it only exists while that tab holds the baton.
+                UiDialog::Questionnaire { .. } => dialog
+                    .questionnaire
+                    .as_ref()
+                    .filter(|state| state.editing())
+                    .map(|_| Field::DialogWrite),
                 UiDialog::Select { .. } | UiDialog::Confirm { .. } | UiDialog::Notify { .. } => {
                     None
                 }
@@ -267,5 +276,40 @@ impl Chat {
         } else {
             format!("{prefix}{value}{}", self.caret_cell())
         }
+    }
+
+    /// The caret at `cursor` (a byte offset into `value`) instead of at its end.
+    ///
+    /// The questionnaire's inline editor moves its insertion point with
+    /// `<-`/`->` while it holds the baton (gh #407), so a caret painted at the
+    /// end of the text would point at the wrong cell as soon as the user
+    /// scrolled inside it. Not a second emitter: the ownership gate and
+    /// [`Chat::caret_cell`] are the same two, so "two markers" stays
+    /// unreachable. The offset is snapped to a char boundary here rather than
+    /// trusted, because slicing bytes a caller got wrong must not panic.
+    pub(crate) fn caret_row_at(
+        &self,
+        prefix: &str,
+        value: &str,
+        cursor: usize,
+        placeholder: &str,
+        field: Field,
+    ) -> String {
+        if self.keyboard_owner() != Focus::Field(field) {
+            return format!("{prefix}{value}");
+        }
+        if value.is_empty() {
+            return format!("{prefix}{}{placeholder}", self.caret_cell());
+        }
+        let mut at = cursor.min(value.len());
+        while at > 0 && !value.is_char_boundary(at) {
+            at -= 1;
+        }
+        format!(
+            "{prefix}{}{}{}",
+            &value[..at],
+            self.caret_cell(),
+            &value[at..]
+        )
     }
 }

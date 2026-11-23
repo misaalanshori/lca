@@ -860,6 +860,11 @@ mod a_resumed_session_draws_tool_images;
 #[path = "605-no-print-in-lca-ui.rs"]
 mod no_print_in_lca_ui;
 
+// Gh #407: `lca:host/ui-dialogs` gained `questionnaire` - an in-place window addition,
+// so a tool guest built before it still links and runs (proven, not asserted).
+#[path = "407-questionnaire-abi.rs"]
+mod questionnaire_abi;
+
 // Gh #607 / RUSTSEC-2026-0548: the `zip` 9 header-consistency check is **opt-in**, so the
 // registry's untrusted-archive read turns it on - a package whose local header names disagree
 // with its central directory is refused, not silently believed.

@@ -153,6 +153,33 @@ impl PermissionPrompt for SharedPrompt {
     }
 }
 
+/// One question in a tabbed questionnaire (gh #407): the answer's key and the
+/// tab's label, the prompt, and the choices.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Question {
+    /// The answer's key, and the tab's label.
+    pub header: String,
+    /// The question as the user reads it.
+    pub prompt: String,
+    /// The choices, in the extension's order. Empty means free text only.
+    pub options: Vec<String>,
+    /// Whether several answers may be picked.
+    pub multiple: bool,
+}
+
+/// One answer to a [`Question`], keyed by its header (gh #407).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Answer {
+    /// The question's header.
+    pub header: String,
+    /// The chosen option's text, or what the user typed.
+    pub value: String,
+    /// Whether the value came from the inline editor rather than a listed
+    /// option - the distinction the sequential path's "type your own" arm
+    /// already carries.
+    pub custom: bool,
+}
+
 /// One host-rendered question an extension asks (gh #124, gh #172): the
 /// answers cross back as plain data, and the chrome is always the
 /// host's own (spoof-proof by construction).
@@ -170,6 +197,14 @@ pub trait DialogPrompt: Send {
     fn input(&mut self, label: &str, placeholder: Option<&str>) -> Option<String>;
     /// A transient notice; fire and forget.
     fn notify(&mut self, message: &str, level: &str);
+    /// A tabbed questionnaire (gh #407): every question answered in one
+    /// modal, one submit. `None` is a dismissal, and the default answers
+    /// it - a prompter written before this method existed keeps compiling
+    /// and keeps the headless contract (nothing installed, nothing asked).
+    fn questionnaire(&mut self, title: &str, questions: &[Question]) -> Option<Vec<Answer>> {
+        let _ = (title, questions);
+        None
+    }
 }
 
 /// A swappable dialog slot (the [`SharedPrompt`] pattern for questions).
@@ -238,6 +273,18 @@ impl DialogPrompt for SharedDialogs {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .notify(message, level);
+        }
+    }
+
+    /// Forward the questionnaire to the installed prompter; with nothing
+    /// installed the ask is dismissed, which is the headless answer.
+    fn questionnaire(&mut self, title: &str, questions: &[Question]) -> Option<Vec<Answer>> {
+        match self.current() {
+            Some(prompt) => prompt
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .questionnaire(title, questions),
+            None => None,
         }
     }
 }

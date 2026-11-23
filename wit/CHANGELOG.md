@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.6 development window — gh #407: `ui-dialogs` gains the tabbed questionnaire
+
+One function and two records added to a host import interface:
+
+```wit
+record question {
+  header: string,
+  prompt: string,
+  options: list<string>,
+  multiple: bool,
+}
+
+record answer {
+  header: string,
+  value: string,
+  custom: bool,
+}
+
+questionnaire: func(title: string, questions: list<question>) -> result<option<list<answer>>, string>;
+```
+
+**Breaking for the contract, additive for old artifacts.** A guest rebuilt
+against this `wit/` sees the new function and records on
+`lca:host/ui-dialogs@0.6.0` — the interface it already imports — so a guest
+that wants the questionnaire has to be rebuilt, and one that does not is
+untouched. A component built *before* this line imports the same interface and
+never calls the new member, which the host satisfies whether or not it is
+called (the rule `tools` established in gh #77 and `net` repeated in gh #302);
+`tests/regressions/407-questionnaire-abi.rs` loads such a component and drives
+its tool, so the claim is proven rather than asserted.
+
+**Why:** today a model asking three clarifications costs three sequential host
+pickers - `extensions/question`'s `ask_all` loops `select`/`input` once per
+question - with no progress indicator, no per-question state, no review and no
+single submit. With this member N questions are answered in **one** modal, one
+turn, one submit: tabs with `■`/`□` answered/pending markers, a review frame
+before it fires, and an inline "type your own" editor per tab. The chrome stays
+the host's (an extension still never draws a modal, `docs/extension-authoring.md`
+§dialogs), so the spoof-proofing does not change with the answer count.
+
+**No label bump.** This is an in-place window addition (ADR-0028); `lca 0.6.x`
+ships `abi 0.6`.
+
 ## 0.6 development window — gh #302: the `tool` world imports `net`
 
 One import added to the `tool` world:

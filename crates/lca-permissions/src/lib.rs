@@ -41,7 +41,8 @@ pub use scope::{
 // The store and its prompt seam (ADR-0006, ADR-0042): re-exported so the
 // module split changed no caller's path.
 pub use prompt::{
-    Decision, DialogPrompt, Outcome, PermissionMode, PermissionPrompt, SharedDialogs, SharedPrompt,
+    Answer, Decision, DialogPrompt, Outcome, PermissionMode, PermissionPrompt, Question,
+    SharedDialogs, SharedPrompt,
 };
 pub use store::{Error, GrantStore, ProposalDiff, Proposals, canonical_key, proposal_hash};
 
@@ -64,7 +65,8 @@ mod dialog_tests {
 
     // Verifies: gh #124 - with nothing installed every question answers
     // its denied value, which is the headless contract (no modal, no
-    // hang, notify silently dropped).
+    // hang, notify silently dropped). Gh #407 extends it to the
+    // questionnaire: nothing installed answers *dismissed*, never a hang.
     #[test]
     fn an_empty_slot_denies_every_question() {
         let mut slot = SharedDialogs::default();
@@ -72,6 +74,13 @@ mod dialog_tests {
         assert_eq!(slot.select("t", &["a".to_string()]), None);
         assert_eq!(slot.input("l", None), None);
         slot.notify("hello", "info");
+        let asked = [Question {
+            header: "Scope".to_string(),
+            prompt: "Which scope?".to_string(),
+            options: vec!["one".to_string(), "two".to_string()],
+            multiple: false,
+        }];
+        assert_eq!(slot.questionnaire("ask", &asked), None);
     }
 
     struct Scripted {
@@ -91,6 +100,18 @@ mod dialog_tests {
         fn notify(&mut self, message: &str, _level: &str) {
             self.answers.push(message.to_string());
         }
+        fn questionnaire(&mut self, _title: &str, questions: &[Question]) -> Option<Vec<Answer>> {
+            Some(
+                questions
+                    .iter()
+                    .map(|question| Answer {
+                        header: question.header.clone(),
+                        value: "first".to_string(),
+                        custom: false,
+                    })
+                    .collect(),
+            )
+        }
     }
 
     // Verifies: gh #124 - an installed prompter answers, so the live
@@ -107,5 +128,31 @@ mod dialog_tests {
             Some("a".to_string())
         );
         assert_eq!(slot.input("l", Some("ph")), Some("ph".to_string()));
+    }
+
+    // Verifies: gh #407 - the slot forwards the questionnaire, so an
+    // installed prompter's answers reach the caller unchanged (the
+    // forwarding `ask_annotated` needed for gh #418 is the same lesson:
+    // a trait default on the slot would silently flatten every ask).
+    #[test]
+    fn an_installed_prompter_answers_the_questionnaire() {
+        let mut slot = SharedDialogs::default();
+        slot.set(std::sync::Arc::new(std::sync::Mutex::new(Scripted {
+            answers: Vec::new(),
+        })));
+        let asked = [Question {
+            header: "Scope".to_string(),
+            prompt: "Which scope?".to_string(),
+            options: vec!["one".to_string()],
+            multiple: false,
+        }];
+        assert_eq!(
+            slot.questionnaire("ask", &asked),
+            Some(vec![Answer {
+                header: "Scope".to_string(),
+                value: "first".to_string(),
+                custom: false,
+            }])
+        );
     }
 }

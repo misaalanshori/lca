@@ -36,21 +36,34 @@ fn dialogs_forbidden() -> bool {
     DIALOG_FORBIDDEN.with(|forbidden| forbidden.get())
 }
 
+/// The gate every `ui-dialogs` function passes first (gh #124): on the loop
+/// thread a dialog would wait for the loop to answer itself, so it is refused
+/// with a message the guest can carry back to the model.
+///
+/// One function rather than the same `if` four times, because `questionnaire`
+/// (gh #407) made it five: a gate restated per arm is a gate an arm eventually
+/// forgets, and the class is exactly what the unit row below pins.
+fn dialog_gate() -> Result<(), String> {
+    if dialogs_forbidden() {
+        Err(LOOP_THREAD_DENIAL.to_string())
+    } else {
+        Ok(())
+    }
+}
+
+use lca_ext_abi::host::tool::lca::host::ui_dialogs::{Answer, Question};
+
 /// The `ui-dialogs` import (gh #124/gh #172): through the session's
 /// live slot, or the denied values with nothing installed (the
 /// headless contract). Every world shares the one canonical import
 /// name, so the tool world's registration serves all four.
 impl lca_ext_abi::host::tool::lca::host::ui_dialogs::Host for HostState {
     fn confirm(&mut self, title: String, message: String) -> Result<bool, String> {
-        if dialogs_forbidden() {
-            return Err(LOOP_THREAD_DENIAL.to_string());
-        }
+        dialog_gate()?;
         Ok(self.dialogs.confirm(&title, &message))
     }
     fn select(&mut self, title: String, options: Vec<String>) -> Result<Option<String>, String> {
-        if dialogs_forbidden() {
-            return Err(LOOP_THREAD_DENIAL.to_string());
-        }
+        dialog_gate()?;
         Ok(self.dialogs.select(&title, &options))
     }
     fn input(
@@ -58,16 +71,48 @@ impl lca_ext_abi::host::tool::lca::host::ui_dialogs::Host for HostState {
         label: String,
         placeholder: Option<String>,
     ) -> Result<Option<String>, String> {
-        if dialogs_forbidden() {
-            return Err(LOOP_THREAD_DENIAL.to_string());
-        }
+        dialog_gate()?;
         Ok(self.dialogs.input(&label, placeholder.as_deref()))
     }
     fn notify(&mut self, message: String, level: String) {
-        if dialogs_forbidden() {
+        if dialog_gate().is_err() {
             return;
         }
         self.dialogs.notify(&message, &level);
+    }
+
+    /// A tabbed questionnaire (gh #407): map the WIT records both ways.
+    ///
+    /// The loop-thread refusal is an **error** here, like `select`, and not
+    /// a silent dismissal: a guest asking from `render` would otherwise read
+    /// "the user declined" as an answer. `Ok(None)` is kept for the honest
+    /// dismissal the surface reports (Esc) and for the headless slot, whose
+    /// default answers nothing - a difference the guest can act on.
+    fn questionnaire(
+        &mut self,
+        title: String,
+        questions: Vec<Question>,
+    ) -> Result<Option<Vec<Answer>>, String> {
+        dialog_gate()?;
+        let asked: Vec<lca_permissions::Question> = questions
+            .into_iter()
+            .map(|question| lca_permissions::Question {
+                header: question.header,
+                prompt: question.prompt,
+                options: question.options,
+                multiple: question.multiple,
+            })
+            .collect();
+        Ok(self.dialogs.questionnaire(&title, &asked).map(|answers| {
+            answers
+                .into_iter()
+                .map(|answer| Answer {
+                    header: answer.header,
+                    value: answer.value,
+                    custom: answer.custom,
+                })
+                .collect()
+        }))
     }
 }
 
@@ -191,5 +236,38 @@ impl lca_ext_abi::host::tool_catalog::lca::host::tools::Host for HostState {
         self.tools_gate()
             .map(|view| view.active_tools())
             .unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Verifies: gh #124, extended by gh #407 - every dialog is refused on the
+    // loop thread with the message the guest can read, and allowed anywhere
+    // else. The row pins the **gate** rather than one arm because the arms are
+    // the same three lines five times over; what it cannot prove is that each
+    // arm calls it, which is why the gate returns `Result` instead of a `bool`
+    // (an arm that forgets it does not compile with `?` dropped for a value).
+    #[test]
+    fn the_dialog_gate_refuses_on_the_loop_thread_and_allows_off_it() {
+        assert!(
+            dialog_gate().is_ok(),
+            "a worker thread (a tool, a hook) may ask"
+        );
+        let refused = without_dialogs(dialog_gate);
+        assert_eq!(
+            refused,
+            Err(LOOP_THREAD_DENIAL.to_string()),
+            "loop-thread dispatch refuses with the guest-readable reason"
+        );
+        // Nested and restored: the flag is saved and put back, so a tool
+        // dispatched from inside an interaction still sees the refusal lifted
+        // outside the nested call.
+        without_dialogs(|| {
+            assert!(dialog_gate().is_err(), "inside dispatch");
+            without_dialogs(|| assert!(dialog_gate().is_err(), "nested"));
+        });
+        assert!(dialog_gate().is_ok(), "restored after the outer call");
     }
 }

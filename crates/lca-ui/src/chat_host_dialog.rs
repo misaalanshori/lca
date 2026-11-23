@@ -33,6 +33,12 @@ impl Chat {
                 super::render::overlay_box(viewport, width, height, title, &body, &self.theme);
             }
             UiDialog::Select { .. } => self.compose_select_dialog(viewport, width, height, modal),
+            // Gh #407: the tabbed questionnaire's chrome lives beside its keys
+            // in `chat_questionnaire.rs`; the arm is a delegation so this file
+            // never grows into a second widget.
+            UiDialog::Questionnaire { .. } => {
+                self.compose_questionnaire(viewport, width, height, modal);
+            }
             UiDialog::Input { .. } => self.compose_input_dialog(viewport, width, height, modal),
             UiDialog::Notify { .. } => {
                 // Never opens (the drain notices and answers); reaching here

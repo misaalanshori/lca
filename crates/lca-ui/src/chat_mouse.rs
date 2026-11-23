@@ -263,7 +263,10 @@ impl Chat {
                     .dialog
                     .as_ref()
                     .map(|modal| &modal.exchange.dialog),
+                // A questionnaire's active tab scrolls its own option list the
+                // same way (gh #407): the wheel is keys the loop never saw.
                 Some(lca_protocol::UiDialog::Select { .. })
+                    | Some(lca_protocol::UiDialog::Questionnaire { .. })
             ) {
                 let key = if delta > 0 { "down" } else { "up" };
                 crate::dialogs::handle_dialog(self, "", Some(key));

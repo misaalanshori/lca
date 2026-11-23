@@ -29,12 +29,20 @@ pub fn drain_dialog(chat: &mut Chat, dialog_rx: &Receiver<DialogExchange>) -> bo
                 lca_protocol::UiDialog::Select { options, .. } => (0..options.len()).collect(),
                 _ => Vec::new(),
             };
+            // A questionnaire opens with one tab per question (gh #407).
+            let questionnaire = match &exchange.dialog {
+                lca_protocol::UiDialog::Questionnaire { questions, .. } => {
+                    Some(crate::chat_questionnaire::Questionnaire::new(questions))
+                }
+                _ => None,
+            };
             chat.world.dialog = Some(DialogModal {
                 exchange,
                 query: String::new(),
                 matches,
                 selected: 0,
                 input: String::new(),
+                questionnaire,
             });
         }
         return true;
@@ -70,6 +78,21 @@ fn refilter_dialog(
 pub fn handle_dialog(chat: &mut Chat, data: &str, key: Option<&str>) -> Option<Action> {
     use lca_protocol::{DialogAnswer, UiDialog};
     let mut modal = chat.world.dialog.take()?;
+    // A questionnaire owns its keys through its own module (gh #407): the
+    // state machine and the paint live beside each other, and this dispatch
+    // stays a dispatch.
+    if matches!(modal.exchange.dialog, UiDialog::Questionnaire { .. }) {
+        let answer = crate::chat_questionnaire::handle(&mut modal, data, key);
+        match answer {
+            Some(answer) => {
+                let _ = modal.exchange.respond.send(answer);
+            }
+            None => {
+                chat.world.dialog = Some(modal);
+            }
+        }
+        return Some(Action::Continue);
+    }
     let answer = match &mut modal.exchange.dialog {
         UiDialog::Confirm { .. } => match key {
             Some("y" | "Y" | "enter") => Some(DialogAnswer::Confirm(true)),
@@ -144,6 +167,9 @@ pub fn handle_dialog(chat: &mut Chat, data: &str, key: Option<&str>) -> Option<A
             }
         }
         UiDialog::Notify { .. } => Some(DialogAnswer::Notify),
+        // Unreachable: the questionnaire branch above owns this variant, and a
+        // dismissal is the honest answer if it ever were reached.
+        UiDialog::Questionnaire { .. } => Some(DialogAnswer::Questionnaire(None)),
     };
     match answer {
         Some(answer) => {

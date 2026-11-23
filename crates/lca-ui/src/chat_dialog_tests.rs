@@ -24,6 +24,7 @@ fn a_confirm_dialog_answers_and_closes() {
         matches: Vec::new(),
         selected: 0,
         input: String::new(),
+        questionnaire: None,
     });
     chat.handle_key("n");
     assert_eq!(response.try_recv().ok(), Some(DialogAnswer::Confirm(false)));
@@ -50,6 +51,7 @@ fn a_select_dialog_filters_and_picks() {
         matches: vec![0, 1],
         selected: 0,
         input: String::new(),
+        questionnaire: None,
     });
     chat.handle_key("b");
     assert_eq!(chat.world.dialog.as_ref().unwrap().matches, vec![1]);
@@ -80,6 +82,7 @@ fn an_input_dialog_edits_and_submits() {
         matches: Vec::new(),
         selected: 0,
         input: String::new(),
+        questionnaire: None,
     });
     for c in "hi".chars() {
         chat.handle_key(&c.to_string());
@@ -103,6 +106,7 @@ fn an_input_dialog_edits_and_submits() {
         matches: Vec::new(),
         selected: 0,
         input: String::new(),
+        questionnaire: None,
     });
     chat.handle_key("\x1b");
     assert_eq!(response.try_recv().ok(), Some(DialogAnswer::Input(None)));

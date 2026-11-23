@@ -114,6 +114,9 @@ fn denied_answer(dialog: &lca_protocol::UiDialog) -> lca_protocol::DialogAnswer 
         lca_protocol::UiDialog::Select { .. } => lca_protocol::DialogAnswer::Select(None),
         lca_protocol::UiDialog::Input { .. } => lca_protocol::DialogAnswer::Input(None),
         lca_protocol::UiDialog::Notify { .. } => lca_protocol::DialogAnswer::Notify,
+        lca_protocol::UiDialog::Questionnaire { .. } => {
+            lca_protocol::DialogAnswer::Questionnaire(None)
+        }
     }
 }
 
@@ -153,5 +156,39 @@ impl lca_permissions::DialogPrompt for SessionDialogs {
             message: message.to_string(),
             level: level.to_string(),
         });
+    }
+
+    /// A tabbed questionnaire (gh #407): one modal, one submit, and the
+    /// answers in the asker's order. A dead loop answers the denied value
+    /// (`None`), like every other dialog here.
+    fn questionnaire(
+        &mut self,
+        title: &str,
+        questions: &[lca_permissions::Question],
+    ) -> Option<Vec<lca_permissions::Answer>> {
+        match self.ask(lca_protocol::UiDialog::Questionnaire {
+            title: title.to_string(),
+            questions: questions
+                .iter()
+                .map(|question| lca_protocol::UiQuestion {
+                    header: question.header.clone(),
+                    prompt: question.prompt.clone(),
+                    options: question.options.clone(),
+                    multiple: question.multiple,
+                })
+                .collect(),
+        }) {
+            lca_protocol::DialogAnswer::Questionnaire(answers) => answers.map(|answers| {
+                answers
+                    .into_iter()
+                    .map(|answer| lca_permissions::Answer {
+                        header: answer.header,
+                        value: answer.value,
+                        custom: answer.custom,
+                    })
+                    .collect()
+            }),
+            _ => None,
+        }
     }
 }

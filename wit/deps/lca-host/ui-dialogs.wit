@@ -21,4 +21,33 @@ interface ui-dialogs {
   /// A transient status notification. Fire and forget: headless drops
   /// it silently (no row, no error), because nobody is watching.
   notify: func(message: string, level: string);
+
+  /// One question in a tabbed questionnaire: a header (the answer's key
+  /// and the tab's label), the prompt, and the choices. An empty
+  /// `options` list means free text only, which is the inline editor's
+  /// default state.
+  record question {
+    header: string,
+    prompt: string,
+    options: list<string>,
+    /// Several answers may be picked. The host renders checkboxes and
+    /// submits the picks joined by ", " in the order they were toggled.
+    multiple: bool,
+  }
+
+  /// One answer, keyed by its question's header.
+  record answer {
+    header: string,
+    /// The chosen option's text, or what the user typed.
+    value: string,
+    /// True when the value came from the inline editor rather than a
+    /// listed option - the same distinction the sequential path's `Type
+    /// your own answer...` arm already carries.
+    custom: bool,
+  }
+
+  /// A tabbed questionnaire: every question answered in one modal, one
+  /// submit. `ok(none)` is a dismissal (the whole ask was abandoned);
+  /// headless answers `none`, like every other dialog in this interface.
+  questionnaire: func(title: string, questions: list<question>) -> result<option<list<answer>>, string>;
 }

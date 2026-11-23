@@ -225,6 +225,39 @@ pub enum UiDialog {
         /// `info`, `warning`, or `error`.
         level: String,
     },
+    /// A tabbed questionnaire (gh #407): every question answered in one
+    /// modal, one submit. `None` is a dismissal.
+    Questionnaire {
+        /// The modal's title.
+        title: String,
+        /// The questions, in the asker's order.
+        questions: Vec<UiQuestion>,
+    },
+}
+
+/// One question in a [`UiDialog::Questionnaire`] (gh #407).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UiQuestion {
+    /// The answer's key, and the tab's label.
+    pub header: String,
+    /// The question as the user reads it.
+    pub prompt: String,
+    /// The choices, in the asker's order. Empty means free text only.
+    pub options: Vec<String>,
+    /// Whether several answers may be picked.
+    pub multiple: bool,
+}
+
+/// One answer in a [`DialogAnswer::Questionnaire`] (gh #407).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UiAnswer {
+    /// The question's header.
+    pub header: String,
+    /// The chosen option's text, or what the user typed.
+    pub value: String,
+    /// Whether the value came from the inline editor rather than a listed
+    /// option.
+    pub custom: bool,
 }
 
 /// What a host dialog answered.
@@ -239,6 +272,9 @@ pub enum DialogAnswer {
     Input(Option<String>),
     /// A notification asks for nothing.
     Notify,
+    /// The questionnaire's answers, in the asker's order; `None` is a
+    /// dismissal.
+    Questionnaire(Option<Vec<UiAnswer>>),
 }
 
 /// What an interaction asks the host to do (the effect variant).
