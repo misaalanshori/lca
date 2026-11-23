@@ -324,9 +324,17 @@ impl Chat {
         };
         match poll() {
             Some(notice) => {
-                // A background install finishes away from the
-                // conversation; its confirmation floats and fades.
-                self.toast(notice);
+                // A background install finishes away from the conversation. A
+                // confirmation floats and fades; a failure is something the
+                // user has to act on, so it also lands in the transcript -
+                // where it wraps and stays instead of being truncated by the
+                // toast's width and lost when it fades (gh #615).
+                if notice.starts_with("installed ") {
+                    self.toast(notice);
+                } else {
+                    self.say(notice.clone());
+                    self.toast(notice);
+                }
                 true
             }
             None => false,

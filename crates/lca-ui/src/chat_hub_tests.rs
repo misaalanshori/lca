@@ -379,3 +379,62 @@ fn no_other_filter_field_scans_raw_bytes_for_text() {
         offenders.join("\n")
     );
 }
+
+// Verifies: gh #615 - a finished install's *outcome* reaches the user in a form
+// they can read. A confirmation is a flash; a failure is an instruction, so it
+// also lands in the transcript where it wraps and survives the toast's fade
+// (the toast truncated `could not fetch ghcr.io/...: no artifact for ...`).
+#[test]
+fn an_install_failure_lands_in_the_transcript_and_a_success_flashes() {
+    use std::sync::Mutex;
+    let notice = Arc::new(Mutex::new(None::<String>));
+    let mut opts = options();
+    let cell = notice.clone();
+    opts.hooks.poll_install = Some(Arc::new(move || {
+        cell.lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
+    }));
+    let mut chat = chat();
+    chat.world.options.hooks = opts.hooks;
+
+    let failure = "no artifact for anthropic at ABI line 0.7 yet - the extension registry \
+                   publishes this line with the next release; `lca ext install \
+                   anthropic:unstable` has the unstable channel's build";
+    *notice.lock().expect("notice") = Some(failure.to_string());
+    assert!(chat.poll_install(), "the poll reports work landed");
+    // The transcript wraps, so the assertions name the fragments that carry
+    // the advice rather than the unbroken string the toast truncated.
+    // The transcript wraps, so compare on a whitespace-normalised capture: the
+    // rows carry the sentence with a line break where the viewport broke it.
+    let said = crate::chat::tests_support::strip(&chat.viewport(100, 40, 0)).join(" ");
+    let said = said.split_whitespace().collect::<Vec<_>>().join(" ");
+    for fragment in [
+        "no artifact for anthropic at ABI line 0.7 yet",
+        "publishes this line with the next release",
+        "anthropic:unstable",
+    ] {
+        assert!(
+            said.contains(fragment),
+            "the transcript carries `{fragment}`:\n{said}"
+        );
+    }
+
+    // A success is a confirmation and stays a toast: the transcript grows no
+    // entry for it, so closing the hub does not leave an install log behind.
+    let entries_before = chat.transcript.entries().len();
+    *notice.lock().expect("notice") = Some("installed word-count 1.0.0 (abc123)".to_string());
+    assert!(chat.poll_install(), "the poll reports the toast");
+    assert_eq!(
+        chat.transcript.entries().len(),
+        entries_before,
+        "a confirmation does not add a transcript entry"
+    );
+    assert!(
+        chat.toasts
+            .iter()
+            .any(|toast| toast.text.contains("installed word-count")),
+        "the confirmation is the toast"
+    );
+    assert!(!chat.poll_install(), "an empty slot reports nothing");
+}

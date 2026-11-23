@@ -217,6 +217,13 @@ fn install_row(
     };
     let resolved = match resolved {
         Ok(resolved) => resolved,
+        // The absence/refusal variants are already a sentence addressed to the
+        // user (gh #615), with the name and the way out in it; prefixing them
+        // with the ref they just consented to buries the advice in a run-on.
+        Err(
+            err @ (lca_registry::Error::MissingArtifact { .. }
+            | lca_registry::Error::PullRefused { .. }),
+        ) => return err.to_string(),
         Err(err) => return format!("could not fetch {oci_ref}: {err}"),
     };
     let manifest = match lca_ext_host::Manifest::parse(&resolved.manifest) {

@@ -235,17 +235,28 @@ impl From<std::io::Error> for Error {
 /// a pruned pin. `docs/installation.md` carries the channel table this copy
 /// matches (gh #615).
 fn missing_artifact_copy(name: &str, tag: &str) -> String {
-    match tag.strip_prefix("abi-") {
-        Some(line) => format!(
-            "no artifact for {name} at ABI line {line} yet - the extension registry publishes this \
-             line with the next release; `lca ext install {name}:unstable` has the unstable \
+    if let Some(line) = tag.strip_prefix("abi-") {
+        // The tag every release publishes: absence means the line is new.
+        return format!(
+            "no artifact for {name} at ABI line {line} yet - the extension registry publishes \
+             this line with the next release; `lca ext install {name}:unstable` has the unstable \
              channel's build"
-        ),
-        None => format!(
-            "no artifact for {name} at tag `{tag}` - check the tag; `lca ext install \
-             {name}:unstable` has the unstable channel's build"
-        ),
+        );
     }
+    if tag == "unstable" {
+        // The unstable channel is a curated set (ADR-0043): a name missing
+        // here is one the release line carries, not one that never ships.
+        return format!(
+            "no artifact for {name} on the unstable channel - it publishes a curated \
+             first-party set, and the release line (`lca ext install {name}:abi-{}`) publishes \
+             this one with the next release",
+            lca_ext_abi::ABI_VERSION
+        );
+    }
+    format!(
+        "no artifact for {name} at tag `{tag}` - check the tag; `lca ext install \
+         {name}:unstable` has the unstable channel's build"
+    )
 }
 
 /// Check a claimed digest against the bytes (FR-DIST-3/4).

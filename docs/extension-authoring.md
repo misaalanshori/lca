@@ -814,9 +814,18 @@ lca ext install ghcr.io/yourname/word-count:abi-0.7
 First-party extensions take the shorthand (gh #252): a bare name
 (`lca ext install antigravity`) or name-plus-tag
 (`lca ext install antigravity:unstable`) expands to the official
-repository (`ghcr.io/misaalanshori/lca/<name>[:tag]`), the tag
-defaulting to the current ABI line. Anything with a slash stays
-exact.
+repository (`ghcr.io/misaalanshori/lca/<name>[:tag]`). Anything with a
+slash stays exact, and an explicit tag is always used as written.
+
+**The default tag follows the channel of the binary you run** (gh #615,
+ADR-0043): a release build resolves a bare name to `abi-<line>`, and an
+unstable build resolves it to `unstable`, which is what each line
+actually publishes. The binary knows which it is from its own version
+(`X.Y.Z.b<sha7>` iff the unstable workflow built it), so nothing is
+configured. Same rule for the `/extensions` hub, whose catalog is
+authored in the release form. If a tag is simply not published yet (a
+fresh ABI line, before the release that publishes it), `lca ext install`
+says so and names the channel's tag as the way through.
 
 An OCI registry is not the only option. Any HTTPS host works: zip the component and `extension.toml` together with nothing else added, publish two URLs the same way, one for the fixed version and one that always points at the current release, and a user installs with `lca ext install https://yourhost.example/word-count-abi-0.7.zip`. The update mechanics are identical either way; see ADR-0010.
 

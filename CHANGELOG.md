@@ -6,6 +6,22 @@ Dates are UTC.
 
 ## [Unreleased]
 
+### Fixed
+- **A missing extension tag says what to do, and an unstable build installs from its own
+  channel** (gh #615). `lca ext install openai-compatible` on the 0.7 line failed with
+  `fetch failed: ...: HTTP401 and the token endpoint answered 403 Forbidden`: two registry
+  statuses and no next step. Three outcomes now have three sentences - *absent* (`no
+  artifact for openai-compatible at ABI line 0.7 yet - the extension registry publishes
+  this line with the next release; `lca ext install openai-compatible:unstable` has the
+  unstable channel's build`), *refused* (the pull is denied for a credential reason, which
+  is a different fix), and *everything else* (unchanged, still the transport detail). The
+  raw statuses moved to `LCA_LOG`. Separately, an unstable binary now resolves a bare
+  first-party name to `:unstable`, the tag its own channel publishes, instead of asking
+  for a line tag that channel never ships; an explicit `:<tag>` is never rewritten, and a
+  release build still resolves to `abi-<line>`. The hub's catalog installs follow the same
+  rule, which is why their version check accepts the unstable line's
+  `<version>-unstable.b<sha7>` stamp.
+
 ### Changed
 - **The extension ABI line is now 0.7, and 0.6 extensions must be rebuilt to run**
   (gh #407, interface/breaking). The tabbed questionnaire's `ui-dialogs.questionnaire`

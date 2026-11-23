@@ -293,8 +293,12 @@ async fn a_missing_abi_line_tag_names_the_line_and_the_next_release() {
     for statuses in [
         // A registry that answers 404 for an absent tag.
         vec!["404 Not Found"],
-        // ghcr's shape: challenge, then the anonymous token is refused.
+        // ghcr's shape for an absent *package*: challenge, then the anonymous
+        // token is refused.
         vec!["401 Unauthorized", "403 Forbidden"],
+        // ghcr's shape for an absent *tag* (measured 2026-11-24 against the
+        // real registry): challenge, token issued, manifest 404.
+        vec!["401 Unauthorized", "200 OK", "404 Not Found"],
     ] {
         let (base, server) = super::support::mock_statuses(statuses.clone()).await;
         let err = resolve_oci(&format!("{base}/example/word-count:abi-{line}"))
@@ -335,6 +339,28 @@ async fn an_existing_tag_still_fetches_and_prompts() {
         "the control keeps the ref it was given"
     );
     server.abort();
+}
+
+/// A missing name on the unstable channel is its own sentence: that channel is a
+/// curated set, so the release line is where the name lives - not "check the tag"
+/// (which is what a wrong `:b<sha>` pin needs) and not "this line is new" (which
+/// is what a line tag needs).
+#[test]
+fn a_name_the_unstable_channel_does_not_publish_names_the_release_line() {
+    let text = lca_registry::Error::MissingArtifact {
+        name: "codex".to_string(),
+        tag: "unstable".to_string(),
+    }
+    .to_string();
+    assert!(
+        text.contains("no artifact for codex on the unstable channel"),
+        "names the channel: {text}"
+    );
+    assert!(
+        text.contains(&format!("codex:abi-{}", lca_ext_abi::ABI_VERSION))
+            && text.contains("next release"),
+        "names the line that does publish it: {text}"
+    );
 }
 
 /// A token *was* issued and the pull was still refused: a different sentence,

@@ -157,3 +157,31 @@ boundaries without building from source. Stable releases continue
 to omit the feature, preserving the 25.0 MB size ceiling (NFR-1)
 and zero runtime overhead.
 
+
+## Addendum 2026-11-24 (gh #615): the client side of the extension channel
+
+The 2026-10-13 addendum made the unstable line publish extensions. It did not make
+an unstable *binary* install from it: a bare name always expanded to `abi-<line>`,
+the tag only the release line carries, so `lca ext install antigravity` on an
+unstable build asked for a tag that channel never publishes and failed - and the
+0.7 line move turned that into a visible wall, because no `abi-0.7` tag exists
+until the release in gh #615's sibling runs.
+
+The rule now: **a bare first-party name resolves to the tag the running binary's
+own channel publishes** - `:unstable` on the unstable line, `abi-<line>` on a
+release - and an explicit `:<tag>` is always used as written. A catalog entry's
+authored `oci_ref` (which is in the release form) is a *default*, so it follows
+the same rule in the hub, and the hub's row check accepts the unstable line's
+`<version>-unstable.b<sha7>` stamp as the prerelease of the version the row names.
+
+The signal is `X.Y.Z.b<sha7>` in the product version, and it is the only one: the
+version is a property of how the binary was built (this ADR's baking rule), not of
+a setting, a file, or a probe. `crates/lca-registry/src/channel.rs` holds the rule
+and its doc comment names the workflow line that bakes the version; the catalog's
+ABI-window filter is untouched, because the channel changes which *tag* a default
+reference names, never which entries the host offers.
+
+Not adopted: falling back to the previous line's tag when the current one is
+missing. A 0.6 component cannot link on a 0.7 host (gh #407's own link rows), so a
+fallback would install something that refuses to load - a worse failure than the
+sentence that says "not published yet".

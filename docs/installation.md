@@ -64,6 +64,8 @@ curl -fsSL https://raw.githubusercontent.com/misaalanshori/lca/main/install.sh |
 curl -fsSL https://raw.githubusercontent.com/misaalanshori/lca/main/install.sh | sh -s -- --unstable
 ```
 
+**An unstable binary installs extensions from the unstable extension channel.** That follows from the same version stamp, so there is nothing to configure: a binary that reports `X.Y.Z.b<sha7>` resolves a bare extension name (`lca ext install antigravity`) to the extension channel's `:unstable` tag, and a release binary resolves it to `abi-<current ABI line>`. The channel publishes different tags for the same extension, so the rule is what makes either line's bare name land on an artifact that host can actually load. An explicit `:<tag>` is always used as written - see `docs/extension-authoring.md`'s publishing section.
+
 Switching lines is just running the other form: no flag installs (or re-installs) the stable line over whatever is there, the flag installs the unstable line, and the report line says which is which (`lca 0.6.0.b6573049 -> 0.6.0`). The installed binary keeps whatever it was given; nothing about a line is stored, so the next run decides again.
 
 **Trust stance.** The unstable line verifies exactly like the stable one: `artifacts.sha256` from the same directory, mismatch refuses and leaves the old binary in place, and the same `actions/attest-build-provenance` attestation is produced per artifact, so `gh attestation verify ./lca --repo misaalanshori/lca` works on an unstable binary too. What it does not carry is a promise: no changelog entry, no support window, and a build that may be broken by design. When in doubt, run the one-liner without the flag.

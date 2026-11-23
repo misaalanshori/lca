@@ -369,10 +369,15 @@ async fn fetch_oci_once(
     let retry = get_following_redirects(client, url, accept, &authorization(token)?).await?;
     if !retry.status().is_success() {
         let status = retry.status();
-        // A token was issued and the pull still failed: that is a refusal, not
-        // an absence - the registry knows what the artifact is and will not
-        // hand it over.
+        // A token was issued and the document still 404s: the registry accepts
+        // this host and the *tag* is absent - ghcr's shape for an unpublished
+        // tag, and the one a 0.7-line install meets today (measured, not
+        // assumed: challenge -> token -> 404). A 401/403 here is the other
+        // story - the pull was authorized and then denied.
         return Err(match artifact {
+            Some(artifact) if status == hyper::StatusCode::NOT_FOUND => {
+                artifact.missing(&format!("manifest HTTP {status} after a token"))
+            }
             Some(artifact)
                 if status == hyper::StatusCode::UNAUTHORIZED
                     || status == hyper::StatusCode::FORBIDDEN =>
