@@ -497,10 +497,17 @@ impl Chat {
                 body.extend(self.option_rows(question, tab));
             }
         }
-        body.push(String::new());
-        body.push(self.theme.role(Role::Dim)(
-            &self.questionnaire_hint(questions, state),
-        ));
+        // pi draws the help line only while no input holds the baton
+        // (`if (!inputMode)`, questionnaire.ts): the editor paints its own two
+        // keys, and repeating the *options* help under a focused field both
+        // duplicates and contradicts it (`↑↓ select` is not what the arrows do
+        // there). One hint row, and it is the one that is true.
+        if !state.editing() {
+            body.push(String::new());
+            body.push(self.theme.role(Role::Dim)(
+                &self.questionnaire_hint(questions, state),
+            ));
+        }
         super::render::overlay_box(viewport, width, height, title, &body, &self.theme);
     }
 
@@ -527,6 +534,10 @@ impl Chat {
                 muted(&label)
             };
             segments.push((visible_width(&label), painted));
+            // pi separates tabs with a space of their own (`tabs.join("")` over
+            // per-tab `" □ X " + " "`), which is what makes the row read as
+            // tiles rather than one run.
+            segments.push((1, " ".to_string()));
         }
         let can_submit = state.tabs.iter().all(|tab| tab.answer.is_some());
         let submit = " ✓ Submit ".to_string();
@@ -538,6 +549,8 @@ impl Chat {
             dim(&submit)
         };
         segments.push((visible_width(&submit), painted_submit));
+        // pi's `" ✓ Submit  →"` needs no separator of its own: the arrow
+        // segment already opens with a space.
         segments.push((2, accent(" →")));
         clip_segments(&segments, inner)
     }
@@ -559,7 +572,10 @@ impl Chat {
             };
             let custom_row = question.options.len();
             if index == custom_row {
-                let label = format!("{}. {CUSTOM_ROW}", index + 1);
+                // pi marks the row the editor belongs to (`isOther && inputMode
+                // ? " ✎" : ""`), so the list still shows where the baton went.
+                let quill = if tab.editing { " ✎" } else { "" };
+                let label = format!("{}. {CUSTOM_ROW}{quill}", index + 1);
                 out.push(format!("{marker}{}", text(&label)));
                 continue;
             }
@@ -592,7 +608,6 @@ impl Chat {
     /// The editor frame: the prompt for context, the options for reference,
     /// then the field with its caret and the `✎` marker (pi's shape).
     fn editing_rows(&self, question: &UiQuestion, state: &Questionnaire) -> Vec<String> {
-        let accent = self.theme.role(Role::Accent);
         let muted = self.theme.role(Role::Muted);
         let dim = self.theme.role(Role::Dim);
         let tab = &state.tabs[state.active];
@@ -603,7 +618,7 @@ impl Chat {
         }
         out.push(muted("Your answer:"));
         let row = self.caret_row_at(
-            &accent("✎ "),
+            "  ",
             &tab.draft,
             boundary(&tab.draft, tab.cursor),
             "type your answer",
@@ -687,19 +702,31 @@ fn header_label(question: &UiQuestion, index: usize) -> String {
 /// which clears every channel (the tab row's own background included). Every
 /// segment here closes its own channels, so a plain cut plus `…` is complete.
 fn clip_segments(segments: &[(usize, String)], inner: usize) -> String {
+    let total: usize = segments.iter().map(|(width, _)| *width).sum();
+    if total <= inner {
+        return segments
+            .iter()
+            .map(|(_, painted)| painted.as_str())
+            .collect();
+    }
+    // The ellipsis is a cell of its own, so the kept segments may only use
+    // `inner - 1` - and a segment is kept whole or dropped whole, never
+    // half-painted. Getting this wrong is not cosmetic: a row that ends exactly
+    // at `inner` and *then* grows an ellipsis is one cell too wide, and the
+    // modal's own painter wraps it, leaving `…` alone on the next row (found in
+    // the real pane at 70 columns, hence the row's no-continuation assertion).
+    let budget = inner.saturating_sub(1);
     let mut out = String::new();
     let mut used = 0;
     for (width, painted) in segments {
-        if used + *width > inner {
-            // The ellipsis needs its own cell, so the last segment is dropped
-            // rather than half-painted.
-            if inner > 0 {
-                out.push('…');
-            }
-            return out;
+        if used + *width > budget {
+            break;
         }
         used += *width;
         out.push_str(painted);
+    }
+    if inner > 0 {
+        out.push('…');
     }
     out
 }

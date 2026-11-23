@@ -249,6 +249,19 @@ fn the_inline_editor_takes_the_arrows_and_esc_returns_to_the_options() {
         "the left arrow did not leave the question:\n{}",
         visible(&mut chat)
     );
+    // The help line under a focused field is the *editor's*, not the options':
+    // a second row saying `↑↓ select` under a field the arrows now move a
+    // cursor in is a lie about the keys (pi omits it for the same reason).
+    assert!(
+        visible(&mut chat).contains("Enter submits; Esc goes back."),
+        "the editor paints its own keys:\n{}",
+        visible(&mut chat)
+    );
+    assert!(
+        !visible(&mut chat).contains("↑↓ select"),
+        "and the options' help is not repeated under it:\n{}",
+        visible(&mut chat)
+    );
     chat.handle_key("b");
     chat.handle_key("\r");
     // Answering from the editor is custom, and the value is what was typed.
@@ -451,6 +464,54 @@ fn a_twelve_question_ask_never_exceeds_the_modal_width() {
         tabs.trim_end().ends_with('│'),
         "the modal's frame still closes: {tabs:?}"
     );
+    // The elision must land *inside* the row: a tab row that exactly fills the
+    // inner width and then grows an ellipsis is one cell too wide, and the
+    // modal's painter wraps it - which is what a 70-column pane showed as a
+    // lone `…` on the row below the tabs.
+    for row in &painted {
+        let body = row
+            .trim()
+            .trim_start_matches('│')
+            .trim()
+            .trim_end_matches('│')
+            .trim();
+        assert_ne!(
+            body,
+            "…",
+            "the tab row was not wrapped:\n{}",
+            painted.join("\n")
+        );
+    }
+
+    // The boundary, swept rather than guessed: at *some* width the tab row's
+    // tiles land exactly on the inner edge, and an ellipsis added on top of them
+    // is one cell too wide - the modal's painter then wraps it, leaving a lone
+    // `…` under the tabs. That is what a 70-column pane showed before the clip
+    // reserved the ellipsis' own cell, and a single width would miss it the next
+    // time a label or a theme changes.
+    for width in (40u16..=120).step_by(2) {
+        let mut narrow = crate::chat::tests_support::chat();
+        let _answers = open(&mut narrow, &three_questions());
+        let painted = frame(&mut narrow, width, 30);
+        for row in &painted {
+            assert!(
+                lca_tui::engine::text::visible_width(row) <= width as usize,
+                "no row is wider than the terminal at {width}: {row:?}"
+            );
+            let body = row
+                .trim()
+                .trim_start_matches('│')
+                .trim()
+                .trim_end_matches('│')
+                .trim();
+            assert_ne!(
+                body,
+                "…",
+                "the tab row fits the modal at {width} instead of wrapping:\n{}",
+                painted.join("\n")
+            );
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
