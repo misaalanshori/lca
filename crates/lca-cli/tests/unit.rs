@@ -295,6 +295,34 @@ fn the_product_version_is_stable_or_unstable_shape() {
     assert!(lca_cli::version_text().starts_with(product), "line one");
 }
 
+// Verifies: gh #615 - the product version that `--version` prints and the one
+// the registry's channel decision reads are the same string, so one build is
+// classified as one channel. They come from two build scripts (this crate's and
+// `lca-registry`'s) reading `LCA_BUILD_VERSION`; that duplication is deliberate
+// (a build script cannot be shared across crates) and this row is its guard.
+#[test]
+fn the_two_build_scripts_read_one_product_version() {
+    let printed = lca_cli::version_text();
+    let product = printed.lines().next().expect("a first line");
+    assert_eq!(
+        lca_registry::Channel::from_product_version(product),
+        lca_registry::Channel::current(),
+        "the printed version and the registry's channel agree: {product}"
+    );
+    // And the shape is the workflow's on both lines: a release carries the
+    // crate version, an unstable build carries it plus `.b<sha7>`.
+    match product.split_once(".b") {
+        Some((base, sha)) => {
+            assert_eq!(base, env!("CARGO_PKG_VERSION"), "base is the crate version");
+            assert!(
+                !sha.is_empty() && sha.chars().all(|c| c.is_ascii_hexdigit()),
+                "a hex sha: {sha}"
+            );
+        }
+        None => assert_eq!(product, env!("CARGO_PKG_VERSION")),
+    }
+}
+
 // Verifies: both forms of the scheme parse (the unstable workflow's
 // composition and the stable default).
 #[test]

@@ -360,3 +360,141 @@ async fn a_refused_authorized_pull_names_the_refusal_not_the_absence() {
     );
     server.abort();
 }
+
+// ---------------------------------------------------------------------------
+// gh #615: the channel decides the *default* tag, and nothing else
+//
+// The two release lines publish different tags for the same extension, so the
+// tag a bare name resolves to is a property of the build, not a constant.
+// ---------------------------------------------------------------------------
+
+/// An unstable build resolves a bare name to the tag its own channel publishes.
+#[test]
+fn an_unstable_build_resolves_a_bare_name_to_the_unstable_tag() {
+    assert_eq!(
+        lca_registry::expand_shorthand_with("antigravity", lca_registry::Channel::Unstable),
+        "ghcr.io/misaalanshori/lca/antigravity:unstable"
+    );
+}
+
+/// A release build keeps the line tag - the tag #615's release publishes.
+#[test]
+fn a_release_build_resolves_a_bare_name_to_the_abi_line_tag() {
+    assert_eq!(
+        lca_registry::expand_shorthand_with("antigravity", lca_registry::Channel::Release),
+        format!(
+            "ghcr.io/misaalanshori/lca/antigravity:abi-{}",
+            lca_ext_abi::ABI_VERSION
+        )
+    );
+}
+
+/// An explicit tag is never rewritten, on either channel: someone who asked for
+/// `abi-0.6` gets a fetch of `abi-0.6` (and the absence copy if it is gone),
+/// never a silent substitution to a tag the channel likes better.
+#[test]
+fn an_explicit_tag_is_never_rewritten() {
+    for channel in [
+        lca_registry::Channel::Release,
+        lca_registry::Channel::Unstable,
+    ] {
+        for source in [
+            "antigravity:unstable",
+            "antigravity:1.0.1",
+            "antigravity:b9653a3e",
+            "antigravity:abi-0.6",
+        ] {
+            let expected = lca_registry::expand_shorthand(source);
+            assert_eq!(
+                lca_registry::expand_shorthand_with(source, channel),
+                expected,
+                "{source} on {channel:?}"
+            );
+        }
+        for full in [
+            "ghcr.io/misaalanshori/lca/antigravity:abi-0.6",
+            "ghcr.io/misaalanshori/lca/antigravity:1.0.1",
+            "quay.io/team/ext:1.0",
+        ] {
+            assert_eq!(
+                lca_registry::expand_shorthand_with(full, channel),
+                full,
+                "{full} on {channel:?}"
+            );
+        }
+    }
+}
+
+/// The hub's path: a catalog ref is authored in its release form, so the line
+/// tag is the catalog's *default* and moves to the channel - but only in our
+/// own namespace, and only that one tag. `extensions/catalog.toml` is the
+/// authored form this rule reads.
+#[test]
+fn a_catalog_ref_dated_to_the_line_moves_with_the_channel() {
+    let line = lca_ext_abi::ABI_VERSION;
+    let authored = format!("ghcr.io/misaalanshori/lca/antigravity:abi-{line}");
+    assert_eq!(
+        lca_registry::catalog_ref_for_channel(&authored, lca_registry::Channel::Unstable),
+        "ghcr.io/misaalanshori/lca/antigravity:unstable"
+    );
+    assert_eq!(
+        lca_registry::catalog_ref_for_channel(&authored, lca_registry::Channel::Release),
+        authored,
+        "a release build installs the authored ref unchanged"
+    );
+    // Another line, another org, another registry: as written.
+    for untouched in [
+        "ghcr.io/misaalanshori/lca/antigravity:abi-0.6",
+        "ghcr.io/acme/tools/antigravity:abi-0.7",
+        "quay.io/acme/antigravity:abi-0.7",
+        "ghcr.io/misaalanshori/lca/antigravity:1.0.1",
+    ] {
+        assert_eq!(
+            lca_registry::catalog_ref_for_channel(untouched, lca_registry::Channel::Unstable),
+            untouched,
+            "{untouched}"
+        );
+    }
+    // And this build's own channel is a release form (no `LCA_BUILD_VERSION`
+    // in a test build), which is what keeps every other row here honest.
+    assert_eq!(
+        lca_registry::Channel::current(),
+        lca_registry::Channel::Release,
+        "a test build is a release-form build"
+    );
+}
+
+/// The channel changes the *ref*, never the *eligibility*: the catalog filter
+/// is still the ABI window, so an entry outside it stays hidden on both
+/// channels.
+#[test]
+fn the_unstable_ref_keeps_the_catalog_line_filter() {
+    let outside = format!("abi-{}", 999_u32);
+    let entry = lca_registry::CatalogEntry {
+        name: "outside".to_string(),
+        version: "9.0.0".to_string(),
+        abi: outside,
+        category: "tool".to_string(),
+        description: "Not for this host.".to_string(),
+        oci_ref: "ghcr.io/misaalanshori/lca/outside:abi-999".to_string(),
+        capabilities: Vec::new(),
+    };
+    // The hub applies the window rule to every source's rows (see
+    // `crates/lca-cli/src/tui/hub.rs`); the channel rule must not reach it.
+    let visible: Vec<_> =
+        lca_registry::merge_catalogs(&[(lca_registry::official_source(), vec![entry.clone()])])
+            .into_iter()
+            .filter(|row| lca_registry::abi_supported(&row.entry))
+            .collect();
+    assert!(
+        visible.is_empty(),
+        "out-of-window entries stay hidden: {visible:?}"
+    );
+    // The ref rule is independent of the filter: it would name a tag, and the
+    // filter is what decides the entry is never offered.
+    assert_eq!(
+        lca_registry::catalog_ref_for_channel(&entry.oci_ref, lca_registry::Channel::Unstable),
+        entry.oci_ref,
+        "an entry on another line keeps its own tag"
+    );
+}

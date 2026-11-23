@@ -58,7 +58,12 @@ pub fn assemble_rows(
             version: entry.version.clone(),
             capabilities: entry.capabilities.clone(),
             description: entry.description.clone(),
-            oci_ref: entry.oci_ref.clone(),
+            // gh #615: the catalog is authored in its release form
+            // (`:abi-<line>`); an unstable build installs the channel's tag.
+            oci_ref: lca_registry::catalog_ref_for_channel(
+                &entry.oci_ref,
+                lca_registry::Channel::current(),
+            ),
             source_name: row.source_name.clone(),
             source_url: row
                 .source_url
@@ -113,11 +118,20 @@ pub fn manifest_capability_names(manifest: &lca_ext_host::Manifest) -> Vec<Strin
 /// Verify a resolved manifest against the hub row consent approved:
 /// same extension, same version, and no capability past what the row
 /// named. A stale catalog row aborts before anything is written.
+///
+/// `channel` is what makes the version check honest on the unstable line
+/// (gh #615): an unstable artifact is published with
+/// `<row version>-unstable.b<sha7>` stamped on it, so an exact comparison
+/// would call every hub install on an unstable build "stale". The stamp is a
+/// *prerelease* of the version the row names, and only that channel accepts
+/// it - a release build asking for `:unstable` is off-channel and still
+/// refused.
 pub fn verify_against_row(
     manifest: &lca_ext_host::Manifest,
     row_name: &str,
     row_version: &str,
     row_capabilities: &[String],
+    channel: lca_registry::Channel,
 ) -> Result<(), String> {
     if manifest.name != row_name {
         return Err(format!(
@@ -125,7 +139,13 @@ pub fn verify_against_row(
             manifest.name
         ));
     }
-    if manifest.version != row_version {
+    if manifest.version != row_version
+        && !(channel == lca_registry::Channel::Unstable
+            && manifest
+                .version
+                .strip_prefix(row_version)
+                .is_some_and(|rest| rest.starts_with("-unstable.b")))
+    {
         return Err(format!(
             "catalog entry is stale: resolved {} but the hub offered {row_version}",
             manifest.version
@@ -203,7 +223,13 @@ fn install_row(
         Ok(manifest) => manifest,
         Err(err) => return format!("the artifact failed validation: {err}"),
     };
-    if let Err(stale) = verify_against_row(&manifest, row_name, row_version, row_capabilities) {
+    if let Err(stale) = verify_against_row(
+        &manifest,
+        row_name,
+        row_version,
+        row_capabilities,
+        lca_registry::Channel::current(),
+    ) {
         return stale;
     }
     match registry.install(resolved) {
@@ -408,13 +434,47 @@ mod tests {
             lca_ext_host::Manifest::parse(&text).expect("test manifest parses")
         };
         let net = manifest("probe", "1.0.0", &["net"]);
-        assert!(verify_against_row(&net, "probe", "1.0.0", &["net".to_string()]).is_ok());
-        assert!(verify_against_row(&net, "other", "1.0.0", &["net".to_string()]).is_err());
-        assert!(verify_against_row(&net, "probe", "2.0.0", &["net".to_string()]).is_err());
+        let release = lca_registry::Channel::Release;
+        assert!(verify_against_row(&net, "probe", "1.0.0", &["net".to_string()], release).is_ok());
+        assert!(verify_against_row(&net, "other", "1.0.0", &["net".to_string()], release).is_err());
+        assert!(verify_against_row(&net, "probe", "2.0.0", &["net".to_string()], release).is_err());
         // Declared without the key is fine (consented superset); an
         // undeclared reach is not.
-        assert!(verify_against_row(&net, "probe", "1.0.0", &[]).is_err());
+        assert!(verify_against_row(&net, "probe", "1.0.0", &[], release).is_err());
         let plain = manifest("probe", "1.0.0", &[]);
-        assert!(verify_against_row(&plain, "probe", "1.0.0", &["net".to_string()]).is_ok());
+        assert!(
+            verify_against_row(&plain, "probe", "1.0.0", &["net".to_string()], release).is_ok()
+        );
+
+        // gh #615: the unstable stamp is the row's version plus a prerelease
+        // suffix, and only the unstable channel accepts it.
+        let unstable = manifest("probe", "1.0.0-unstable.b9653a3", &[]);
+        assert!(
+            verify_against_row(
+                &unstable,
+                "probe",
+                "1.0.0",
+                &[],
+                lca_registry::Channel::Unstable
+            )
+            .is_ok(),
+            "the unstable stamp of the row's version passes on the unstable channel"
+        );
+        assert!(
+            verify_against_row(&unstable, "probe", "1.0.0", &[], release).is_err(),
+            "a release build does not accept an unstable artifact"
+        );
+        let unrelated = manifest("probe", "1.0.0-note.b9653a3", &[]);
+        assert!(
+            verify_against_row(
+                &unrelated,
+                "probe",
+                "1.0.0",
+                &[],
+                lca_registry::Channel::Unstable
+            )
+            .is_err(),
+            "only the stamp this repo produces is accepted"
+        );
     }
 }

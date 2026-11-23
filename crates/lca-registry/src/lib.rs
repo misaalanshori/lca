@@ -38,6 +38,7 @@ use sha2::{Digest, Sha256};
 
 mod archive;
 mod catalog;
+mod channel;
 mod consent;
 mod git;
 mod http;
@@ -54,6 +55,7 @@ pub use catalog::{
     cache_fresh, cache_path, fetch_catalog, is_valid_catalog_id, merge_catalogs, official_source,
     parse_catalog, read_cache, write_cache,
 };
+pub use channel::{Channel, catalog_ref_for_channel, expand_shorthand_with};
 pub use consent::{consent_lines, grant_hash, update_widens_grants, validate_extension_name};
 pub use git::{parse_git_source, resolve_git};
 use http::http_client;
@@ -424,6 +426,10 @@ pub async fn resolve_archive(url: &str) -> Result<Resolved, Error> {
 const OFFICIAL_REGISTRY_HOST: &str = "ghcr.io";
 /// The official organization prefix bare names expand under.
 const OFFICIAL_REGISTRY_ORG: &str = "misaalanshori/lca";
+/// Shared with `channel`, which must recognize *our* refs before re-pointing a
+/// default tag (and must not touch anyone else's).
+pub(crate) use OFFICIAL_REGISTRY_HOST as OFFICIAL_HOST;
+pub(crate) use OFFICIAL_REGISTRY_ORG as OFFICIAL_ORG;
 
 /// Expand an official shorthand (gh #252, Docker-style): `name` and
 /// `name:tag` (no slash) become `ghcr.io/misaalanshori/lca/name[:tag]`,
@@ -431,6 +437,10 @@ const OFFICIAL_REGISTRY_ORG: &str = "misaalanshori/lca";
 /// (explicit OCI refs, archive URLs, git sources, local paths) — and
 /// digest pins (`@`), which never had shorthand — passes through
 /// untouched.
+/// The **release** form of a user source (the authored one): the tag defaults
+/// to the current ABI line. [`expand_shorthand_with`] is what a resolver calls,
+/// with the channel this binary belongs to; this function is that rule with
+/// [`Channel::Release`], and the channel rows use it to stay build-independent.
 pub fn expand_shorthand(source: &str) -> String {
     if source.contains('/') || source.contains('\\') || source.contains('@') {
         return source.to_string();
@@ -490,8 +500,9 @@ const WASM_LAYER: &str = "application/wasm";
 /// (the risk table's decision: authenticated registry support is the
 /// part that may slip, the HTTPS archive covers distribution meanwhile).
 pub async fn resolve_oci(reference: &str) -> Result<Resolved, Error> {
-    // Gh #252: bare names expand to the official repository first.
-    let expanded = expand_shorthand(reference);
+    // Gh #252: bare names expand to the official repository first; gh #615:
+    // on an unstable build the *default* tag is the channel's, not the line's.
+    let expanded = channel::expand_shorthand_with(reference, Channel::current());
     let (host, name, tag) = split_oci_reference(&expanded)?;
     let tag = if tag.is_empty() { "latest" } else { tag };
     let client = http_client()?;

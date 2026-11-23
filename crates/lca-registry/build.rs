@@ -143,6 +143,17 @@ fn main() {
         "cargo:rustc-env=LCA_MODELS_CATALOG_GZIP={}",
         embed_from.display()
     );
+
+    // The release channel (gh #615): the same two lines as
+    // `crates/lca-cli/build.rs`, and they must stay the same two lines -
+    // `LCA_BUILD_VERSION` is what `.github/workflows/unstable.yml` bakes as
+    // `X.Y.Z.b<sha7>`, so both crates must classify one build as one channel.
+    // `crates/lca-cli/tests/unit.rs`'s
+    // `the_two_build_scripts_read_one_product_version` asserts they agree.
+    let product = std::env::var("LCA_BUILD_VERSION")
+        .unwrap_or_else(|_| std::env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| String::new()));
+    println!("cargo:rustc-env=LCA_PRODUCT_VERSION={product}");
+    println!("cargo:rerun-if-env-changed=LCA_BUILD_VERSION");
 }
 
 fn within_ceiling(path: &Path) -> bool {
