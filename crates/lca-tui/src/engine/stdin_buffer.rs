@@ -80,7 +80,12 @@ fn is_complete_sequence(data: &str) -> Completeness {
     if !data.starts_with(ESC) {
         return Completeness::NotEscape;
     }
-    if data.chars().count() == 1 {
+    // `len()`, not `chars().count()`: this is called once per candidate prefix length
+    // while a sequence is being assembled, so a full char count here made the scan
+    // O(n²) - gh #609 measured 824 ms for 128 KB of introducers, 4.6x the cost of
+    // half the input. A valid `&str` that starts with `ESC` is exactly one byte only
+    // when it *is* the lone byte, so the two tests agree and this one is O(1).
+    if data.len() == 1 {
         return Completeness::Incomplete;
     }
     let after: &str = &data[1..]; // ESC is 1 byte
@@ -876,32 +881,42 @@ fn revoke_alt_key(remainder: &str) -> Vec<StdinEvent> {
     }
 
     let mut events = Vec::new();
-    let mut rest = remainder.to_string();
-    // **One buffer, one loop.** Two earlier shapes are recorded here rather than
-    // forgotten: recursing once per introducer made the depth grow with the input
-    // and a burst of a few thousand aborted the process with a stack overflow, and
-    // rebuilding a fresh buffer per pass over the whole tail was O(n²) - 4000
-    // introducers took 8.8 s, a freeze of its own. Every pass here either emits
-    // bytes or ends.
+    // **One buffer, one loop tied to an offset.** Three shapes are recorded here
+    // rather than forgotten. Recursing once per introducer made the depth grow with
+    // the input and a burst of a few thousand aborted the process with a stack
+    // overflow. Rebuilding a fresh buffer per pass over the whole tail was O(n²)
+    // (4000 introducers took 8.8 s). And the loop that replaced both still copied
+    // the remainder per introducer (`rest = rest[2..].to_string()`), so the byte
+    // *copies* stayed quadratic even though the work per event looked constant -
+    // measured by gh #609 at **31 ms for 8 KB of introducers and 259 ms for 64 KB**,
+    // a 4x cost for a 2x input, which is the shape this row exists to catch. So the
+    // consumed prefix is tracked as `start` into one owned string: peeling a run of
+    // introducers copies nothing, and `owned` is re-taken only on the pass that has
+    // to re-parse a buffered tail (which cannot be a run of introducers, or the loop
+    // would have peeled it).
+    let mut owned = remainder.to_string();
+    let mut start = 0usize;
     let mut tail = StdinBuffer::new();
     loop {
-        while rest.len() > 2 && is_introducer(&rest) {
+        let rest = &owned[start..];
+        if rest.len() > 2 && is_introducer(rest) {
             // The two introducer bytes are the meta pair the user pressed.
             events.push(StdinEvent::Data(rest[..2].to_string()));
-            rest = rest[2..].to_string();
+            start += 2;
+            continue;
         }
         if rest.is_empty() {
             return events;
         }
-        if rest.len() <= 2 && is_introducer(&rest) {
+        if rest.len() <= 2 && is_introducer(rest) {
             // A lone introducer is already the meta pair `parse_key` reads as
             // `alt+]`: one event, nothing to split.
-            events.push(StdinEvent::Data(rest));
+            events.push(StdinEvent::Data(rest.to_string()));
             return events;
         }
         // Whatever is left is typing, and may itself contain sequences - so it goes
         // through the buffer, which is drained here and reused next pass.
-        events.extend(tail.process(&rest));
+        events.extend(tail.process(rest));
         let buffered = tail.buffered().to_string();
         if buffered.is_empty() {
             return events;
@@ -912,7 +927,8 @@ fn revoke_alt_key(remainder: &str) -> Vec<StdinEvent> {
         }
         // The tail *ended* on an abandoned introducer: peel it and go again.
         events.push(StdinEvent::Data(buffered[..2].to_string()));
-        rest = buffered[2..].to_string();
+        owned = buffered[2..].to_string();
+        start = 0;
     }
 }
 

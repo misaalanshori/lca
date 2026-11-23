@@ -136,12 +136,28 @@ impl TriggerQuery for Failing {
     }
 }
 
-/// A query that never answers, so the budget is what ends the wait.
-struct Silent;
+/// A query that never answers **and keeps its channel open**, so the caller's wait
+/// really runs out (gh #609).
+///
+/// The double this replaces dropped its sender on the way out, which the chain sees as
+/// `Disconnected` and answers at once - so the row that says "a timeout is an error
+/// row" was never timing out: measured, it returned in **112 µs** against its own
+/// 20 ms budget. Holding the sender for a while makes the wait spend the budget, which
+/// is the behaviour the row is named for. (The disconnected arm keeps the same copy -
+/// "the query took too long" - which is its own small question, noted in gh #609's
+/// report rather than changed here.)
+struct SilentHeld;
 
-impl TriggerQuery for Silent {
+impl TriggerQuery for SilentHeld {
     fn start(&self, _token: &str, _signal: AbortSignal) -> QueryHandle {
-        let (_tx, rx) = mpsc::channel();
+        let (tx, rx) = mpsc::channel();
+        // The sender lives past the budget, then goes away with the thread. It is
+        // moved into the thread, so its lifetime does not depend on when the thread
+        // is scheduled - only on the sleep.
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            drop(tx);
+        });
         QueryHandle { rx }
     }
 }
@@ -413,18 +429,31 @@ fn a_failure_renders_one_dim_unavailable_row_and_no_modal() {
 #[test]
 fn a_timeout_is_an_error_row_not_a_hang() {
     // The chain's budget is what ends the wait; hitting it *is* the measurement.
+    //
+    // Gh #609: the upper half of this row used to be a stopwatch (`< 2 s`) on a
+    // 20 ms budget, which is a claim about the machine - a loaded box can take a
+    // second to schedule this thread and the product would still be right. What is
+    // left is the half the machine cannot fake, stated as a **relation to the
+    // product's own value**: the chain waits *at least* its budget before it reports
+    // a timeout, so a chain that gives up instantly (and would report every slow
+    // provider as timed out) fails here, while `SilentHeld` - a provider that keeps
+    // its channel open and never answers - makes "a row came back at all" proof that
+    // the budget, not the provider, ended the wait. The upper half is nextest's slow-timeout (60 s), which
+    // is the harness's ceiling rather than a claim about this box.
+    const BUDGET: Duration = Duration::from_millis(20);
     let inner = RecordingInner::new();
-    let mut chain = TriggerChain::new(inner, Duration::from_millis(20));
+    let mut chain = TriggerChain::new(inner, BUDGET);
     chain
-        .register("#", "slow", Arc::new(Silent))
+        .register("#", "slow", Arc::new(SilentHeld))
         .expect("legal");
     let started = std::time::Instant::now();
     let suggestions = chain
         .get_suggestions("#1", false)
         .expect("a row, not a hang");
     assert!(
-        started.elapsed() < Duration::from_secs(2),
-        "the wait is bounded by the budget"
+        started.elapsed() >= BUDGET,
+        "the budget is spent before the timeout row appears, not skipped: {:?} for a {BUDGET:?} budget",
+        started.elapsed()
     );
     assert_eq!(suggestions.items.len(), 1);
     assert!(suggestions.items[0].dim);

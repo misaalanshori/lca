@@ -428,17 +428,45 @@ fn a_burst_of_introducers_does_not_overflow_the_stack() {
     );
     // The other half of the same defect: the first *iterative* version was O(n²)
     // (a fresh buffer per pass, 8.8 s for this input), which is a freeze rather
-    // than an abort. The bound is generous - a linear pass over 8 KiB costs
-    // microseconds - so it catches a return to per-byte rescans without measuring
-    // the machine.
-    let started = std::time::Instant::now();
-    let mut buffer = StdinBuffer::new();
-    let mut out = data(buffer.process(&hostile));
-    out.extend(data(buffer.flush()));
+    // than an abort. Gh #609 restated this half as a **ratio between two sizes**,
+    // because a stopwatch on one size answers whichever way the machine happens to
+    // be running - and, measured, it had been hiding the defect: the "linear"
+    // recovery was still copying the remainder per introducer (31 ms for 8 KiB,
+    // 259 ms for 64 KiB) and the sequence test counted chars on every candidate
+    // prefix (824 ms for 128 KiB). Both are fixed; this is the guard.
+    //
+    // The measurement: the same burst at `n` and `4n`, best of three each, in this
+    // run, after a warm-up. Linear costs ~4x for 4x the input; either quadratic
+    // shape costs ~16x. The bound is 8x - far above a linear path plus scheduler
+    // noise, far below quadratic.
+    let burst = |n: usize| -> (std::time::Duration, usize) {
+        let input = "\x1b]".repeat(n);
+        let mut best = std::time::Duration::MAX;
+        let mut count = 0;
+        for _ in 0..3 {
+            let mut buffer = StdinBuffer::new();
+            let started = std::time::Instant::now();
+            let mut out = data(buffer.process(&input));
+            out.extend(data(buffer.flush()));
+            best = best.min(started.elapsed());
+            count = out.len();
+        }
+        (best, count)
+    };
+    let _ = burst(8_000); // warm-up: the allocator's first large block is not a measurement
+    let (small, small_events) = burst(50_000);
+    let (large, large_events) = burst(200_000);
+    assert_eq!(small_events, 50_000, "every introducer is one keystroke");
+    assert_eq!(
+        large_events, 200_000,
+        "and four times as many, four times as many"
+    );
+    let growth = large.as_secs_f64() / small.as_secs_f64().max(f64::MIN_POSITIVE);
     assert!(
-        started.elapsed() < std::time::Duration::from_millis(500),
-        "and the recovery is linear: {} ms for 8 KiB",
-        started.elapsed().as_millis()
+        growth <= 8.0,
+        "the recovery is linear: 4x the input cost {growth:.1}x the time \
+         ({small:?} for 100 KiB -> {large:?} for 400 KiB), where a quadratic pass \
+         costs about 16x"
     );
 }
 
