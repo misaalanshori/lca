@@ -12,10 +12,17 @@ use std::collections::VecDeque;
 
 use question::{Dialogs, OptionItem, Question, ask_all};
 
-/// A scripted dialog host: canned selects and inputs in order.
+/// A scripted dialog host: canned selects and inputs in order, plus the
+/// tabbed questionnaire - which records that it was called, what it was asked,
+/// and answers from its own script (gh #407).
+#[derive(Default)]
 struct Scripted {
     selects: RefCell<VecDeque<Option<String>>>,
     inputs: RefCell<VecDeque<Option<String>>>,
+    /// One entry per questionnaire call: the title and the questions it got.
+    tabbed: RefCell<Vec<(String, Vec<lca_permissions::Question>)>>,
+    /// The answers the next questionnaire call returns; `None` dismisses.
+    answers: RefCell<VecDeque<Option<Vec<lca_permissions::Answer>>>>,
 }
 
 impl Scripted {
@@ -29,7 +36,28 @@ impl Scripted {
         Scripted {
             selects: RefCell::new(owned(selects)),
             inputs: RefCell::new(owned(inputs)),
+            ..Scripted::default()
         }
+    }
+
+    /// A host that answers one tabbed ask with `answers`, and nothing else.
+    fn tabbed(answers: Option<Vec<(&str, &str, bool)>>) -> Scripted {
+        let scripted = Scripted::default();
+        scripted.answers.borrow_mut().push_back(answers.map(|rows| {
+            rows.into_iter()
+                .map(|(header, value, custom)| lca_permissions::Answer {
+                    header: header.to_string(),
+                    value: value.to_string(),
+                    custom,
+                })
+                .collect()
+        }));
+        scripted
+    }
+
+    /// How many tabbed asks reached this host.
+    fn tabbed_calls(&self) -> usize {
+        self.tabbed.borrow().len()
     }
 }
 
@@ -40,6 +68,17 @@ impl Dialogs for Scripted {
 
     fn input(&self, _label: &str, _placeholder: Option<&str>) -> Option<String> {
         self.inputs.borrow_mut().pop_front().flatten()
+    }
+
+    fn questionnaire(
+        &self,
+        title: &str,
+        questions: &[lca_permissions::Question],
+    ) -> Option<Vec<lca_permissions::Answer>> {
+        self.tabbed
+            .borrow_mut()
+            .push((title.to_string(), questions.to_vec()));
+        self.answers.borrow_mut().pop_front().flatten()
     }
 }
 
@@ -143,7 +182,154 @@ fn declines_degrade_to_marked_answers() {
     );
 }
 
-// Verifies: several questions join into one report.
+// Verifies: gh #407 - one question never grows tabs. The single-question shape
+// is the sequential picker, which is what the model-facing tool promises for
+// `1Q` and what every existing single-question ask costs; routing it through
+// the questionnaire would add a review-and-submit step to a one-line answer.
+#[test]
+fn one_question_still_uses_the_sequential_path() {
+    let dialogs = Scripted::new(
+        vec![Some(
+            "SQLite — Single-file, embedded, zero setup (Recommended)",
+        )],
+        vec![],
+    );
+    let text = ask_all(&dialogs, &[db_question()]);
+    assert!(text.contains("\"Database Engine\" = \"SQLite\""), "{text}");
+    assert_eq!(
+        dialogs.tabbed_calls(),
+        0,
+        "a one-question ask must not open the tabbed questionnaire"
+    );
+}
+
+// Verifies: gh #407 - three questions cost **one** questionnaire call, and the
+// answers come back keyed by header in the asker's order. This is the whole
+// point of the slice: N questions, one turn, one submit.
+#[test]
+fn three_questions_use_one_questionnaire_call() {
+    let second = Question {
+        header: "Priority".to_string(),
+        question: "How soon?".to_string(),
+        options: vec![
+            OptionItem {
+                label: "Now".to_string(),
+                description: String::new(),
+            },
+            OptionItem {
+                label: "Later".to_string(),
+                description: String::new(),
+            },
+        ],
+        multiple: false,
+    };
+    let dialogs = Scripted::tabbed(Some(vec![
+        (
+            "Database Engine",
+            "SQLite — Single-file, embedded, zero setup (Recommended)",
+            false,
+        ),
+        ("Priority", "Now", false),
+    ]));
+    let text = ask_all(&dialogs, &[db_question(), second]);
+    assert_eq!(
+        dialogs.tabbed_calls(),
+        1,
+        "three questions are one modal: {text}"
+    );
+    let asked = dialogs.tabbed.borrow();
+    let (title, questions) = &asked[0];
+    assert_eq!(title, question::QUESTIONNAIRE_TITLE);
+    assert_eq!(questions.len(), 2);
+    assert_eq!(
+        questions[0].options[0], "SQLite — Single-file, embedded, zero setup (Recommended)",
+        "the tab shows the same wording the sequential picker does"
+    );
+    assert_eq!(
+        text,
+        "User has answered your questions: \"Database Engine\" = \"SQLite\", \
+         \"Priority\" = \"Now\". You can now continue with the user's answers in mind.",
+        "the report is the sequential path's text, value for value"
+    );
+}
+
+// Verifies: gh #407 - a dismissed questionnaire answers like a dismissed
+// picker: every question reports `(declined)` and the turn continues, which is
+// also the headless shape (an empty slot answers `None`).
+#[test]
+fn a_dismissed_questionnaire_answers_like_a_dismissed_picker() {
+    let second = Question {
+        header: "Priority".to_string(),
+        ..db_question()
+    };
+    let dialogs = Scripted::tabbed(None);
+    let text = ask_all(&dialogs, &[db_question(), second]);
+    assert_eq!(
+        text,
+        "User has answered your questions: \"Database Engine\" = \"(declined)\", \
+         \"Priority\" = \"(declined)\". You can now continue with the user's answers in mind.",
+        "{text}"
+    );
+}
+
+// Verifies: gh #407 - a multi-pick answer maps back to the labels the
+// sequential path reports, and a label that itself contains `", "` survives the
+// host's join instead of being split in the wrong place. The host joins the
+// *display* strings this crate sent, so the walk parses a language it defined;
+// a naive `split(", ")` would turn one pick into two answers.
+#[test]
+fn a_multi_pick_answers_in_labels_and_survives_a_comma_in_one() {
+    let question_with_comma = Question {
+        header: "Deploy".to_string(),
+        question: "Where?".to_string(),
+        options: vec![
+            OptionItem {
+                label: "eu-west, primary".to_string(),
+                description: "the first region".to_string(),
+            },
+            OptionItem {
+                label: "us-east".to_string(),
+                description: String::new(),
+            },
+        ],
+        multiple: true,
+    };
+    // The host joins the display strings it was given with ", ".
+    let joined = "eu-west, primary — the first region, us-east";
+    let dialogs = Scripted::tabbed(Some(vec![("Deploy", joined, false)]));
+    let text = ask_all(&dialogs, &[db_question(), question_with_comma]);
+    assert!(
+        text.contains("\"Deploy\" = \"eu-west, primary, us-east\""),
+        "both labels, joined in toggle order: {text}"
+    );
+}
+
+// Verifies: gh #407 - a typed answer is reported verbatim (it was never an
+// option, so there is no label to map it to), the same value the sequential
+// custom arm produces.
+#[test]
+fn a_written_answer_is_reported_verbatim() {
+    let dialogs = Scripted::tabbed(Some(vec![
+        ("Database Engine", "Use Turso.", true),
+        ("Priority", "Now", false),
+    ]));
+    let second = Question {
+        header: "Priority".to_string(),
+        options: vec![OptionItem {
+            label: "Now".to_string(),
+            description: String::new(),
+        }],
+        ..db_question()
+    };
+    let text = ask_all(&dialogs, &[db_question(), second]);
+    assert!(
+        text.contains("\"Database Engine\" = \"Use Turso.\""),
+        "{text}"
+    );
+}
+
+// Verifies: several questions join into one report (the sequential arm: one
+// question at a time, which is still the path for a one-question ask).
 #[test]
 fn several_questions_join_into_one_report() {
     let second = Question {
@@ -162,10 +348,18 @@ fn several_questions_join_into_one_report() {
         ],
         vec![],
     );
-    let text = ask_all(&dialogs, &[db_question(), second]);
+    // Two questions now take one questionnaire call (gh #407), so the
+    // sequential join is exercised one question at a time - which is the only
+    // way it is reached now, and still the shape a 1Q ask costs.
+    let first = ask_all(&dialogs, &[db_question()]);
+    let second_text = ask_all(&dialogs, &[second]);
     assert!(
-        text.contains("\"Database Engine\" = \"SQLite\", \"Delete tests\" = \"Yes\""),
-        "{text}"
+        first.contains("\"Database Engine\" = \"SQLite\""),
+        "{first}"
+    );
+    assert!(
+        second_text.contains("\"Delete tests\" = \"Yes\""),
+        "{second_text}"
     );
 }
 

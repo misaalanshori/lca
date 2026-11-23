@@ -7,8 +7,15 @@
 //! `SharedDialogs`, which defaults to declined values when nothing
 //! is installed — the headless shape, where every ask declines and
 //! nothing hangs). The flow over either boundary is the shared
-//! [`ask_all`]: options plus a standing custom-answer option go to a
-//! picker; the custom option routes to a free-text input.
+//! [`ask_all`], and it has **two shapes** (gh #407):
+//!
+//! - **one question** keeps the sequential picker: options plus a
+//!   standing custom-answer option, the custom option routing to a
+//!   free-text input. A single question must not grow tabs.
+//! - **several questions** go to one tabbed questionnaire in one turn
+//!   (`lca:host/ui-dialogs.questionnaire`), which the host paints as N
+//!   tabs with a review-and-submit end-cap. The report is the same text
+//!   either way - the model reads it, not the chrome.
 //!
 //! The manifest declares no capabilities: dialogs ride the tool
 //! world's import, not the manifest (an empty `[capabilities.ui]`
@@ -53,7 +60,13 @@ pub struct Question {
     pub multiple: bool,
 }
 
-/// The dialog surface the flow needs: a picker and a line of text.
+/// The modal caption a tabbed ask carries. The asker's name, not the user's:
+/// the host's chrome must read as the agent asking, and the tool's own name is
+/// what the model sees it called.
+pub const QUESTIONNAIRE_TITLE: &str = "question";
+
+/// The dialog surface the flow needs: a picker, a line of text, and the tabbed
+/// questionnaire for asks with more than one question.
 // Implemented over both boundaries (WASM import, native slot) plus
 // scripted fakes in tests.
 pub trait Dialogs {
@@ -61,6 +74,15 @@ pub trait Dialogs {
     fn select(&self, title: &str, options: &[String]) -> Option<String>;
     /// One line of text; `None` is dismissed.
     fn input(&self, label: &str, placeholder: Option<&str>) -> Option<String>;
+    /// A tabbed questionnaire (gh #407): every question answered in one modal.
+    /// `None` is a dismissal of the whole ask. Required rather than defaulted:
+    /// a prompter that silently declined here would make a scripted row prove
+    /// nothing.
+    fn questionnaire(
+        &self,
+        title: &str,
+        questions: &[lca_permissions::Question],
+    ) -> Option<Vec<lca_permissions::Answer>>;
 }
 
 /// Parse the tool's arguments: a non-empty `questions` array.
@@ -182,17 +204,117 @@ fn ask_one(dialogs: &dyn Dialogs, question: &Question) -> String {
     }
 }
 
+/// One question, as the host's questionnaire record wants it (gh #407).
+///
+/// The options are the **display** strings the sequential picker already shows
+/// (`label — description`), so the user sees one wording either way; see
+/// [`answer_value`] for the way back to the label.
+fn host_question(question: &Question) -> lca_permissions::Question {
+    lca_permissions::Question {
+        header: question.header.clone(),
+        prompt: question.question.clone(),
+        options: question.options.iter().map(display).collect(),
+        multiple: question.multiple,
+    }
+}
+
+/// What one answer contributes to the report.
+///
+/// A custom value is what the user typed, verbatim. A chosen option is mapped
+/// back to its **label**, because that is what the sequential path reports
+/// (`ask_one` matches the picker's display string back to the option) and the
+/// model reads this text. The host joins a multi-pick answer with `", "`; the
+/// pieces are display strings this module produced, so the walk below is
+/// parsing a language it defined - and it therefore keeps a label containing
+/// `", "` intact rather than splitting it in the wrong place. Longest match
+/// first, because one display string can be another's prefix.
+fn answer_value(question: &Question, answer: &lca_permissions::Answer) -> String {
+    if answer.custom {
+        return answer.value.clone();
+    }
+    if question.options.is_empty() {
+        return answer.value.clone();
+    }
+    let displays: Vec<(String, &str)> = question
+        .options
+        .iter()
+        .map(|option| (display(option), option.label.as_str()))
+        .collect();
+    let mut rest = answer.value.as_str();
+    let mut labels: Vec<&str> = Vec::new();
+    while !rest.is_empty() {
+        match displays
+            .iter()
+            .filter(|(text, _)| rest.starts_with(text.as_str()))
+            .max_by_key(|(text, _)| text.len())
+        {
+            Some((text, label)) => {
+                labels.push(label);
+                rest = &rest[text.len()..];
+            }
+            // The host answered with something this question never offered
+            // (a custom value that arrived unmarked): take it at face value
+            // rather than pretending it was a listed pick.
+            None => return answer.value.clone(),
+        }
+        if rest.is_empty() {
+            break;
+        }
+        match rest.strip_prefix(", ") {
+            Some(tail) => rest = tail,
+            None => return answer.value.clone(),
+        }
+    }
+    if labels.is_empty() {
+        answer.value.clone()
+    } else {
+        labels.join(", ")
+    }
+}
+
 /// Ask every question; the report the tool hands back to the model.
+///
+/// One question keeps the sequential picker; several go to one tabbed
+/// questionnaire (gh #407). Both produce the same report line per question, in
+/// the asker's order, and a dismissal (`None`) degrades every question to
+/// `(declined)` - the headless shape, which must never hang.
 pub fn ask_all(dialogs: &dyn Dialogs, questions: &[Question]) -> String {
+    let asked: Vec<lca_permissions::Question> = questions.iter().map(host_question).collect();
+    let tabbed = if questions.len() > 1 {
+        dialogs.questionnaire(QUESTIONNAIRE_TITLE, &asked)
+    } else {
+        None
+    };
+    let answers: Vec<String> = match tabbed {
+        Some(answers) => questions
+            .iter()
+            .map(|question| {
+                match answers
+                    .iter()
+                    .find(|answer| answer.header == question.header)
+                {
+                    Some(answer) => answer_value(question, answer),
+                    // The host returned no answer for this header: the question was
+                    // still asked, so it reports as declined rather than vanishing.
+                    None => "(declined)".to_string(),
+                }
+            })
+            .collect(),
+        None if questions.len() > 1 => vec!["(declined)".to_string(); questions.len()],
+        None => questions
+            .iter()
+            .map(|question| ask_one(dialogs, question))
+            .collect(),
+    };
     let mut report = String::from("User has answered your questions: ");
-    for (index, question) in questions.iter().enumerate() {
+    for (index, (question, answer)) in questions.iter().zip(&answers).enumerate() {
         if index > 0 {
             report.push_str(", ");
         }
         report.push('"');
         report.push_str(&question.header);
         report.push_str("\" = \"");
-        report.push_str(&ask_one(dialogs, question));
+        report.push_str(answer);
         report.push('"');
     }
     report.push_str(". You can now continue with the user's answers in mind.");
@@ -284,6 +406,16 @@ mod native {
 
         fn input(&self, label: &str, placeholder: Option<&str>) -> Option<String> {
             lca_permissions::DialogPrompt::input(&mut self.clone(), label, placeholder)
+        }
+
+        /// The native half routes to the same slot the picker uses; an empty
+        /// slot answers `None`, which `ask_all` reports as declined.
+        fn questionnaire(
+            &self,
+            title: &str,
+            questions: &[lca_permissions::Question],
+        ) -> Option<Vec<lca_permissions::Answer>> {
+            lca_permissions::DialogPrompt::questionnaire(&mut self.clone(), title, questions)
         }
     }
 
@@ -420,6 +552,38 @@ mod wasm_mode {
         fn input(&self, label: &str, placeholder: Option<&str>) -> Option<String> {
             let placeholder = placeholder.map(str::to_string);
             ui_dialogs::input(label, placeholder.as_deref()).unwrap_or(None)
+        }
+
+        /// The WASM half crosses the import (gh #407): the host's refusal (a
+        /// dialog asked from the interface thread) is an `Err`, which reads as
+        /// a dismissed ask rather than as a hang - the same degradation the
+        /// other three get from `.unwrap_or(None)`.
+        fn questionnaire(
+            &self,
+            title: &str,
+            questions: &[lca_permissions::Question],
+        ) -> Option<Vec<lca_permissions::Answer>> {
+            let asked: Vec<ui_dialogs::Question> = questions
+                .iter()
+                .map(|question| ui_dialogs::Question {
+                    header: question.header.clone(),
+                    prompt: question.prompt.clone(),
+                    options: question.options.clone(),
+                    multiple: question.multiple,
+                })
+                .collect();
+            ui_dialogs::questionnaire(title, &asked)
+                .unwrap_or(None)
+                .map(|answers| {
+                    answers
+                        .into_iter()
+                        .map(|answer| lca_permissions::Answer {
+                            header: answer.header,
+                            value: answer.value,
+                            custom: answer.custom,
+                        })
+                        .collect()
+                })
         }
     }
 

@@ -95,6 +95,35 @@ impl Cap for GuestCap {
     fn dialog_confirm(&self, title: &str, message: &str) -> Result<bool, String> {
         lca::host::ui_dialogs::confirm(title, message)
     }
+    /// Gh #407: the questionnaire crosses the one import, mapped record for
+    /// record.
+    fn dialog_questionnaire(
+        &self,
+        title: &str,
+        questions: &[lca_protocol::UiQuestion],
+    ) -> Result<Option<Vec<lca_protocol::UiAnswer>>, String> {
+        let asked: Vec<lca::host::ui_dialogs::Question> = questions
+            .iter()
+            .map(|question| lca::host::ui_dialogs::Question {
+                header: question.header.clone(),
+                prompt: question.prompt.clone(),
+                options: question.options.clone(),
+                multiple: question.multiple,
+            })
+            .collect();
+        Ok(
+            lca::host::ui_dialogs::questionnaire(title, &asked)?.map(|answers| {
+                answers
+                    .into_iter()
+                    .map(|answer| lca_protocol::UiAnswer {
+                        header: answer.header,
+                        value: answer.value,
+                        custom: answer.custom,
+                    })
+                    .collect()
+            }),
+        )
+    }
     fn tools_execute(&self, _parent_call_id: &str, name: &str, args: &str) -> crate::ModeOutcome {
         // The host parents the call; the guest only names it (gh #77).
         // #49: nested structured data stops here this train - the

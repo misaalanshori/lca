@@ -183,7 +183,26 @@ fn the_question_and_answer_records_cross_the_slot_unchanged() {
 }
 
 // ---------------------------------------------------------------------------
-// 3. Dismissal is an answer, not a hang
+// 3. The inline row reads the same in both shapes
+// ---------------------------------------------------------------------------
+
+// Verifies: gh #407 - the questionnaire's inline-editor row and the sequential
+// path's custom option are **one wording**, not two copies that drift. The
+// host's chrome cannot depend on the extension (the dependency points the other
+// way), so the literal exists twice; this row is the pin. A user who sees
+// "Type your own answer..." on a one-question ask must see it on a three-tab
+// ask too, or the same feature looks like two.
+#[test]
+fn the_inline_row_and_the_custom_option_are_one_wording() {
+    assert_eq!(
+        lca_ui::chat_questionnaire::CUSTOM_ROW,
+        question::CUSTOM_OPTION,
+        "the tabbed inline row and the sequential custom option must read alike"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 4. Dismissal is an answer, not a hang
 // ---------------------------------------------------------------------------
 
 // Verifies: gh #407 - with nothing installed the questionnaire answers

@@ -70,8 +70,9 @@ use crate::theme::Role;
 /// `CUSTOM_OPTION`: the tabbed and the sequential path are the same question
 /// asked on different chrome, so they read alike. `tests/regressions/407-*`
 /// pins the two literals to each other, because two copies that must stay
-/// equal are a defect waiting for the next edit (gh #298's lesson).
-pub(crate) const CUSTOM_ROW: &str = "Type your own answer...";
+/// equal are a defect waiting for the next edit (gh #298's lesson) - which is
+/// why this copy is public: the pin needs to read both.
+pub const CUSTOM_ROW: &str = "Type your own answer...";
 
 /// How many option rows a tab shows at once, and what `PgUp`/`PgDn` move by.
 /// The paint clips to the modal when the terminal is shorter than a page, and
@@ -104,7 +105,7 @@ pub(crate) struct Tab {
 ///
 /// Public because it is a field of the public [`DialogModal`]; the fields stay
 /// crate-private, so this type is read by the interface's own chrome and by
-/// its rows and built only by [`Questionnaire::new`].
+/// its rows, and built only by the drain (through `Questionnaire::new`).
 #[derive(Debug)]
 pub struct Questionnaire {
     /// Per question, in the asker's order.

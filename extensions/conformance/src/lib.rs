@@ -47,6 +47,14 @@ pub trait Cap {
     /// crosses the `ui-dialogs` import, the native twin answers through
     /// its own injected prompter, and both report the same verdict.
     fn dialog_confirm(&self, title: &str, message: &str) -> Result<bool, String>;
+    /// Ask a tabbed questionnaire (gh #407): same two crossings as
+    /// [`Cap::dialog_confirm`], and the answers must agree because both
+    /// twins are handed the same scripted prompter.
+    fn dialog_questionnaire(
+        &self,
+        title: &str,
+        questions: &[lca_protocol::UiQuestion],
+    ) -> Result<Option<Vec<lca_protocol::UiAnswer>>, String>;
     /// Call another tool through the host (gh #77): the WASM twin
     /// crosses the `tools` import, the native twin sends to the turn's
     /// slot. Both report the nested outcome as data, never a rejection.
@@ -554,6 +562,59 @@ pub fn run_shared(
                 Ok(verdict) => ModeOutcome {
                     ok: true,
                     text: format!("confirm: {verdict}"),
+                    extras: Default::default(),
+                },
+                Err(err) => fail(CapabilityError::Invalid(err)),
+            }
+        }
+        // Gh #407's tabbed questionnaire: N questions in one call, and the
+        // answers reported as data. A dismissal is `ok` too - the question was
+        // asked and answered (with nothing), which is what the mode probes.
+        "ask-questionnaire" => {
+            let questions = args
+                .get("questions")
+                .cloned()
+                .and_then(|value| {
+                    serde_json::from_value::<Vec<lca_protocol::UiQuestion>>(value).ok()
+                })
+                .unwrap_or_else(|| {
+                    vec![
+                        lca_protocol::UiQuestion {
+                            header: "Scope".to_string(),
+                            prompt: "Which scope?".to_string(),
+                            options: vec!["one".to_string(), "two".to_string()],
+                            multiple: false,
+                        },
+                        lca_protocol::UiQuestion {
+                            header: "Extras".to_string(),
+                            prompt: "Which extras?".to_string(),
+                            options: vec!["a".to_string(), "b".to_string()],
+                            multiple: true,
+                        },
+                    ]
+                });
+            let title = args
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or("conformance");
+            match cap.dialog_questionnaire(title, &questions) {
+                Ok(Some(answers)) => {
+                    let report: Vec<String> = answers
+                        .iter()
+                        .map(|answer| {
+                            let wrote = if answer.custom { " (wrote)" } else { "" };
+                            format!("{}={}{wrote}", answer.header, answer.value)
+                        })
+                        .collect();
+                    ModeOutcome {
+                        ok: true,
+                        text: format!("questionnaire: {}", report.join("; ")),
+                        extras: Default::default(),
+                    }
+                }
+                Ok(None) => ModeOutcome {
+                    ok: true,
+                    text: "questionnaire: dismissed".to_string(),
                     extras: Default::default(),
                 },
                 Err(err) => fail(CapabilityError::Invalid(err)),

@@ -25,11 +25,14 @@ mod placements;
 // Gh #371 bug 3: who owns the IME anchor this frame.
 mod chat_focus;
 mod chat_host_dialog;
-// Gh #407: the tabbed questionnaire's chrome and key contract.
 mod chat_hub;
 mod chat_jump;
 mod chat_keys;
-mod chat_questionnaire;
+// Gh #407: the tabbed questionnaire's chrome and key contract. Public because
+// `CUSTOM_ROW` is the one copy of the inline row's wording a cross-crate pin can
+// read (`tests/regressions/407-*` compares it with the extension's constant);
+// everything else in it stays crate-private.
+pub mod chat_questionnaire;
 // Gh #574: the modal/picker handlers those predicates gate.
 mod chat_modal_keys;
 pub(crate) mod run_wake;

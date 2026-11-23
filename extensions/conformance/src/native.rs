@@ -19,6 +19,40 @@ impl Cap for NativeCap {
         use lca_permissions::DialogPrompt;
         Ok(self.dialogs.clone().confirm(title, message))
     }
+    /// The native twin of the questionnaire import (gh #407): the same
+    /// `SharedDialogs` slot the WASM host holds, mapped between the protocol's
+    /// records and the permissions crate's - the same conversion the host's
+    /// import does, so a divergence would be the twin's, not the ABI's.
+    fn dialog_questionnaire(
+        &self,
+        title: &str,
+        questions: &[lca_protocol::UiQuestion],
+    ) -> Result<Option<Vec<lca_protocol::UiAnswer>>, String> {
+        use lca_permissions::DialogPrompt;
+        let asked: Vec<lca_permissions::Question> = questions
+            .iter()
+            .map(|question| lca_permissions::Question {
+                header: question.header.clone(),
+                prompt: question.prompt.clone(),
+                options: question.options.clone(),
+                multiple: question.multiple,
+            })
+            .collect();
+        Ok(self
+            .dialogs
+            .clone()
+            .questionnaire(title, &asked)
+            .map(|answers| {
+                answers
+                    .into_iter()
+                    .map(|answer| lca_protocol::UiAnswer {
+                        header: answer.header,
+                        value: answer.value,
+                        custom: answer.custom,
+                    })
+                    .collect()
+            }))
+    }
     fn tools_execute(&self, parent_call_id: &str, name: &str, args: &str) -> ModeOutcome {
         // The native twin of the `tools` import (gh #77): the grant
         // gates first, exactly like the guest's import.

@@ -274,3 +274,124 @@ fn the_dialog_verdict_agrees_across_modes() {
         ask(&wasm, &native, &format!("confirm: {verdict}"));
     }
 }
+
+// Verifies: gh #407 - a tabbed questionnaire asked from a tool hears the same
+// answers in both delivery modes. The WASM twin crosses the real
+// `ui-dialogs.questionnaire` import (two records and a list in, a list back
+// out); the native twin goes through the same `SharedDialogs` slot. Both are
+// handed the same scripted prompter, so a divergence can only be the mapping -
+// which is what this row exists for, exactly as the `confirm` verdict row is
+// (gh #449: one load, then swap the slot, rather than paying `Component::new`
+// per case).
+#[test]
+fn the_questionnaire_answers_agree_across_modes() {
+    use lca_permissions::{Answer, DialogPrompt, Question, SharedDialogs};
+
+    struct ScriptedQuestionnaire;
+    impl DialogPrompt for ScriptedQuestionnaire {
+        fn confirm(&mut self, _title: &str, _message: &str) -> bool {
+            false
+        }
+        fn select(&mut self, _title: &str, _options: &[String]) -> Option<String> {
+            None
+        }
+        fn input(&mut self, _label: &str, _placeholder: Option<&str>) -> Option<String> {
+            None
+        }
+        fn notify(&mut self, _message: &str, _level: &str) {}
+        fn questionnaire(&mut self, title: &str, questions: &[Question]) -> Option<Vec<Answer>> {
+            // What crossed: the title, both questions, the multi flag, and the
+            // options, in the asker's order.
+            assert_eq!(title, "conformance");
+            assert_eq!(questions.len(), 2, "two questions crossed: {questions:?}");
+            assert_eq!(questions[0].header, "Scope");
+            assert_eq!(questions[0].options, vec!["one", "two"]);
+            assert!(!questions[0].multiple);
+            assert!(questions[1].multiple, "the flag crossed");
+            Some(vec![
+                Answer {
+                    header: "Scope".to_string(),
+                    value: "two".to_string(),
+                    custom: false,
+                },
+                Answer {
+                    header: "Extras".to_string(),
+                    value: "a, b".to_string(),
+                    custom: true,
+                },
+            ])
+        }
+    }
+
+    fn asking(handle: &Arc<dyn ExtensionDispatch>) -> String {
+        let call = ToolCall {
+            call_id: "questionnaire-1".to_string(),
+            name: "conformance".to_string(),
+            arguments: "{\"mode\":\"ask-questionnaire\"}".to_string(),
+            parent_call_id: None,
+        };
+        let handle = handle.clone();
+        std::thread::spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("runtime")
+                .block_on(handle.execute_tool(&call))
+        })
+        .join()
+        .expect("tool thread")
+        .expect("tool ran")
+        .content
+    }
+
+    let fixture = Fixture::new("questionnaire");
+    let dialogs = SharedDialogs::default();
+    let mut host = ExtHost::new(
+        ExtensionLimits {
+            memory_bytes: 64 * 1024 * 1024,
+            fuel_per_call: 100_000_000,
+            log_limit_bytes: 4096,
+        },
+        Arc::new(HostEnvironment {
+            roots: fixture.roots.clone(),
+            prompt: fixture.prompt.clone(),
+            dialogs: dialogs.clone(),
+            grant_store: fixture.store.clone(),
+            project: fixture.root.join("project"),
+            proposals: None,
+        }),
+    );
+    let wasm: Arc<dyn ExtensionDispatch> =
+        Arc::new(host.load(FIXTURE, MANIFEST).expect("load wasm mode"));
+    let native: Arc<dyn ExtensionDispatch> = Arc::new(
+        conformance::NativeConformance::new(fixture.capabilities()).with_dialogs(dialogs.clone()),
+    );
+    dialogs.set(Arc::new(Mutex::new(ScriptedQuestionnaire)));
+
+    let wasm_text = asking(&wasm);
+    let native_text = asking(&native);
+    assert_eq!(wasm_text, native_text, "the answers agree across modes");
+    assert_eq!(
+        wasm_text, "questionnaire: Scope=two; Extras=a, b (wrote)",
+        "the answers crossed, custom flag included"
+    );
+
+    // And a dismissal is `Ok(None)`, not an error: an extension's ask that the
+    // user abandons reports as declined, the same shape headless gets.
+    struct Declines;
+    impl DialogPrompt for Declines {
+        fn confirm(&mut self, _title: &str, _message: &str) -> bool {
+            false
+        }
+        fn select(&mut self, _title: &str, _options: &[String]) -> Option<String> {
+            None
+        }
+        fn input(&mut self, _label: &str, _placeholder: Option<&str>) -> Option<String> {
+            None
+        }
+        fn notify(&mut self, _message: &str, _level: &str) {}
+    }
+    dialogs.set(Arc::new(Mutex::new(Declines)));
+    assert_eq!(asking(&wasm), "questionnaire: dismissed");
+    assert_eq!(asking(&native), "questionnaire: dismissed");
+}
