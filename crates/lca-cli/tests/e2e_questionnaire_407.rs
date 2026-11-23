@@ -19,10 +19,14 @@ use common::*;
 
 /// The three-question ask the mock hands the probe.
 ///
+/// Unix-only with the row (tmux is the harness), so the constant is too: on a
+/// Windows host this file is a compile target with no row to use it.
+///
 /// One line on purpose: `sse_tool_call` embeds the arguments in an SSE `data:`
 /// payload, and a raw newline would end that event early - the tool then sees
 /// empty arguments (`not valid JSON: EOF while parsing a value`), which is what
 /// the first draft of this row failed with.
+#[cfg(unix)]
 const ASK: &str = concat!(
     r#"{"mode":"ask-questionnaire","title":"setup","questions":["#,
     r#"{"header":"Scope","prompt":"Which scope?","options":["one","two","three"],"multiple":false},"#,
