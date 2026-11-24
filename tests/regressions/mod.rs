@@ -66,6 +66,9 @@ mod follow_up_mode_and_async_teardown;
 // Gh #381 gaps 1-2: a paste chip is one unit for every motion, wrap and delete path.
 #[path = "381-chip-is-one-unit.rs"]
 mod chip_is_one_unit;
+// Gh #581: the truncation is a typed stream case, and no guest smuggles it as a string.
+#[path = "581-typed-truncated-event.rs"]
+mod typed_truncated_event;
 
 /// Every implementation file a module is spread across, as
 /// `(path, source)` pairs in declaration order.

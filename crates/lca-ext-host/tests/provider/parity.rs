@@ -196,6 +196,7 @@ async fn streamed_events_match_the_script_and_each_other() {
         "conformance-tool",
         "conformance-vendor",
         "conformance-error",
+        "conformance-truncated",
     ] {
         let wasm_events = collect(wasm.as_ref(), model).await.expect("wasm stream");
         let native_events = collect(native.as_ref(), model)
@@ -281,4 +282,115 @@ async fn a_closed_receiver_ends_the_stream_and_keeps_the_extension() {
     let _ = native
         .stream_completion(request("conformance-defaults"), &sink)
         .await;
+}
+
+// Verifies: gh #581 - **the truncation crosses the boundary as a typed event, in
+// both delivery modes.** This is the row the stringly-typed shim never had: before
+// the 0.7 case, a guest re-encoded the cut as `vendor-event("truncated", "")` and the
+// only guard was a shared constant on each side, so the two halves could disagree
+// without any row noticing (a typo in either spelling was a compile-time no-op).
+//
+// The native twin is the control: it has no boundary to cross, so it reports the
+// script verbatim - and the WASM side must now arrive at exactly the same events,
+// with the typed case, not a vendor event the host rescued.
+#[tokio::test]
+async fn a_truncated_stream_is_typed_in_both_modes() {
+    let fixture = Fixture::new("truncated-typed");
+    let (wasm, native) = fixture.both_modes();
+
+    let wasm_events = collect(wasm.as_ref(), "conformance-truncated")
+        .await
+        .expect("wasm stream");
+    let native_events = collect(native.as_ref(), "conformance-truncated")
+        .await
+        .expect("native stream");
+
+    for (label, events) in [("wasm", &wasm_events), ("native", &native_events)] {
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, StreamEvent::Truncated))
+                .count(),
+            1,
+            "{label}: the cut is reported exactly once"
+        );
+        assert!(
+            !events.iter().any(|event| matches!(
+                event,
+                StreamEvent::VendorEvent { kind, .. } if kind == lca_protocol::TRUNCATED_KIND
+            )),
+            "{label}: the typed case is not a vendor event any more: {events:?}"
+        );
+    }
+    assert_eq!(
+        wasm_events, native_events,
+        "NFR-25: the two modes agree event for event"
+    );
+    assert_eq!(
+        wasm_events[1],
+        StreamEvent::Truncated,
+        "the cut keeps its place in the stream, between the text and the usage"
+    );
+    assert!(
+        matches!(wasm_events.last(), Some(StreamEvent::Usage { .. })),
+        "the partial answer still reports the tokens it spent: {wasm_events:?}"
+    );
+}
+
+// Verifies: gh #581 - **the compatibility read still works.** A guest built against
+// `@0.7.0` before the typed case (or a third-party one copying the old shape) emits
+// `vendor-event("truncated", "")`, and the host must still deliver the typed fact:
+// dropping that read would turn its truncated answer into a complete one silently,
+// which is exactly the defect gh #390 fixed. WASM-only on purpose - the native twin
+// has no boundary, so it would report the vendor event verbatim.
+#[tokio::test]
+async fn the_pre_typed_vendor_event_still_maps_to_the_typed_fact() {
+    let fixture = Fixture::new("truncated-shim");
+    let wasm = fixture.wasm_mode();
+    let events = collect(&wasm, "conformance-truncated-shim")
+        .await
+        .expect("wasm stream");
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, StreamEvent::Truncated))
+            .count(),
+        1,
+        "the old shape still yields the typed fact: {events:?}"
+    );
+    assert!(
+        !events.iter().any(|event| matches!(
+            event,
+            StreamEvent::VendorEvent { kind, .. } if kind == lca_protocol::TRUNCATED_KIND
+        )),
+        "and it is not passed on as a vendor event: {events:?}"
+    );
+}
+
+// Verifies: gh #581 - **a guest reporting the cut twice yields one event.** The
+// typed case wins over the compat read, and the host refuses to deliver the same
+// fact twice: the turn would collapse it anyway (its flag is a flag, not a counter,
+// so the banner cannot double), but the stream log records what crosses the host,
+// and two `truncated` records would misdescribe one cut.
+#[tokio::test]
+async fn a_guest_reporting_the_cut_twice_delivers_it_once() {
+    let fixture = Fixture::new("truncated-both");
+    let wasm = fixture.wasm_mode();
+    let events = collect(&wasm, "conformance-truncated-both")
+        .await
+        .expect("wasm stream");
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, StreamEvent::Truncated))
+            .count(),
+        1,
+        "one cut, one event: {events:?}"
+    );
+    // The rest of the stream is untouched: the usage the guest sent after both
+    // reports still arrives.
+    assert!(
+        matches!(events.last(), Some(StreamEvent::Usage { .. })),
+        "deduping the fact does not swallow what follows it: {events:?}"
+    );
 }

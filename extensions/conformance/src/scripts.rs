@@ -135,6 +135,36 @@ pub fn scripted_events(model: &str) -> Vec<lca_protocol::StreamEvent> {
             message: "scripted failure".to_string(),
             retryable: false,
         }],
+        // Gh #581: the typed truncation case, the shape every rebuilt guest now
+        // emits. Usage still follows - a provider reports the cut *and* the tokens
+        // the partial answer spent.
+        "conformance-truncated" => vec![
+            E::TextDelta {
+                delta: "half an ans".to_string(),
+            },
+            E::Truncated,
+            usage(),
+        ],
+        // Gh #581's compatibility shape: what a guest built before the typed case
+        // emitted. Only the WASM side has a boundary to map it at, so this script
+        // is for the wasm-only row; the native twin would report it verbatim.
+        "conformance-truncated-shim" => vec![
+            E::VendorEvent {
+                kind: lca_protocol::TRUNCATED_KIND.to_string(),
+                payload: serde_json::Value::String(String::new()),
+            },
+            usage(),
+        ],
+        // Both at once: a guest that reports the cut twice (the typed case and the
+        // vendor event). One fact, so the host delivers it once.
+        "conformance-truncated-both" => vec![
+            E::Truncated,
+            E::VendorEvent {
+                kind: lca_protocol::TRUNCATED_KIND.to_string(),
+                payload: serde_json::Value::String(String::new()),
+            },
+            usage(),
+        ],
         // The default text/reasoning script.
         _ => vec![
             E::TextDelta {

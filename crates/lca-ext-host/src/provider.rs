@@ -96,6 +96,7 @@ pub(super) fn provider_stream_work(
             )));
         }
     };
+    let mut delivered_truncated = false;
     loop {
         let next = instance
             .lca_ext_provider_completion()
@@ -104,7 +105,20 @@ pub(super) fn provider_stream_work(
             .map_err(|err| inner.classify(err))?;
         match next {
             Some(event) => {
-                if !bridge.push(from_wit_event(event)) {
+                let event = from_wit_event(event);
+                // Gh #581: one fact, one event. A guest that names the cut twice -
+                // the typed case *and* the compat vendor event it used to emit - is
+                // not reporting two truncations, so the core sees it once. The turn's
+                // own flag would absorb a duplicate anyway (it is a flag, not a
+                // counter), but the stream log records what crosses here, and a
+                // repeated `truncated` record would misdescribe the wire.
+                if event == lca_protocol::StreamEvent::Truncated {
+                    if delivered_truncated {
+                        continue;
+                    }
+                    delivered_truncated = true;
+                }
+                if !bridge.push(event) {
                     // The receiver is gone (FR-CONC-3): stop polling; the
                     // stream resource is dropped with the store.
                     break;
