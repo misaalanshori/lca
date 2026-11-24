@@ -84,11 +84,17 @@ fn guest_sources() -> Vec<(String, String)> {
         .map(|path| {
             let text = std::fs::read_to_string(&path)
                 .unwrap_or_else(|err| panic!("read {}: {err}", path.display()));
+            // **Normalised to `/`**, because this row compares a path against a
+            // literal: a Windows run spells it `extensions\\conformance\\...`, and
+            // the first version of this row reddened on Windows for exactly that
+            // reason (CI, 2026-11-24) while green on Linux. The assertion in
+            // `no_in_tree_guest_smuggles_...` keeps the normalisation honest.
             let rel = path
                 .strip_prefix(&root)
                 .unwrap_or(&path)
                 .display()
-                .to_string();
+                .to_string()
+                .replace('\\', "/");
             (rel, text)
         })
         .collect()
@@ -115,9 +121,17 @@ fn no_in_tree_guest_smuggles_the_cut_through_a_vendor_event() {
     // and `a_guest_reporting_the_cut_twice_delivers_it_once` drive. Any *other* file
     // naming the kind is a guest that kept the door open.
     let fixture_scripts = "extensions/conformance/src/scripts.rs";
+    let sources = guest_sources();
+    for (path, _) in &sources {
+        assert!(
+            !path.contains('\\'),
+            "paths are normalised to `/`, or the Windows run matches a different \
+             exception than this one: {path}"
+        );
+    }
     let mut offenders = Vec::new();
     let mut simulated = 0;
-    for (path, text) in guest_sources() {
+    for (path, text) in sources {
         for (number, line) in code_lines(&text).enumerate() {
             if !line.contains("TRUNCATED_KIND") {
                 continue;
