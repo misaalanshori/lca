@@ -381,11 +381,12 @@ fn no_other_filter_field_scans_raw_bytes_for_text() {
 }
 
 // Verifies: gh #615 - a finished install's *outcome* reaches the user in a form
-// they can read. A confirmation is a flash; a failure is an instruction, so it
-// also lands in the transcript where it wraps and survives the toast's fade
-// (the toast truncated `could not fetch ghcr.io/...: no artifact for ...`).
+// they can read and come back to. The toast truncated a failure's advice at the
+// card edge and faded three seconds later, and neither outcome closed the
+// "installing ..." line it answered; the outcome is a transcript line now, with
+// a toast kept for the success flash.
 #[test]
-fn an_install_failure_lands_in_the_transcript_and_a_success_flashes() {
+fn an_install_outcome_lands_in_the_transcript() {
     use std::sync::Mutex;
     let notice = Arc::new(Mutex::new(None::<String>));
     let mut opts = options();
@@ -403,10 +404,10 @@ fn an_install_failure_lands_in_the_transcript_and_a_success_flashes() {
                    anthropic:unstable` has the unstable channel's build";
     *notice.lock().expect("notice") = Some(failure.to_string());
     assert!(chat.poll_install(), "the poll reports work landed");
-    // The transcript wraps, so the assertions name the fragments that carry
-    // the advice rather than the unbroken string the toast truncated.
     // The transcript wraps, so compare on a whitespace-normalised capture: the
-    // rows carry the sentence with a line break where the viewport broke it.
+    // rows carry the sentence with a line break where the viewport broke it,
+    // and the assertions name fragments rather than the unbroken string the
+    // toast used to truncate.
     let said = crate::chat::tests_support::strip(&chat.viewport(100, 40, 0)).join(" ");
     let said = said.split_whitespace().collect::<Vec<_>>().join(" ");
     for fragment in [
@@ -420,21 +421,44 @@ fn an_install_failure_lands_in_the_transcript_and_a_success_flashes() {
         );
     }
 
-    // A success is a confirmation and stays a toast: the transcript grows no
-    // entry for it, so closing the hub does not leave an install log behind.
-    let entries_before = chat.transcript.entries().len();
+    // A success closes the "installing ..." line the same way, and flashes too.
     *notice.lock().expect("notice") = Some("installed word-count 1.0.0 (abc123)".to_string());
-    assert!(chat.poll_install(), "the poll reports the toast");
-    assert_eq!(
-        chat.transcript.entries().len(),
-        entries_before,
-        "a confirmation does not add a transcript entry"
+    assert!(chat.poll_install(), "the poll reports the outcome");
+    let said = crate::chat::tests_support::strip(&chat.viewport(100, 40, 0)).join(" ");
+    assert!(
+        said.contains("installed word-count 1.0.0 (abc123)"),
+        "the digest is readable after the toast is gone:\n{said}"
     );
     assert!(
         chat.toasts
             .iter()
             .any(|toast| toast.text.contains("installed word-count")),
-        "the confirmation is the toast"
+        "the success still flashes"
     );
     assert!(!chat.poll_install(), "an empty slot reports nothing");
+}
+
+// Verifies: a degraded catalog fetch reaches the user. `fetch_all` has always
+// built "extension catalogs are unreachable (...) - showing installed only",
+// and `apply_rows` dropped it, so a transient fetch failure painted an empty
+// hub with no explanation (observed 2026-11-24).
+#[test]
+fn an_unreachable_catalog_says_so_in_the_transcript() {
+    let notice = "extension catalogs are unreachable (Official (misaalanshori/lca)) - showing installed only";
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut hub = crate::chat_hub::ExtensionHub::loading(Vec::new());
+    hub.refresh = Some(rx);
+    tx.send(HubData {
+        installed: Vec::new(),
+        available: Vec::new(),
+        notice: Some(notice.to_string()),
+    })
+    .expect("send");
+    assert!(hub.poll_hub(), "the landed fetch repaints");
+    assert_eq!(
+        hub.take_notice().as_deref(),
+        Some(notice),
+        "the notice is handed to the loop once"
+    );
+    assert!(hub.take_notice().is_none(), "and only once");
 }

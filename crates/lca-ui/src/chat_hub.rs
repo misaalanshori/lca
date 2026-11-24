@@ -74,6 +74,8 @@ pub struct ExtensionHub {
     pub loading_advanced: std::time::Instant,
     /// The visible spinner frame.
     pub loading_frame: usize,
+    /// A degraded fetch's guidance, taken once by the loop that says it.
+    pub notice: Option<String>,
     /// The background fetch's rows, collected by `poll_hub`.
     pub refresh: Option<Receiver<HubData>>,
 }
@@ -89,6 +91,7 @@ impl ExtensionHub {
             loading: true,
             loading_advanced: std::time::Instant::now(),
             loading_frame: 0,
+            notice: None,
             refresh: None,
         };
         hub.refilter();
@@ -105,6 +108,7 @@ impl ExtensionHub {
             loading: false,
             loading_advanced: std::time::Instant::now(),
             loading_frame: 0,
+            notice: None,
             refresh: None,
         };
         hub.refilter();
@@ -167,8 +171,18 @@ impl ExtensionHub {
             _ => return false,
         };
         self.refresh = None;
+        // A degraded fetch (a catalog unreachable, a cache invalid) carries the
+        // sentence that says so; it lands in the transcript rather than being
+        // dropped, because an empty hub with no explanation reads as "there are
+        // no extensions" (observed on a transient fetch failure, 2026-11-24).
+        self.notice = data.notice.clone();
         self.apply_rows(data);
         true
+    }
+
+    /// Take the notice the last landed fetch carried, once.
+    pub(crate) fn take_notice(&mut self) -> Option<String> {
+        self.notice.take()
     }
 
     /// The blocking drain tests use to make the background arrival
@@ -324,15 +338,16 @@ impl Chat {
         };
         match poll() {
             Some(notice) => {
-                // A background install finishes away from the conversation. A
-                // confirmation floats and fades; a failure is something the
-                // user has to act on, so it also lands in the transcript -
-                // where it wraps and stays instead of being truncated by the
-                // toast's width and lost when it fades (gh #615).
-                if notice.starts_with("installed ") {
-                    self.toast(notice);
-                } else {
-                    self.say(notice.clone());
+                // A background install finishes away from the conversation, so
+                // its outcome goes where the user can find it: a transcript
+                // line, which wraps and stays, and which closes the
+                // "installing ..." line that opened it. The toast alone was
+                // wrong in both directions - it truncated a failure's advice at
+                // the card edge, and a success vanished before a user who had
+                // looked away could learn the digest (gh #615).
+                let installed = notice.starts_with("installed ");
+                self.say(notice.clone());
+                if installed {
                     self.toast(notice);
                 }
                 true

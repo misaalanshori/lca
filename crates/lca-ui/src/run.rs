@@ -791,7 +791,15 @@ pub fn run(mut options: UiOptions, runner: TurnRunner) -> i32 {
             if hub.poll_hub() {
                 frames.request_stream();
             }
+            // Taken here, said after the borrow ends: a degraded fetch (a
+            // catalog unreachable) has to reach the user rather than leave an
+            // empty hub reading as "no extensions exist".
+            let degraded = hub.take_notice();
             if hub.tick() {
+                frames.request_stream();
+            }
+            if let Some(notice) = degraded {
+                chat.say(notice);
                 frames.request_stream();
             }
         }
