@@ -974,8 +974,14 @@ mod tests {
     }
 
     // Verifies: thought_signature fix — the persisted Reasoning
-    // signature is echoed inside replayed functionCall parts, which is
-    // what Gemini's generateContent API requires (HTTP 400 otherwise).
+    // signature is echoed on replayed functionCall parts, which is what
+    // Gemini's generateContent API requires (HTTP 400 otherwise). Gh #352:
+    // the placement matters as much as the presence — the Cloud Code
+    // gateway rejected a nested signature live (both casings), so the part
+    // must carry it as a **sibling** of `functionCall`, and this row asserts
+    // the negative too (a mapping that nested it would still find the key
+    // with a `part["thoughtSignature"]` lookup on a flattened view, so the
+    // sibling assertion is the one that catches it).
     #[test]
     fn a_signed_reasoning_block_echoes_thought_signature_on_function_calls() {
         let request = lca_protocol::CompletionRequest {
@@ -989,10 +995,16 @@ mod tests {
         let part = function_call_part(&body);
         assert_eq!(part["thoughtSignature"], "sig-abc-123");
         assert_eq!(part["functionCall"]["name"], "default_api:list");
+        assert!(
+            part["functionCall"].get("thoughtSignature").is_none()
+                && part["functionCall"].get("thought_signature").is_none(),
+            "the signature is a sibling of functionCall, never nested inside it: {part}"
+        );
     }
 
     // Verifies: thought_signature fix — unsigned history sends no
-    // thoughtSignature key at all (never an empty one).
+    // thoughtSignature key at all (never an empty one), on the part or
+    // inside the call.
     #[test]
     fn an_unsigned_reasoning_block_sends_no_thought_signature() {
         let request = lca_protocol::CompletionRequest {
@@ -1004,6 +1016,34 @@ mod tests {
         };
         let body = build_request(&request, "sys", "mock-project", "gemini-3.8-flash-low");
         let part = function_call_part(&body);
-        assert!(part.get("thoughtSignature").is_none());
+        assert!(
+            part.get("thoughtSignature").is_none(),
+            "absent means absent, not empty: {part}"
+        );
+        assert!(part["functionCall"].get("thoughtSignature").is_none());
+    }
+
+    // Verifies: gh #352 - **the redacted shape replays too.** Some vendors keep
+    // the signature and redact the reasoning text (`text` empty, `signature`
+    // present), which the typed case has to express because it carries both
+    // fields. The old extras-key reconstruction produced exactly this shape, so a
+    // conversion that dropped an empty-text block would regress a live path.
+    #[test]
+    fn a_redacted_reasoning_block_still_echoes_its_signature() {
+        let mut message = assistant_with_call(Some("sig-redacted"));
+        message.content = vec![lca_protocol::ContentBlock::Reasoning {
+            reasoning: String::new(),
+            signature: Some("sig-redacted".to_string()),
+        }];
+        let request = lca_protocol::CompletionRequest {
+            messages: vec![message],
+            tools: Vec::new(),
+            model: "gemini".to_string(),
+            stable_prefix: 0,
+            extras: Default::default(),
+        };
+        let body = build_request(&request, "sys", "mock-project", "gemini-3.8-flash-low");
+        let part = function_call_part(&body);
+        assert_eq!(part["thoughtSignature"], "sig-redacted");
     }
 }

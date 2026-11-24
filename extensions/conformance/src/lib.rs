@@ -987,10 +987,10 @@ pub fn outcome_to_result(call_id: &str, outcome: ModeOutcome) -> ToolResult {
 mod scripts;
 
 pub use scripts::{
-    compact_excerpts, compact_script, provider_models, provider_models_default, scripted_events,
-    scripted_login, scripted_login_options, scripted_login_submit, scripted_logout, scripted_usage,
-    scripted_usage_report, scripted_usage_report_with, transform_script, ui_event_script,
-    ui_script,
+    compact_excerpts, compact_script, provider_models, provider_models_default, reasoning_report,
+    scripted_events, scripted_events_for, scripted_login, scripted_login_options,
+    scripted_login_submit, scripted_logout, scripted_usage, scripted_usage_report,
+    scripted_usage_report_with, transform_script, ui_event_script, ui_script,
 };
 
 // ---------------------------------------------------------------------------

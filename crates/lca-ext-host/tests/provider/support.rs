@@ -187,10 +187,20 @@ pub(super) async fn collect(
     handle: &dyn ExtensionDispatch,
     model: &str,
 ) -> Result<Vec<StreamEvent>, lca_protocol::DispatchError> {
+    collect_request(handle, request(model)).await
+}
+
+/// The same collector, for a row that has to hand the provider a real
+/// conversation (gh #352's reasoning rows: the block under test is history,
+/// not a script selector).
+pub(super) async fn collect_request(
+    handle: &dyn ExtensionDispatch,
+    request: CompletionRequest,
+) -> Result<Vec<StreamEvent>, lca_protocol::DispatchError> {
     let sink = Collect::default();
     let events = sink.0.clone();
     handle
-        .stream_completion(request(model), &sink)
+        .stream_completion(request, &sink)
         .await
         .map(|()| events.lock().expect("events").clone())
 }

@@ -254,20 +254,22 @@ pub(super) fn login_submit_work(
 
 #[cfg(test)]
 mod reasoning_bridge_tests {
-    //! The host half of the reasoning-signature extras bridge (gh #289).
+    //! The host end of the reasoning-signature bridge - both halves of it.
     //!
-    //! The frozen 0.6 `content-block` variant has no `reasoning` case, so
-    //! a thinking run's replay signature crosses the ABI in the reserved
-    //! extras map under [`lca_protocol::THINKING_SIGNATURE_EXTRA`], and
-    //! the guest rebuilds the `Reasoning` block from it. These rows pin
-    //! the *host* end of that bridge - what `to_wit_request` writes.
+    //! **0.6 (gh #289):** the frozen `content-block` variant had no `reasoning` case,
+    //! so a thinking run's replay signature crossed in the reserved extras map under
+    //! [`lca_protocol::THINKING_SIGNATURE_EXTRA`] and the guest rebuilt the block from
+    //! it.
     //!
-    //! `to_wit_request` is `pub(super)`, so this is the only placement
-    //! that can pin it without widening the surface for a test. The guest
-    //! end is pinned by the antigravity guest's own rows
-    //! (`extensions/antigravity/src/{lib,stream}.rs`) and end to end by
-    //! `crates/lca-ext-host/tests/provider.rs`'s catalog rows; the typed
-    //! `reasoning` case is gh #352's, not pinned here.
+    //! **0.7 (gh #352):** the variant has the case, so the block crosses typed with
+    //! `text` and `signature` together, and the extras key is a compatibility write
+    //! for guests built before the case. These rows pin both: the typed case is what a
+    //! converted guest reads, and the key is still there for one that is not.
+    //!
+    //! `to_wit_request` is `pub(super)`, so this is the only placement that can pin it
+    //! without widening the surface for a test. The guest end is pinned by
+    //! `crates/lca-ext-host/tests/provider/parity.rs` (both delivery modes observe the
+    //! same block) and by the antigravity extension's own rows (the outgoing part).
 
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code: a panic here is a failed assertion.
 
@@ -333,11 +335,78 @@ mod reasoning_bridge_tests {
         );
     }
 
-    // Verifies: gh #289 (reasoning is never resent as a content block -
-    // the frozen variant has no case for it, so it must NOT appear as
-    // text; the signature is the only channel)
+    fn typed_reasoning(
+        converted: &lca_ext_abi::host::provider::exports::lca::ext::provider_completion::CompletionRequest,
+    ) -> Vec<lca_ext_abi::host::provider::lca::ext::types::ReasoningBlock> {
+        use lca_ext_abi::host::provider::lca::ext::types::ContentBlock;
+        converted.messages[0]
+            .content
+            .iter()
+            .filter_map(|block| match block {
+                ContentBlock::Reasoning(block) => Some(block.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    // Verifies: gh #352 acceptance criteria 1-2 at the boundary - **a reasoning block
+    // crosses typed, text and signature together, and absent stays absent.** The
+    // failure mode `Some("")` would produce is a wire field the live gateway rejects
+    // in both casings; the failure mode `None` everywhere would be the pre-0.7 loss.
     #[test]
-    fn a_reasoning_block_never_becomes_a_content_block_or_text() {
+    fn a_reasoning_block_crosses_typed_with_its_signature() {
+        let converted = super::to_wit_request(&request_with(assistant_with(Some((
+            "plan the call",
+            Some("sig-abc-123"),
+        )))));
+        let blocks = typed_reasoning(&converted);
+        assert_eq!(blocks.len(), 1, "one reasoning block, one case");
+        assert_eq!(blocks[0].text, "plan the call");
+        assert_eq!(blocks[0].signature.as_deref(), Some("sig-abc-123"));
+    }
+
+    #[test]
+    fn an_unsigned_reasoning_block_crosses_typed_with_no_signature() {
+        let converted = super::to_wit_request(&request_with(assistant_with(Some(("plan", None)))));
+        let blocks = typed_reasoning(&converted);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(
+            blocks[0].signature, None,
+            "absent is None, never Some(\"\") - a provider that requires a signature \
+             rejects an empty one"
+        );
+    }
+
+    // Verifies: gh #352 - **both channels cross in the same request.** The typed case
+    // is what a converted guest reads; the reserved extra is the compatibility write
+    // for a guest built before the case. Dropping either would break a class of guest
+    // silently, and a conversion that carried only one would pass every single-channel
+    // row.
+    #[test]
+    fn a_signed_block_crosses_typed_and_keeps_the_compat_key() {
+        let converted = super::to_wit_request(&request_with(assistant_with(Some((
+            "plan the call",
+            Some("sig-abc-123"),
+        )))));
+        assert_eq!(
+            typed_reasoning(&converted)[0].signature.as_deref(),
+            Some("sig-abc-123"),
+            "the typed case carries it"
+        );
+        assert_eq!(
+            signature_on_the_wire(&converted).as_deref(),
+            Some("sig-abc-123"),
+            "and the pre-0.7 key still does, for a guest that reads only that"
+        );
+    }
+
+    // Verifies: gh #352 - reasoning text crosses **inside the typed block**, never as
+    // a `Text` block. A guest that received it as text would read the model's private
+    // thinking as something it said aloud, and a provider that echoed it back would
+    // resend it as answer content (gh #289 pinned the same property when there was no
+    // case at all).
+    #[test]
+    fn a_reasoning_block_never_becomes_a_text_block() {
         let converted = super::to_wit_request(&request_with(assistant_with(Some((
             "plan the call",
             Some("sig-abc-123"),

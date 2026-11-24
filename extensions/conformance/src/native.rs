@@ -486,7 +486,7 @@ impl lca_ext_abi::ExtensionDispatch for NativeConformance {
     ) -> lca_ext_abi::DispatchFuture<'a, Result<(), lca_protocol::DispatchError>> {
         // The script is deterministic, so both modes push the same
         // events in the same order before completing (NFR-25).
-        for event in crate::scripted_events(&request.model) {
+        for event in crate::scripted_events_for(&request) {
             sink.push(event);
         }
         Box::pin(std::future::ready(Ok(())))

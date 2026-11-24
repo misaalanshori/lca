@@ -134,6 +134,94 @@ impl crate::IdentityCap for GuestIdentityCap {
 
 /// Protocol usage -> the WIT record (cost buckets in reserved extras,
 /// matching the host's conversion exactly for NFR-25 parity).
+/// The WIT request -> the protocol shape the shared script reads.
+///
+/// Gh #352: this fixture deliberately mirrors what a *real* guest does, because the
+/// reasoning rows compare it against the native twin's view of the same request. The
+/// content-block match is exhaustive on purpose: a case the fixture silently folded
+/// away would hide the very loss those rows exist to catch.
+fn from_wit_request(request: &CompletionRequest) -> lca_protocol::CompletionRequest {
+    let messages = request
+        .messages
+        .iter()
+        .map(|message| lca_protocol::ChatMessage {
+            role: match message.role.as_str() {
+                "system" => lca_protocol::MessageRole::System,
+                "user" => lca_protocol::MessageRole::User,
+                "assistant" => lca_protocol::MessageRole::Assistant,
+                _ => lca_protocol::MessageRole::Tool,
+            },
+            content: message
+                .content
+                .iter()
+                .map(|block| match block {
+                    lca::ext::types::ContentBlock::Text(text) => {
+                        lca_protocol::ContentBlock::Text { text: text.clone() }
+                    }
+                    lca::ext::types::ContentBlock::Image((media_type, bytes)) => {
+                        lca_protocol::ContentBlock::Image {
+                            media_type: media_type.clone(),
+                            bytes: bytes.clone(),
+                        }
+                    }
+                    lca::ext::types::ContentBlock::Reasoning(block) => {
+                        lca_protocol::ContentBlock::Reasoning {
+                            reasoning: block.text.clone(),
+                            signature: block.signature.clone(),
+                        }
+                    }
+                })
+                .collect(),
+            tool_calls: message
+                .tool_calls
+                .iter()
+                .map(|call| lca_protocol::ToolCall {
+                    call_id: call.call_id.clone(),
+                    name: call.name.clone(),
+                    arguments: call.arguments.clone(),
+                    parent_call_id: None,
+                })
+                .collect(),
+            tool_call_id: message.tool_call_id.clone(),
+            usage: None,
+            extras: message
+                .extras
+                .iter()
+                .map(|pair| (pair.key.clone(), pair.value.clone()))
+                .collect(),
+        })
+        .collect();
+    let tools = request
+        .tools
+        .iter()
+        .map(|tool| lca_protocol::ToolSpec {
+            name: tool.name.clone(),
+            description: tool.description.clone(),
+            parameters: serde_json::from_str(&tool.parameters)
+                .unwrap_or_else(|_| serde_json::json!({ "type": "object" })),
+            exposure: lca_protocol::ToolExposure::Direct,
+            namespace: None,
+            annotations: None,
+            extras: tool
+                .extras
+                .iter()
+                .map(|pair| (pair.key.clone(), pair.value.clone()))
+                .collect(),
+        })
+        .collect();
+    lca_protocol::CompletionRequest {
+        messages,
+        tools,
+        model: request.model.clone(),
+        stable_prefix: request.stable_prefix as usize,
+        extras: request
+            .extras
+            .iter()
+            .map(|pair| (pair.key.clone(), pair.value.clone()))
+            .collect(),
+    }
+}
+
 fn to_wit_usage(usage: &lca_protocol::Usage) -> WasmUsage {
     let mut extras: Vec<ExtraPair> = usage
         .extras
@@ -228,7 +316,11 @@ impl CompletionGuest for ProviderComponent {
     type CompletionStream = ScriptedStream;
 
     fn stream_completion(request: CompletionRequest) -> Result<CompletionStream, String> {
-        let events = crate::scripted_events(&request.model);
+        // Gh #352: the script is a function of the whole request for the reasoning
+        // probe, which reports the blocks the request carried - so this converts the
+        // WIT request first and scripts from that, exactly as the native twin scripts
+        // from the request it was handed.
+        let events = crate::scripted_events_for(&from_wit_request(&request));
         Ok(CompletionStream::new(ScriptedStream {
             events: RefCell::new(events.into_iter()),
         }))

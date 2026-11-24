@@ -13,7 +13,7 @@ use lca_ext_abi::{DeliveryMode, ExtensionDispatch, World};
 use lca_protocol::StreamEvent;
 use lca_provider::ToolCallAccumulator;
 
-use super::support::{CloseAfter, Fixture, collect, request};
+use super::support::{CloseAfter, Fixture, collect, collect_request, request};
 
 // Verifies: FR-PROV-2 — both modes list the same models, and they are
 // the shared script's models (NFR-25 identity for model listing).
@@ -50,7 +50,7 @@ async fn model_listing_is_identical_across_modes() {
         .collect::<Vec<_>>();
     assert_eq!(wasm_discovered, native_discovered, "the two modes agree");
     assert_eq!(wasm_discovered, vec!["found-a", "found-b"]);
-    assert_eq!(wasm_models.len(), 5);
+    assert_eq!(wasm_models.len(), 6);
     assert_eq!(wasm_models[0].id, "conformance-a");
     assert_eq!(wasm_models[1].context_window, 8192);
 }
@@ -393,4 +393,87 @@ async fn a_guest_reporting_the_cut_twice_delivers_it_once() {
         matches!(events.last(), Some(StreamEvent::Usage { .. })),
         "deduping the fact does not swallow what follows it: {events:?}"
     );
+}
+
+/// The antigravity-shaped history these rows replay: an assistant turn that thought
+/// and then called a tool, with the signature the vendor issued for it.
+fn reasoning_history(signature: Option<&str>) -> lca_protocol::CompletionRequest {
+    lca_protocol::CompletionRequest {
+        messages: vec![lca_protocol::ChatMessage {
+            role: lca_protocol::MessageRole::Assistant,
+            content: vec![lca_protocol::ContentBlock::Reasoning {
+                reasoning: "plan the call".to_string(),
+                signature: signature.map(str::to_string),
+            }],
+            tool_calls: vec![lca_protocol::ToolCall {
+                call_id: "call-1".to_string(),
+                name: "default_api:list".to_string(),
+                arguments: "{}".to_string(),
+                parent_call_id: None,
+            }],
+            tool_call_id: None,
+            usage: None,
+            extras: Default::default(),
+        }],
+        tools: Vec::new(),
+        model: "conformance-reasoning".to_string(),
+        stable_prefix: 0,
+        extras: Default::default(),
+    }
+}
+
+fn report_of(events: &[StreamEvent]) -> String {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            StreamEvent::TextDelta { delta } => Some(delta.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+// Verifies: gh #352 acceptance criterion 3 (NFR-25) - **a reasoning block crosses
+// both delivery modes identically, text and signature together.** The script is a
+// function of what the request carried, so the two reports being equal is the
+// boundary preserving the block exactly; a dropped case, a lost signature or a
+// stringly round trip would make the WASM side say something the native twin does
+// not.
+#[tokio::test]
+async fn a_reasoning_block_crosses_identically_in_both_modes() {
+    let fixture = Fixture::new("reasoning-cross-mode");
+    let (wasm, native) = fixture.both_modes();
+
+    for (label, signature, expected) in [
+        ("signed", Some("sig-abc-123"), r#"Some("sig-abc-123")"#),
+        // Acceptance criterion 2: absent is absent. The failure mode this rules
+        // out is `Some("")`, which is what a naive mapping of an optional field
+        // produces and which the live gateway rejects in both casings.
+        ("unsigned", None, "None"),
+    ] {
+        let request = reasoning_history(signature);
+        let wasm_events = collect_request(wasm.as_ref(), request.clone())
+            .await
+            .expect("wasm stream");
+        let native_events = collect_request(native.as_ref(), request)
+            .await
+            .expect("native stream");
+        assert_eq!(
+            wasm_events, native_events,
+            "{label}: the two delivery modes disagree about the request's reasoning block"
+        );
+        let report = report_of(&wasm_events);
+        assert!(
+            report.contains(r#"typed=[text="plan the call" signature="#),
+            "{label}: the guest did not see the reasoning text through the typed case: {report}"
+        );
+        assert!(
+            report.contains(expected),
+            "{label}: the signature crossed as {expected}: {report}"
+        );
+        assert!(
+            !report.contains(r#"signature=Some("")"#),
+            "{label}: an empty signature is not an absent one: {report}"
+        );
+    }
 }

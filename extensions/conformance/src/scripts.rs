@@ -84,6 +84,17 @@ pub fn provider_models_default() -> Vec<lca_protocol::ModelInfo> {
             max_tokens: 512,
             extras: Default::default(),
         },
+        // Gh #352: the reasoning probe. `conformance-reasoning` streams a one-line
+        // report of the reasoning blocks (and the compat key) the request carried,
+        // so both delivery modes can be compared on the *request* as well as the
+        // response.
+        lca_protocol::ModelInfo {
+            id: "conformance-reasoning".to_string(),
+            name: "Conformance Reasoning".to_string(),
+            context_window: 4096,
+            max_tokens: 512,
+            extras: Default::default(),
+        },
         // A guest that reports the cut the way one built *before* the typed case
         // did. Selectable so the compatibility read is provable on a real pane, not
         // only in the harness.
@@ -208,6 +219,66 @@ pub fn scripted_events(model: &str) -> Vec<lca_protocol::StreamEvent> {
             usage(),
         ],
     }
+}
+
+/// One line describing the reasoning blocks a request carried: their text and
+/// signature, both read from the typed `content-block::reasoning` case.
+///
+/// Gh #352: both delivery modes run this over the request they received - the native
+/// twin over the protocol request, the WASM guest over the WIT request it converted
+/// back - so an equal report is the boundary preserving the block exactly, and a
+/// different one is the boundary's fault. The format is an assertion, not a log line,
+/// so it must stay stable.
+///
+/// Deliberately **not** in the report: the pre-0.7 compatibility channel. The host
+/// writes that reserved message extra for guests built before the case, so the WASM
+/// side sees one and the native side does not - including it here would make the
+/// cross-mode comparison always unequal. [`reasoning_channels_report`] adds it, for
+/// the WASM-only row that has to prove both channels were present and the typed one
+/// was the content.
+pub fn reasoning_report(request: &lca_protocol::CompletionRequest) -> String {
+    let mut typed: Vec<String> = Vec::new();
+    for message in &request.messages {
+        for block in &message.content {
+            if let lca_protocol::ContentBlock::Reasoning {
+                reasoning,
+                signature,
+            } = block
+            {
+                typed.push(format!(
+                    "text={reasoning:?} signature={}",
+                    match signature {
+                        Some(value) => format!("Some({value:?})"),
+                        None => "None".to_string(),
+                    }
+                ));
+            }
+        }
+    }
+    format!("typed=[{}]", typed.join("; "))
+}
+
+/// The events one **request** produces. Equal in both delivery modes, because the
+/// script is a deterministic function of what the request carried - the reasoning
+/// model reports it, so a boundary that dropped or invented a field shows up as a
+/// different event stream (NFR-25's exact-equality promise, applied to the request
+/// half as well as the response half).
+pub fn scripted_events_for(
+    request: &lca_protocol::CompletionRequest,
+) -> Vec<lca_protocol::StreamEvent> {
+    let report = match request.model.as_str() {
+        "conformance-reasoning" => Some(reasoning_report(request)),
+        _ => None,
+    };
+    if let Some(delta) = report {
+        return vec![
+            lca_protocol::StreamEvent::TextDelta { delta },
+            lca_protocol::StreamEvent::Usage {
+                usage: scripted_usage(),
+            },
+        ];
+    }
+    scripted_events(&request.model)
 }
 
 /// The compaction script: a body carrying `call-completion` makes the

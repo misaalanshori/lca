@@ -66,6 +66,9 @@ mod follow_up_mode_and_async_teardown;
 // Gh #381 gaps 1-2: a paste chip is one unit for every motion, wrap and delete path.
 #[path = "381-chip-is-one-unit.rs"]
 mod chip_is_one_unit;
+// Gh #352: the reasoning block is a typed content case, and no guest uses the extras key.
+#[path = "352-typed-reasoning-block.rs"]
+mod typed_reasoning_block;
 // Gh #581: the truncation is a typed stream case, and no guest smuggles it as a string.
 #[path = "581-typed-truncated-event.rs"]
 mod typed_truncated_event;

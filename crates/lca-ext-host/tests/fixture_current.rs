@@ -196,6 +196,14 @@ struct Probe {
 /// that the 2.7x cost move gh #614 measured cannot hide. A deliberate change to a
 /// call re-measures and rewrites its two numbers.
 ///
+/// **Re-measured 2026-11-25** after gh #352's rebuild of six components (the typed
+/// reasoning case). All eight digests were **identical** - the added match arm is on
+/// the truncation/reasoning path, which no probe call reaches - and four fuels moved
+/// by less than the jitter above, so only those four numbers were rewritten:
+/// antigravity −1,665, conformance +24, openai-compatible −446, skills +1,368 (the
+/// largest at 3.1%, from the per-block conversion the transform probe now runs).
+/// A digest change would have been a behaviour change to explain, not to re-pin.
+///
 /// The providers with no committed fixture (`anthropic`, `github-copilot`,
 /// `kimi-coding`, `llama`, `meta`, `openrouter`) ship inside the binary, as do
 /// the first-party tools and transforms without a `fixtures/` directory, so the
@@ -209,7 +217,7 @@ const PROBES: &[Probe] = &[
         call: "list-models over a real-shaped loopback catalog (60 runtime ids, 12 families)",
         settings: &[],
         digest: "44720d06e22abc62575f0004e959d6a3544cef1669f4d734c8a4b686b0bcaf48",
-        fuel: 3414398,
+        fuel: 3412733,
     },
     Probe {
         extension: "codex",
@@ -236,7 +244,7 @@ const PROBES: &[Probe] = &[
         call: "execute mode=ok",
         settings: &[],
         digest: "f67953d3cb0f9dc2c45435d23b2c9359bbc51dd36ef41bcfb0f2b7013f555ebb",
-        fuel: 5545,
+        fuel: 5569,
     },
     Probe {
         extension: "grok",
@@ -254,7 +262,7 @@ const PROBES: &[Probe] = &[
         call: "list-models over a fixed discovered list, resolving windows from the resource bag",
         settings: &[("models", "gpt-5.2,o3-mini")],
         digest: "73f7174e0bf8ecba0e7cbe04e002db5f12d49c6abcffd8dc5b996f333e807092",
-        fuel: 1965213,
+        fuel: 1964767,
     },
     Probe {
         extension: "skills",
@@ -263,7 +271,7 @@ const PROBES: &[Probe] = &[
         call: "transform a fixed conversation that matches one workspace skill",
         settings: &[],
         digest: "2cb4ba5bbb8c79b2e2b73f0da9061573b2d8896885db584880d2dbd92f7f7cd0",
-        fuel: 43691,
+        fuel: 45059,
     },
     Probe {
         extension: "tool-legacy",
