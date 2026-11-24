@@ -19,13 +19,16 @@ use crate::usage::Usage;
 /// depending on any wire crate.
 pub const THINKING_SIGNATURE_KIND: &str = "thinking-signature";
 
-/// The vendor-event kind that carries an output-token truncation across the WASM
-/// boundary (gh #390 gap 1).
+/// The vendor-event kind that carried an output-token truncation across the WASM
+/// boundary before 0.7 gave it a typed case (gh #390 gap 1, retired by gh #581).
 ///
-/// [`StreamEvent::Truncated`] has no WIT case, so a guest that only forwards events
-/// re-encodes it as a vendor event - the ABI's documented escape hatch - and the host
-/// maps it back here. Without this the cut would be lost at the boundary for every
-/// provider delivered through the subscription kit, which is most of them.
+/// No in-tree guest emits it any more: [`StreamEvent::Truncated`] is a case on
+/// `stream-event` in the 0.7 line, so a guest forwards it directly. The constant and
+/// the host's read of it stay **for one minor version**, because a guest built against
+/// `@0.7.0` before the case landed - or a third-party one copying the old shape - still
+/// sends this. Dropping the read would turn that guest's truncated answer back into a
+/// complete one, silently. The typed case wins when both arrive (they are the same
+/// fact, and the turn's flag cannot double the banner).
 pub const TRUNCATED_KIND: &str = "truncated";
 
 /// One event from a streaming completion.

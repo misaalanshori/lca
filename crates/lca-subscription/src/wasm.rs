@@ -272,14 +272,9 @@ macro_rules! subscription_wasm_dispatcher {
                 P::ToolCallEnd { call_id } => WasmEvent::ToolCallEnd(call_id),
                 P::Usage { usage } => WasmEvent::Usage(to_wit_usage(&usage)),
                 P::Error { message, retryable } => WasmEvent::Error((message, retryable)),
-                // Gh #390 gap 1: the shared subscription guest is the one path most
-                // providers take, so the truncation must survive it. The WIT stream
-                // has no case for it, so it rides the ABI's reserved escape hatch
-                // and `host_imports/wit.rs` maps it back on the other side.
-                P::Truncated => WasmEvent::VendorEvent((
-                    lca_protocol::TRUNCATED_KIND.to_string(),
-                    String::new(),
-                )),
+                // 0.7 (gh #581): a typed case now. This kit is the path most providers
+                // take, so the cut rides the typed event rather than the escape hatch.
+                P::Truncated => WasmEvent::Truncated,
                 P::VendorEvent { kind, payload } => {
                     WasmEvent::VendorEvent((kind, payload.to_string()))
                 }

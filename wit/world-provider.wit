@@ -62,7 +62,7 @@ interface provider-completion {
 
   /// The typed event stream (ADR-0004): every vendor concept that lacks
   /// a case travels through `vendor-event` (kind plus JSON text) until it
-  /// earns one at a major version.
+  /// earns one at a line move.
   variant stream-event {
     text-delta(string),
     reasoning-delta(string),
@@ -75,6 +75,11 @@ interface provider-completion {
     usage(usage),
     /// message, then whether a retry could help (FR-CORE-6).
     error(tuple<string, bool>),
+    /// The provider cut the answer off at its output limit. Carries no data: the
+    /// host's banner is the only consumer, and `lca_protocol::StreamEvent::Truncated`
+    /// is a unit variant (a payload here would invent information the guest does
+    /// not have).
+    truncated,
     /// kind, then a JSON payload.
     vendor-event(tuple<string, string>),
   }

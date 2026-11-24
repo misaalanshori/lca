@@ -1,6 +1,50 @@
 # Changelog
 
-## 0.7 line — gh #407: `ui-dialogs` gains the tabbed questionnaire
+## 0.7 line
+
+Two interface changes on this line: gh #581 adds a case to an exported variant,
+and gh #407 (below) opened the line with a host-import addition.
+
+### gh #581: `stream-event` gains a typed `truncated` case
+
+One case added to the `provider` world's exported event variant, carrying no
+payload:
+
+```wit
+variant stream-event {
+  // ... text-delta, reasoning-delta, tool-call-*, usage, error ...
+  truncated,
+  vendor-event(tuple<string, string>),
+}
+```
+
+**Breaking for the contract, and this is the case the escape hatch was for.** A
+guest *consumes* this variant only if it does something other than construct it;
+such a guest now has a case it must name (or cover with `_`). A guest that
+*constructs* events needs no arm to keep compiling, and one that wants to report
+a cut emits `truncated` instead of `vendor-event("truncated", "")`. The host is
+the only consumer in this tree, and it gained the case in the same change.
+
+**The old shape still works for one minor version.** `vendor-event("truncated",
+"")` keeps mapping to the truncated fact on the host, because a component built
+against `@0.7.0` before this case landed - or a third-party guest copying the
+round trip from an older doc - can still send it, and dropping the read would
+turn its truncated answer into a complete one silently. The typed case is the
+path every in-tree guest now takes; `TRUNCATED_KIND` is kept as that compatibility
+read and goes away after the first minor release that follows this one, once no
+in-tree guest emits it (`tests/regressions/581-typed-truncated-event.rs` is the
+scan that makes the condition checkable).
+
+**Why:** the turn depends on the truncation for a user-visible banner, and before
+this case the fact crossed the boundary as a string kind plus an empty payload -
+checked on both sides, but a typo in either spelling was a compile-time no-op and
+a runtime loss. A variant case makes the compiler carry it.
+
+**What an author must do:** rebuild against the 0.7 `wit/`. If your guest reports
+a truncation, emit `truncated` (not the vendor event). If your guest matches on
+`stream-event`, add the case or a `_` arm.
+
+### gh #407: `ui-dialogs` gains the tabbed questionnaire
 
 **This change opens the 0.7 line.** The 0.6 line was frozen for interface
 changes on 2026-10-08 (`docs/abi-versioning.md`), and the freeze says the next

@@ -136,11 +136,22 @@ pub(crate) fn from_wit_event(event: wit_completion::StreamEvent) -> lca_protocol
             usage: from_wit_usage(usage),
         },
         wit_completion::StreamEvent::Error((message, retryable)) => P::Error { message, retryable },
-        // Gh #390 gap 1: a guest re-encodes `P::Truncated` as a vendor event, since
-        // the WIT stream has no case for it. Undo that here so the cut survives the
-        // boundary - otherwise every provider delivered through the subscription kit
-        // would report a truncated answer as a complete one, which is the exact
-        // defect this cycle fixes, one hop away.
+        // 0.7: the typed case (gh #581). The guest no longer has to smuggle the cut
+        // through the escape hatch, so this is the path every rebuilt guest takes.
+        wit_completion::StreamEvent::Truncated => P::Truncated,
+        // **Compatibility read, kept for one minor version (gh #581).** Before the
+        // typed case, this was the *only* path: a guest built against `@0.7.0`
+        // before the case landed - or a third-party guest copying the old shape -
+        // emits `vendor-event("truncated", "")`. Dropping the read would turn its
+        // truncated answer back into a complete one, silently, which is the defect
+        // gh #390 fixed. The typed case wins when both arrive: they are the same
+        // fact, and the turn's `truncated` is a flag rather than a counter
+        // (`crates/lca-core/src/turn/stream.rs`), so a duplicate cannot double the
+        // banner.
+        // Remove after the first minor release that follows the typed case, when no
+        // in-tree guest emits the kind;
+        // `tests/regressions/581-typed-truncated-event.rs` scans the module sources
+        // and is what makes that condition checkable.
         wit_completion::StreamEvent::VendorEvent((kind, _))
             if kind == lca_protocol::TRUNCATED_KIND =>
         {

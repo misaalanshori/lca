@@ -648,7 +648,7 @@ let status = cap.net_response_status(guard.handle())?;        // `?` is now safe
 
 `ResponseGuard` lives in `lca-protocol` beside `ProviderCap`, because every provider has this shape and not every kit (the Anthropic one has no transport) depends on a wire kit. It closes on `Drop`, and `guard.close()` closes early for the caller about to return a failure — which is what the non-2xx path does, **after** it reads the headers it needs (gh #278: the host drops a handle from its table on close, so a `retry-after` read after a close is `NotFound`). Closing manually only on the success paths is how this leaks; the failure path is exactly where nobody is looking.
 
-The events are text delta, reasoning delta, tool call start, tool call argument delta, tool call end, usage, error, and `vendor-event`.
+The events are text delta, reasoning delta, tool call start, tool call argument delta, tool call end, usage, error, `truncated`, and `vendor-event`. `truncated` is the fact the host turns into the "response was truncated at the model's output limit" banner, so report it when the vendor's finish reason says the output limit cut the answer - it is not an error, the partial answer is still delivered, and a retry would produce the same cut.
 
 Three rules keep a provider correct.
 
