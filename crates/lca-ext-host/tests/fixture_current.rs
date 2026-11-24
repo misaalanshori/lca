@@ -188,11 +188,13 @@ struct Probe {
 /// Every committed component, one probe each.
 ///
 /// **Measured 2026-11-24 on this 4-core x86_64 box**, against the fixtures as of
-/// `101adba4`. The digests are exactly reproducible across runs; fuel is not
-/// quite - two runs of the antigravity probe read 3,413,755 and 3,413,662
-/// (0.003%), so the band is ±25%: wide enough for that jitter and an engine
-/// patch, narrow enough that the 2.7x cost move gh #614 measured cannot hide. A
-/// deliberate change to a call re-measures and rewrites its two numbers.
+/// `101adba4`, from the **warm** call (see `run_probe`: a fresh store's first call
+/// also pays instantiation, whose price is the platform engine's, not the
+/// component's). The digests are exactly reproducible across runs; fuel drifts
+/// 0.003% (two runs of the antigravity probe: 3,413,755 and 3,413,662), so the
+/// band is ±25%: wide enough for that jitter and an engine patch, narrow enough
+/// that the 2.7x cost move gh #614 measured cannot hide. A deliberate change to a
+/// call re-measures and rewrites its two numbers.
 ///
 /// The providers with no committed fixture (`anthropic`, `github-copilot`,
 /// `kimi-coding`, `llama`, `meta`, `openrouter`) ship inside the binary, as do
@@ -207,7 +209,7 @@ const PROBES: &[Probe] = &[
         call: "list-models over a real-shaped loopback catalog (60 runtime ids, 12 families)",
         settings: &[],
         digest: "44720d06e22abc62575f0004e959d6a3544cef1669f4d734c8a4b686b0bcaf48",
-        fuel: 3413755,
+        fuel: 3414398,
     },
     Probe {
         extension: "codex",
@@ -216,7 +218,7 @@ const PROBES: &[Probe] = &[
         call: "list-models with no credentials (the static table)",
         settings: &[],
         digest: "048d897fdd2ff9cb820023c7a36340fd1c4c569074275439cd87b66a7871dfc2",
-        fuel: 2262,
+        fuel: 1678,
     },
     Probe {
         extension: "compaction-default",
@@ -225,7 +227,7 @@ const PROBES: &[Probe] = &[
         call: "compact over two fixed records (the completion capability is refused offline, so this is the degraded path)",
         settings: &[],
         digest: "bcaec3b8b494be99bf7fbc1f18c14ee5d72cc90c2a4e06d410bb53b6e9538f8b",
-        fuel: 83662,
+        fuel: 83078,
     },
     Probe {
         extension: "conformance",
@@ -234,7 +236,7 @@ const PROBES: &[Probe] = &[
         call: "execute mode=ok",
         settings: &[],
         digest: "f67953d3cb0f9dc2c45435d23b2c9359bbc51dd36ef41bcfb0f2b7013f555ebb",
-        fuel: 6129,
+        fuel: 5545,
     },
     Probe {
         extension: "grok",
@@ -243,7 +245,7 @@ const PROBES: &[Probe] = &[
         call: "list-models with no credentials (the static table)",
         settings: &[],
         digest: "d208db9ed76d49e350710d00e600211508008b0ca8b65f3e3e90cc7bf3286b07",
-        fuel: 2258,
+        fuel: 1674,
     },
     Probe {
         extension: "openai-compatible",
@@ -252,7 +254,7 @@ const PROBES: &[Probe] = &[
         call: "list-models over a fixed discovered list, resolving windows from the resource bag",
         settings: &[("models", "gpt-5.2,o3-mini")],
         digest: "73f7174e0bf8ecba0e7cbe04e002db5f12d49c6abcffd8dc5b996f333e807092",
-        fuel: 1966638,
+        fuel: 1965213,
     },
     Probe {
         extension: "skills",
@@ -261,7 +263,7 @@ const PROBES: &[Probe] = &[
         call: "transform a fixed conversation that matches one workspace skill",
         settings: &[],
         digest: "2cb4ba5bbb8c79b2e2b73f0da9061573b2d8896885db584880d2dbd92f7f7cd0",
-        fuel: 44275,
+        fuel: 43691,
     },
     Probe {
         extension: "tool-legacy",
@@ -270,7 +272,7 @@ const PROBES: &[Probe] = &[
         call: "execute {text: \"probe\"}",
         settings: &[],
         digest: "85fec61d987288508d1bf826c7034b2a8ac1ba7e1fe83908b4bc78b7e6b45c71",
-        fuel: 3184,
+        fuel: 2600,
     },
 ];
 
@@ -520,7 +522,33 @@ fn run_probe(probe: &Probe) -> Option<(String, u64)> {
             .build()
             .expect("runtime")
     };
-    let rendered = match probe.world {
+    // Two calls, and the pins come from the second (**warm**): a fresh store pays
+    // *instantiation* inside the first call, and that price is a property of the
+    // platform's engine rather than of the component - the first `list-models` of
+    // the tiny `codex` component read 2,262 fuel on Linux and 47,319 on
+    // Windows/macOS (CI, 2026-11-24), while `antigravity`'s 3.4M listing was the
+    // same on all three. The second call is the component's own work, and the two
+    // renderings must agree, which costs nothing to check.
+    let first = call_once(probe, &handle, &runtime);
+    let rendered = call_once(probe, &handle, &runtime);
+    assert_eq!(
+        first, rendered,
+        "{}: the canonical call is deterministic within a run (#616):\n{first}\n---\n{rendered}",
+        probe.extension
+    );
+    let fuel = handle
+        .last_call_fuel()
+        .unwrap_or_else(|| panic!("{}: the call recorded no fuel", probe.extension));
+    Some((rendered, fuel))
+}
+
+/// Make the probe's canonical call once and render the result.
+fn call_once(
+    probe: &Probe,
+    handle: &lca_ext_host::WasmExtension,
+    runtime: &dyn Fn() -> tokio::runtime::Runtime,
+) -> String {
+    match probe.world {
         "provider" => {
             let settings: Vec<(String, String)> = probe
                 .settings
@@ -577,43 +605,49 @@ fn run_probe(probe: &Probe) -> Option<(String, u64)> {
             )
         }
         other => panic!("{}: no render for world `{other}`", probe.extension),
-    };
-    let fuel = handle
-        .last_call_fuel()
-        .unwrap_or_else(|| panic!("{}: the call recorded no fuel", probe.extension));
-    Some((rendered, fuel))
+    }
 }
 
 /// Every committed component answers its canonical call the way it did when the
 /// pins were measured. A stale fixture reddens here on the digest, the fuel, or
-/// both, and the message names the component and both numbers (#616).
+/// both; the row collects **every** mismatch and reports them in one message, so a
+/// drift that touches several components (or a platform whose numbers differ)
+/// shows as a table instead of one line at a time (#616).
 #[test]
 fn every_committed_component_answers_its_canonical_call_the_same_way() {
+    let mut drift = Vec::new();
     for probe in PROBES {
         let Some((rendered, fuel)) = run_probe(probe) else {
             continue;
         };
         let digest = digest_of(&rendered);
         let band = probe.fuel / 4;
-        assert!(
-            digest == probe.digest && fuel.abs_diff(probe.fuel) <= band,
-            "{}/{}: `{}` no longer answers the way it did when the pins were measured \
-             (#616).\n  digest {} (pinned {}{})\n  fuel   {fuel} (pinned {} ±25%, band {band})\n\
-             A stale fixture or a cost regression shows here; re-measure and update the \
-             pin if the change is deliberate.\nresult:\n{rendered}",
-            probe.extension,
-            probe.fixture,
-            probe.call,
-            digest,
-            probe.digest,
-            if digest == probe.digest {
-                ""
-            } else {
-                " - CHANGED"
-            },
-            probe.fuel,
-        );
+        let digest_changed = digest != probe.digest;
+        let fuel_drift = fuel.abs_diff(probe.fuel);
+        if digest_changed || fuel_drift > band {
+            drift.push(format!(
+                "{}/{}: `{}`\n  digest {digest}{}\n  fuel   {fuel} (pinned {} ±25%, band {band})\n  result:\n{rendered}",
+                probe.extension,
+                probe.fixture,
+                probe.call,
+                if digest_changed {
+                    format!(" (pinned {} - CHANGED)", probe.digest)
+                } else {
+                    format!(" (pinned {}, unchanged)", probe.digest)
+                },
+                probe.fuel,
+            ));
+        }
     }
+    assert!(
+        drift.is_empty(),
+        "{} committed component(s) no longer answer the way they did when the pins were \
+         measured (2026-11-24, 4-core x86_64). A stale fixture or a cost regression shows \
+         here; re-measure and update the pin if the change is deliberate, and if the \
+         numbers differ only by platform, say so where the pin is.\n\n{}",
+        drift.len(),
+        drift.join("\n\n"),
+    );
 }
 
 /// The pins cover the walk: every committed component with a fixture has exactly
