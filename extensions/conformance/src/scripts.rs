@@ -233,9 +233,9 @@ pub fn scripted_events(model: &str) -> Vec<lca_protocol::StreamEvent> {
 /// Deliberately **not** in the report: the pre-0.7 compatibility channel. The host
 /// writes that reserved message extra for guests built before the case, so the WASM
 /// side sees one and the native side does not - including it here would make the
-/// cross-mode comparison always unequal. [`reasoning_channels_report`] adds it, for
-/// the WASM-only row that has to prove both channels were present and the typed one
-/// was the content.
+/// cross-mode comparison always unequal. That half is asserted where it belongs, on
+/// the host's `to_wit_request` (`crates/lca-ext-host/src/provider.rs`'s
+/// `reasoning_bridge_tests`), so no guest has to name the key to pin it.
 pub fn reasoning_report(request: &lca_protocol::CompletionRequest) -> String {
     let mut typed: Vec<String> = Vec::new();
     for message in &request.messages {

@@ -140,7 +140,15 @@ fn drift_file(tree: &Path, target: &str, from: &str, to: &str) {
     let path = tree.join(target);
     std::fs::remove_file(&path).expect("drop the symlink");
     let repo_text = std::fs::read_to_string(root().join(target)).expect("read the real file");
-    std::fs::write(&path, repo_text.replacen(from, to, 1)).expect("write the drift");
+    // **Every** occurrence, not the first: a fact a document states twice (the
+    // SRDD names the ADR range in its opening sentence and again in the layout
+    // tree) is only drifted if both say the same wrong thing. Replacing one left
+    // the net green and the self-test red, which is how gh #352 found this.
+    assert!(
+        repo_text.contains(from),
+        "{target} does not contain {from:?}; the drift fixture is stale"
+    );
+    std::fs::write(&path, repo_text.replace(from, to)).expect("write the drift");
 }
 
 /// Run the real net against a fixture tree as its repo root.
@@ -346,11 +354,30 @@ fn a_crate_missing_from_the_readme_table_fails_the_net() {
 #[cfg(unix)]
 fn a_stale_adr_range_in_the_srdd_fails_the_net() {
     let tree = fixture_tree("lca-drift-adr-range");
+    // The range is **derived**, not spelled: the previous version hard-coded
+    // "0001 through 0049", so adding ADR-0050 made this self-test drift instead
+    // of the tree - the net still passed (nothing was stale) and the row failed
+    // (gh #352 caught it in CI's local gate). A self-test about drift may not
+    // itself carry a moving value.
+    let highest = std::fs::read_dir(root().join("docs/adr"))
+        .expect("docs/adr")
+        .flatten()
+        .filter_map(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .get(..4)
+                .map(str::to_string)
+        })
+        .filter(|prefix| prefix.chars().all(|c| c.is_ascii_digit()))
+        .max()
+        .expect("at least one numbered ADR");
+    assert_ne!(highest, "0001", "the row needs a range it can invalidate");
     drift_file(
         &tree,
         "docs/lca-srdd.md",
-        "0001 through 0049",
-        "0001 through 0046",
+        &format!("0001 through {highest}"),
+        "0001 through 0001",
     );
     let output = run_net(&tree);
     assert!(
