@@ -416,6 +416,11 @@ async fn a_four_times_catalog_lists_within_the_production_fuel_budget() {
 // so 4x the models reads as ~4x. Measured 2026-11-24: 75.2k per model at 32,
 // 79.8k at 128 (ratio **1.06**), so 1.25 leaves an 18% guard while a quadratic
 // regression fails by 3x. This cannot be satisfied by raising the budget.
+/// How much the per-model cost may grow from the 32-model catalog to the
+/// 128-model one. Measured 1.06; linear work and a per-model constant sit at
+/// ~1.0, a per-model scan of the catalog at ~4.0.
+const PER_MODEL_GROWTH_BOUND: f64 = 1.25;
+
 #[tokio::test]
 async fn the_listing_cost_per_model_does_not_grow_with_the_catalog() {
     // The first call on a fresh guest pays instantiation too; the second is the
@@ -437,9 +442,9 @@ async fn the_listing_cost_per_model_does_not_grow_with_the_catalog() {
     let small = per_model(32).await;
     let big = per_model(128).await;
     assert!(
-        big <= small * 1.25,
+        big <= small * PER_MODEL_GROWTH_BOUND,
         "per-model fuel must stay flat: {small:.0} at 32 models, {big:.0} at 128 \
-         (ratio {:.2}, bound 1.25)",
+         (ratio {:.2}, bound {PER_MODEL_GROWTH_BOUND})",
         big / small
     );
 }
