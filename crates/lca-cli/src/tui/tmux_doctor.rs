@@ -414,10 +414,6 @@ mod tests {
         );
     }
 
-    /// How long the hanging stub below sleeps. The row's bound is derived from it,
-    /// because the defect it guards against is "the launch waits for this".
-    const STUB_SLEEP: Duration = Duration::from_secs(30);
-
     // Verifies: gh #400 gap 4 - **a failed probe is silent, and bounded.** A
     // missing binary, a refusal, and a hang all have to leave the launch
     // unaffected; "could not check tmux" is not news worth a row.
@@ -429,8 +425,8 @@ mod tests {
     // `sleep` execs and two kills. Measured: 0.85 s idle, **1.86 s** in a full
     // workspace run on four cores - red, with the product correct. The promise the
     // row exists for is that the launch does not wait for a wedged server, so the
-    // comparison is against what the stall *would* cost: the stub's own
-    // [`STUB_SLEEP`], with a 10x margin. What the bound must separate is
+    // comparison is against what the stall *would* cost: the stub's own `sleep`,
+    // with a 10x margin. What the bound must separate is
     // therefore "bounded by the probe budget" (0.8 s of waiting plus however long
     // the box takes to fork) from "blocked until the stub finishes" (30 s), and
     // 3 s sits in the middle of a 30x gap instead of splitting two numbers that
@@ -440,6 +436,11 @@ mod tests {
     #[test]
     #[cfg(unix)] // `stub_tmux` is a shell script; see its doc.
     fn a_failed_or_hanging_probe_is_silent_and_cannot_stall_the_launch() {
+        // How long the hanging stub below sleeps. The bound is derived from it,
+        // because the defect this row guards against is "the launch waits for this".
+        // Local rather than module-level: the row is `#[cfg(unix)]`, and a
+        // module-level constant would be dead code on Windows.
+        const STUB_SLEEP: Duration = Duration::from_secs(30);
         let inside = env_of(&[("TMUX", "/tmp/tmux-1000/default,1,0")]);
 
         // No such binary.
