@@ -213,6 +213,12 @@ fn from_wit_request(request: provider_completion::CompletionRequest) -> Completi
                             bytes: bytes.clone(),
                         }
                     }
+                    // 0.7 (gh #352): a reasoning block crosses typed, with its replay
+                    // signature; a guest that needs the signature reads it from here.
+                    lca::ext::types::ContentBlock::Reasoning(block) => ContentBlock::Reasoning {
+                        reasoning: block.text.clone(),
+                        signature: block.signature.clone(),
+                    },
                 })
                 .collect(),
             tool_calls: message

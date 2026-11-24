@@ -349,6 +349,14 @@ mod wasm_mode {
                                     bytes: bytes.clone(),
                                 }
                             }
+                            // 0.7 (gh #352): a reasoning block crosses typed, with its replay
+                            // signature; a guest that needs the signature reads it from here.
+                            lca::ext::types::ContentBlock::Reasoning(block) => {
+                                lca_protocol::ContentBlock::Reasoning {
+                                    reasoning: block.text.clone(),
+                                    signature: block.signature.clone(),
+                                }
+                            }
                         })
                         .collect(),
                     tool_calls: message
@@ -389,8 +397,18 @@ mod wasm_mode {
                                     bytes.clone(),
                                 )))
                             }
-                            lca_protocol::ContentBlock::Reasoning { .. }
-                            | lca_protocol::ContentBlock::ToolCall { .. } => None,
+                            // 0.7 (gh #352): typed, so a transform sees the
+                            // signature rather than a `text` block that lost it.
+                            lca_protocol::ContentBlock::Reasoning {
+                                reasoning,
+                                signature,
+                            } => Some(lca::ext::types::ContentBlock::Reasoning(
+                                lca::ext::types::ReasoningBlock {
+                                    text: reasoning.clone(),
+                                    signature: signature.clone(),
+                                },
+                            )),
+                            lca_protocol::ContentBlock::ToolCall { .. } => None,
                         })
                         .collect(),
                     tool_calls: message

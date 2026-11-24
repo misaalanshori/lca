@@ -55,10 +55,22 @@ pub(crate) fn to_wit_request(request: &CompletionRequest) -> wit_completion::Com
                                 bytes.clone(),
                             )),
                         ),
-                        // Reasoning is model-internal and tool calls travel in
-                        // their own field, so neither is resent as content.
-                        lca_protocol::ContentBlock::Reasoning { .. }
-                        | lca_protocol::ContentBlock::ToolCall { .. } => None,
+                        // 0.7 (gh #352): a reasoning block crosses typed, so a guest
+                        // that needs the replay signature reads it from the case
+                        // instead of rebuilding the block from the extras key.
+                        lca_protocol::ContentBlock::Reasoning {
+                            reasoning,
+                            signature,
+                        } => Some(
+                            lca_ext_abi::host::provider::lca::ext::types::ContentBlock::Reasoning(
+                                lca_ext_abi::host::provider::lca::ext::types::ReasoningBlock {
+                                    text: reasoning.clone(),
+                                    signature: signature.clone(),
+                                },
+                            ),
+                        ),
+                        // Tool calls travel in their own field, not as content.
+                        lca_protocol::ContentBlock::ToolCall { .. } => None,
                     })
                     .collect(),
                 tool_calls: message
@@ -74,11 +86,16 @@ pub(crate) fn to_wit_request(request: &CompletionRequest) -> wit_completion::Com
                     )
                     .collect(),
                 tool_call_id: message.tool_call_id.clone(),
-                // The content-block variant has no reasoning case
-                // (frozen), so a run's replay signature rides the
-                // reserved map under THINKING_SIGNATURE_EXTRA and the
-                // guest rebuilds the Reasoning block from it; message
-                // extras cross verbatim (the reserved-map contract).
+                // **Compatibility write, kept for one minor version** (gh #352):
+                // the signature also rides the reserved map under
+                // THINKING_SIGNATURE_EXTRA, because a guest built before the typed
+                // reasoning case reads it there and would otherwise lose the
+                // signature and fail its provider's replay check. The typed case
+                // above is the path every converted guest takes; this write goes
+                // away after the first minor release that follows it, when no
+                // in-tree guest reads the key
+                // (`tests/regressions/352-typed-reasoning-block.rs` is the scan).
+                // Message extras still cross verbatim (the reserved-map contract).
                 extras: {
                     let mut pairs: Vec<wit_completion::ExtraPair> = extra_pairs(&message.extras);
                     if !pairs

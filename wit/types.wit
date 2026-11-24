@@ -42,14 +42,32 @@ interface types {
     extras: list<extra-pair>,
   }
 
+  /// A reasoning block the model produced, with the signature the provider
+  /// issued for replay (gh #41, gh #352). `text` may be empty: some vendors
+  /// redact the reasoning and keep only the signature, which is the same
+  /// shape the native path already carries (`signature` present, text empty).
+  record reasoning-block {
+    /// The reasoning text. Empty when the vendor redacts it.
+    text: string,
+    /// The provider's replay signature, when it issued one: opaque bytes the
+    /// next request must resend verbatim. Absent and empty are different
+    /// facts - absent means the vendor issued none, and a provider that
+    /// requires one rejects an empty string.
+    signature: option<string>,
+  }
+
   /// One block of message content. Text is the common case; an image is a
   /// typed block so a provider that carries vision can send the bytes
-  /// without a side channel (ADR-0029, the ABI 0.2 window change).
+  /// without a side channel (ADR-0029, the ABI 0.2 window change); a
+  /// reasoning block carries a thinking run's text and its replay signature
+  /// (ADR-0048, the 0.7 line's second change).
   variant content-block {
     /// Plain text.
     text(string),
     /// An image: media type plus raw bytes.
     image(tuple<string, list<u8>>),
+    /// A reasoning block: text plus an optional replay signature.
+    reasoning(reasoning-block),
   }
 
   /// A message crossing into an extension (compaction, context-transform,

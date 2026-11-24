@@ -256,8 +256,10 @@ impl CompletionGuest for AntigravityWasm {
     fn stream_completion(
         request: exports::lca::ext::provider_completion::CompletionRequest,
     ) -> Result<CompletionStream, String> {
-        // The WIT record -> the protocol shape (the exact inverse of
-        // the host's conversion; reasoning never crosses).
+        // The WIT record -> the protocol shape (the exact inverse of the host's
+        // conversion). Gh #352: a reasoning block crosses typed since the 0.7 line,
+        // so the replay signature arrives in the block rather than being rebuilt
+        // here from the message's reserved `thinking-signature` extra.
         let messages = request
             .messages
             .iter()
@@ -281,19 +283,15 @@ impl CompletionGuest for AntigravityWasm {
                                 bytes: bytes.clone(),
                             }
                         }
-                    })
-                    .chain(message.extras.iter().filter_map(|pair| {
-                        // The host cannot carry Reasoning blocks over the
-                        // frozen content-block variant, so a run's replay
-                        // signature rides the reserved map; rebuild it here
-                        // so functionCall replay carries thoughtSignature.
-                        (pair.key == lca_protocol::THINKING_SIGNATURE_EXTRA).then(|| {
+                        // 0.7 (gh #352): a reasoning block crosses typed, with its replay
+                        // signature; a guest that needs the signature reads it from here.
+                        lca::ext::types::ContentBlock::Reasoning(block) => {
                             lca_protocol::ContentBlock::Reasoning {
-                                reasoning: String::new(),
-                                signature: Some(pair.value.clone()),
+                                reasoning: block.text.clone(),
+                                signature: block.signature.clone(),
                             }
-                        })
-                    }))
+                        }
+                    })
                     .collect(),
                 tool_calls: message
                     .tool_calls

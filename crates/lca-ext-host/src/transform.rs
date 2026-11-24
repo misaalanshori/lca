@@ -73,8 +73,23 @@ fn to_wit_messages(
                             (media_type.clone(), bytes.clone()),
                         ),
                     ),
-                    lca_protocol::ContentBlock::Reasoning { .. }
-                    | lca_protocol::ContentBlock::ToolCall { .. } => None,
+                    // 0.7 (gh #352): the reasoning block crosses typed in this world
+                    // too - it shares `content-block` with the provider world, so a
+                    // context transform can see and return a thinking run's text and
+                    // signature (rather than only the text a transform would have
+                    // folded into a `text` block, which loses the signature).
+                    lca_protocol::ContentBlock::Reasoning {
+                        reasoning,
+                        signature,
+                    } => Some(
+                        lca_ext_abi::host::context_transform::lca::ext::types::ContentBlock::Reasoning(
+                            lca_ext_abi::host::context_transform::lca::ext::types::ReasoningBlock {
+                                text: reasoning.clone(),
+                                signature: signature.clone(),
+                            },
+                        ),
+                    ),
+                    lca_protocol::ContentBlock::ToolCall { .. } => None,
                 })
                 .collect(),
             tool_calls: message
@@ -119,13 +134,21 @@ fn from_wit_messages(
             content: message
                 .content
                 .into_iter()
-                .map(|block| match block {
+                .map(|block| {
+                    match block {
                     lca_ext_abi::host::context_transform::lca::ext::types::ContentBlock::Text(
                         text,
                     ) => lca_protocol::ContentBlock::Text { text },
                     lca_ext_abi::host::context_transform::lca::ext::types::ContentBlock::Image(
                         (media_type, bytes),
                     ) => lca_protocol::ContentBlock::Image { media_type, bytes },
+                    lca_ext_abi::host::context_transform::lca::ext::types::ContentBlock::Reasoning(
+                        block,
+                    ) => lca_protocol::ContentBlock::Reasoning {
+                        reasoning: block.text,
+                        signature: block.signature,
+                    },
+                }
                 })
                 .collect(),
             tool_calls: message
