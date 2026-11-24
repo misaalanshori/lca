@@ -50,7 +50,7 @@ async fn model_listing_is_identical_across_modes() {
         .collect::<Vec<_>>();
     assert_eq!(wasm_discovered, native_discovered, "the two modes agree");
     assert_eq!(wasm_discovered, vec!["found-a", "found-b"]);
-    assert_eq!(wasm_models.len(), 2);
+    assert_eq!(wasm_models.len(), 5);
     assert_eq!(wasm_models[0].id, "conformance-a");
     assert_eq!(wasm_models[1].context_window, 8192);
 }
@@ -370,8 +370,8 @@ async fn the_pre_typed_vendor_event_still_maps_to_the_typed_fact() {
 // Verifies: gh #581 - **a guest reporting the cut twice yields one event.** The
 // typed case wins over the compat read, and the host refuses to deliver the same
 // fact twice: the turn would collapse it anyway (its flag is a flag, not a counter,
-// so the banner cannot double), but the stream log records what crosses the host,
-// and two `truncated` records would misdescribe one cut.
+// so the banner cannot double), but every `hooks-stream` observer is notified per
+// event, and an observer that counts cuts must not see two for one cut.
 #[tokio::test]
 async fn a_guest_reporting_the_cut_twice_delivers_it_once() {
     let fixture = Fixture::new("truncated-both");

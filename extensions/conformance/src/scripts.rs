@@ -65,6 +65,35 @@ pub fn provider_models_default() -> Vec<lca_protocol::ModelInfo> {
                 .into_iter()
                 .collect(),
         },
+        // Gh #581: the two truncating scripts are *models* so a real pane can select
+        // them by name (`provider = "conformance"`, `model = "conformance-truncated"`),
+        // which is how the live receipt drives the guest's typed cut and a guest that
+        // reports it twice. A script only the test harness can reach could not prove
+        // the banner reaches glass.
+        lca_protocol::ModelInfo {
+            id: "conformance-truncated".to_string(),
+            name: "Conformance Truncated".to_string(),
+            context_window: 4096,
+            max_tokens: 512,
+            extras: Default::default(),
+        },
+        lca_protocol::ModelInfo {
+            id: "conformance-truncated-both".to_string(),
+            name: "Conformance Truncated (twice)".to_string(),
+            context_window: 4096,
+            max_tokens: 512,
+            extras: Default::default(),
+        },
+        // A guest that reports the cut the way one built *before* the typed case
+        // did. Selectable so the compatibility read is provable on a real pane, not
+        // only in the harness.
+        lca_protocol::ModelInfo {
+            id: "conformance-truncated-shim".to_string(),
+            name: "Conformance Truncated (pre-0.7 shape)".to_string(),
+            context_window: 4096,
+            max_tokens: 512,
+            extras: Default::default(),
+        },
     ]
 }
 

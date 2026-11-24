@@ -109,9 +109,10 @@ pub(super) fn provider_stream_work(
                 // Gh #581: one fact, one event. A guest that names the cut twice -
                 // the typed case *and* the compat vendor event it used to emit - is
                 // not reporting two truncations, so the core sees it once. The turn's
-                // own flag would absorb a duplicate anyway (it is a flag, not a
-                // counter), but the stream log records what crosses here, and a
-                // repeated `truncated` record would misdescribe the wire.
+                // own flag would absorb a duplicate (it is a flag, not a counter, so
+                // the banner cannot double), but every `hooks-stream` observer is
+                // told about each event this loop delivers, and an observer that
+                // counts cuts would see two for one cut.
                 if event == lca_protocol::StreamEvent::Truncated {
                     if delivered_truncated {
                         continue;
