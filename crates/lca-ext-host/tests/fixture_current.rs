@@ -147,12 +147,15 @@ fn every_committed_conformance_fixture_links_against_the_declared_worlds() {
 // ---------------------------------------------------------------------------
 //
 // `scripts/wasm-check.sh` compares a committed component to a fresh build **by
-// interface**, and it must: wasm builds in this tree are not byte-reproducible
-// (gh #614 measured one source, two rebuilds: `8910ec49…` then `358afde5…`), so a
-// byte comparison reddens on codegen noise. An interface comparison therefore
-// cannot see *behaviour* - gh #591's named hole - and twice a committed fixture
-// went stale in a way that mattered: `antigravity` sat across four commits, and
-// gh #236's measured half-budget fuel margin silently became 2.9x false.
+// interface**, and it must: a hosted runner has produced a component of identical
+// size and interface in different bytes (gh #591's measurement), so a byte
+// comparison reddens on codegen noise outside this box - and locally a rebuild is
+// byte-stable (re-measured 2026-11-24: two forced rebuilds of one source, same
+// bytes), which is exactly why a gate cannot lean on bytes *across environments*.
+// An interface comparison therefore cannot see *behaviour* - gh #591's named hole
+// - and twice a committed fixture went stale in a way that mattered: `antigravity`
+// sat across four commits, and gh #236's measured half-budget fuel margin silently
+// became 2.9x false.
 //
 // So: after the load, **one canonical call per component** - offline, no clock,
 // no randomness, no environment - and two pins, the sha256 of the rendered
