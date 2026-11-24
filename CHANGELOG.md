@@ -23,6 +23,17 @@ Dates are UTC.
   `<version>-unstable.b<sha7>` stamp.
 
 ### Changed
+- **A thinking run's replay signature now crosses the extension boundary typed**
+  (gh #352, interface/breaking). A reasoning block - the thought text plus the opaque
+  signature a provider issues for replay - travels as a `content-block` case instead of a
+  reserved `thinking-signature` message extra that every WASM guest rebuilt by
+  convention. The practical effect is that a Gemini tool turn replayed through a WASM
+  provider carries its `thoughtSignature` because the case says so, not because two
+  sides spelled the same string correctly; a typo in either half used to compile and then
+  fail the next tool call with HTTP 400. The extras key is still written for extensions
+  built before the case (one minor version), and the older, stringly path keeps working
+  meanwhile. Extension authors rebuilding against 0.7 get an exhaustive-match arm for the
+  new case.
 - **The extension ABI line is now 0.7, and 0.6 extensions must be rebuilt to run**
   (gh #407, interface/breaking). The tabbed questionnaire's `ui-dialogs.questionnaire`
   landed on the 0.6 line, which is **frozen**: `docs/abi-versioning.md` says the next

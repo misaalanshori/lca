@@ -2,8 +2,56 @@
 
 ## 0.7 line
 
-Two interface changes on this line: gh #581 adds a case to an exported variant,
-and gh #407 (below) opened the line with a host-import addition.
+Three interface changes on this line: gh #581 and gh #352 add cases to exported
+variants, and gh #407 (below) opened the line with a host-import addition.
+
+### gh #352: `content-block` gains a typed `reasoning` case
+
+A record and one case added to the shared content variant (ADR-0050):
+
+```wit
+record reasoning-block {
+  text: string,
+  signature: option<string>,
+}
+
+variant content-block {
+  text(string),
+  image(tuple<string, list<u8>>),
+  reasoning(reasoning-block),
+}
+```
+
+**Breaking for the contract, additive for old artifacts.** A guest that maps content
+blocks gains an arm (the compiler names every site); a guest that only constructs
+messages is untouched. The case has to carry a payload, which is why it is a record and
+not the payload-free shape gh #581's truncation case has.
+
+**`signature` is `option<string>` on purpose.** Absent and empty are different facts: a
+vendor that issued no signature must send no field, and the gateway rejects both casings
+of an empty one. The `text` half may be empty - some vendors redact the reasoning and
+keep only the signature, the shape the native path already carried.
+
+**The old channel still works for one minor version.** The host keeps writing the
+reserved `thinking-signature` message extra, because a guest built against `@0.7.0`
+before this case rebuilds its reasoning block from that key; dropping the write would
+lose its signature silently, and a provider then fails its replay check. Converted
+guests read the typed case and never the key, and
+`tests/regressions/352-typed-reasoning-block.rs` scans every guest source to keep that
+true. The write goes away after the first minor release that follows this case, when no
+in-tree guest names the key.
+
+**The wire rule that came with it:** on the outgoing Gemini part the signature is a
+**sibling** of `functionCall`, never nested inside it - the gateway rejects the nested
+placement live, in both casings, and the public docs suggest the opposite. That is the
+extension's own serialization, not the ABI's, but it is the reason the block carries the
+signature rather than a separate field, so it is recorded here and in ADR-0050.
+
+**What an author must do:** rebuild against the 0.7 `wit/`. If your guest maps content
+blocks, handle the `reasoning` case (a provider that wants replay fidelity returns the
+block with its signature; a transform that ignores it can pass it through unchanged). If
+your guest needs a replay signature, read it from the block - the extras key is on its
+way out.
 
 ### gh #581: `stream-event` gains a typed `truncated` case
 

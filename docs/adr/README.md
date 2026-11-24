@@ -68,6 +68,7 @@ Status is one of: proposed, accepted, superseded by ADR-NNNN, or deprecated.
 | 0047 | MCP is a first-class internal subsystem | Accepted | gh #418 |
 | 0048 | A capability-gated environment grant | Accepted | Extensions (gh #170) |
 | 0049 | An inbound HTTP capability that the host owns, Mode A only | Accepted | Extensions (gh #363) |
+| 0050 | A reasoning block crosses the boundary typed, with its replay signature | Accepted | ABI 0.7 (gh #352) |
 
 ADR-0001 is proposed rather than accepted because Phase 0 measures the numbers that justify it. Every other record can be accepted on reasoning alone.
 
