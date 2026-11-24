@@ -277,3 +277,34 @@ fn a_component_with_limits_instantiates_and_runs_a_call() {
         result.content
     );
 }
+
+// Verifies: gh #614 - the fuel read-out a budget row reasons from: `None`
+// before the first call, and after one, the charge the shipped path took
+// (`fuel_per_call` minus what the parked store had left). It is a diagnostic,
+// not a limit: a call that traps never checks in and so never overwrites it.
+#[test]
+fn the_host_reports_the_fuel_a_completed_call_consumed() {
+    let sandbox = Sandbox::new("fuel-readout");
+    let mut host = ExtHost::new(host_limits(), sandbox.env());
+    let manifest = "name = \"conformance\"\nversion = \"0.1.0\"\nabi = \"0.7\"\nworlds = [\"tool\"]\n\n[limits]\nmemory_mb = 64\nfuel_per_call = 100000000\n";
+    let extension = host.load(FIXTURE, manifest).expect("loads");
+    assert_eq!(
+        extension.last_call_fuel(),
+        None,
+        "no call has completed, so there is nothing to report"
+    );
+    let _ = extension.execute(&lca_protocol::ToolCall {
+        call_id: "c1".to_string(),
+        name: "conformance".to_string(),
+        arguments: r#"{"mode":"fs-read","scope":"workspace","path":"notes.txt"}"#.to_string(),
+        parent_call_id: None,
+    });
+    let used = extension
+        .last_call_fuel()
+        .expect("a completed call records the fuel it consumed");
+    assert!(used > 0, "a real call costs something: {used}");
+    assert!(
+        used < host_limits().fuel_per_call,
+        "and less than the whole budget: {used}"
+    );
+}

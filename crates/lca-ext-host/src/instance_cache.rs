@@ -118,6 +118,9 @@ macro_rules! cached_world {
         }
 
         pub(super) fn $checkin(&self, store: Store<HostState>, instance: $instance) {
+            // Gh #614: the fuel read-out hangs off the one path every world's
+            // call takes back into the cache, so no future world can forget it.
+            self.record_fuel(&store);
             lock(&self.cache).$slot.replace((store, instance));
         }
     };

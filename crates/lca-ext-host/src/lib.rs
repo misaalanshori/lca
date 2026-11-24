@@ -104,14 +104,35 @@ pub(crate) fn lock<T: ?Sized>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<
 /// exact equality instead of trusting it.
 pub const SUPPORTED_ABI_WINDOW: &str = "0.6..=0.7, plus the 1.0 freeze line";
 
-/// Default per-call fuel for production hosts (gh #236). Measured
-/// 2026-10-10 against the shipped Antigravity component: a 12 KiB /
-/// 32-model catalog lists for ~1.5M fuel, a 49 KiB / 128-model one
-/// for ~6M, so 25M covers ~150 KiB catalogs (roughly 10x today's
-/// reality) while every guest call stays bounded. Raise only with a
-/// new measurement, never blindly: the margin probe
-/// (`antigravity_big_catalog_holds_half_budget_margin`) pins half of
-/// this budget against 4x today's catalog.
+/// Default per-call fuel for production hosts (gh #236, re-measured gh #614).
+///
+/// Measured 2026-11-24 on a 4-core x86_64 box against the shipped Antigravity
+/// component - `list-models` over a loopback catalog, warm guest, fuel read back
+/// from the host (`WasmExtension::last_call_fuel`):
+///
+/// | catalog              | before gh #614 | after   |
+/// |----------------------|----------------|---------|
+/// | 12 KiB / 32 models   | 3.84M          | 2.41M   |
+/// | 25 KiB / 64 models   | 7.88M          | 4.94M   |
+/// | 49 KiB / 128 models  | 16.91M         | **10.21M** |
+/// | 100 KiB / 256 models | 35.37M         | 21.00M  |
+///
+/// 25M lists a 128-model catalog with a **2.45x** margin - 1.22x even at half the
+/// budget, which is the margin row's assertion - and covers ~145 KiB / ~370
+/// models. That is the "~150 KiB" this comment claimed when gh #236 wrote it;
+/// what it *recorded* (`~1.5M` at 32 models, `~6M` at 128) described the
+/// component from before gh #241's catalog grouping, which landed three days
+/// after that fixture refresh. Grouping is real work (46% of the listing's
+/// cost), and inside it the sort re-lowercased and re-parsed both ids on every
+/// comparison while the group lookup scanned the vector linearly - quadratic in
+/// the group count, and ~40% of the total at 128 models. Both are gone, no
+/// output changed, and the numbers above are the measurement that says so:
+/// `the_listing_cost_per_model_does_not_grow_with_the_catalog` pins the scaling
+/// and `ninety_six_extra_models_render_the_golden_rows` the rows.
+///
+/// Raise only with a new measurement, never blindly: the half-budget row
+/// (`a_four_times_catalog_lists_within_the_production_fuel_budget`) proves this
+/// budget still lists a 4x catalog today.
 pub const DEFAULT_FUEL_PER_CALL: u64 = 25_000_000;
 
 /// Resource limits applied to every call, resolved from the manifest and
@@ -723,6 +744,7 @@ impl ExtHost {
                 limits: effective_limits,
                 enabled: Arc::new(AtomicBool::new(true)),
                 in_flight: AtomicU64::new(0),
+                last_fuel: AtomicU64::new(NO_CALL_YET),
                 interrupted: AtomicBool::new(false),
                 cache: Mutex::new(InstanceCache::default()),
                 driver: driver::Driver::new(),
@@ -805,6 +827,11 @@ struct Inner {
     /// *running* call, so a test that must know the guest is running
     /// (rather than still building its store) watches this.
     in_flight: AtomicU64,
+    /// Fuel the guest consumed on the most recent completed call, or
+    /// [`NO_CALL_YET`]. Written once per check-in (every world's), so a
+    /// budget row can read the number the *shipped* path charged instead
+    /// of binary-searching the limit (gh #614).
+    last_fuel: AtomicU64,
     /// Set when this extension is interrupted during a turn (FR-CONC-1).
     /// A bump that lands while the next store is still being built is
     /// absorbed by `set_epoch_deadline`, whose target is measured from
@@ -821,7 +848,24 @@ struct Inner {
     driver: driver::Driver,
 }
 
+/// [`WasmExtension::last_call_fuel`]'s "no call has completed" value.
+const NO_CALL_YET: u64 = u64::MAX;
+
 impl Inner {
+    /// Record what this call consumed, at the one point every world passes
+    /// through on its way back into the cache: `fuel_per_call` minus what the
+    /// store has left. A call that trapped never checks in (the cache was
+    /// cleared), so the previous reading survives a trap rather than becoming
+    /// a number nobody can explain.
+    fn record_fuel(&self, store: &Store<HostState>) {
+        if let Ok(remaining) = store.get_fuel() {
+            self.last_fuel.store(
+                self.limits.fuel_per_call.saturating_sub(remaining),
+                Ordering::Relaxed,
+            );
+        }
+    }
+
     /// Count this call as inside the guest until the guard drops -
     /// including on the error and panic paths, which is exactly when
     /// the count must go back down.
@@ -1076,6 +1120,22 @@ impl WasmExtension {
     /// (NFR-29) acts on calls this counter covers.
     pub fn in_flight(&self) -> u64 {
         self.inner.in_flight.load(Ordering::SeqCst)
+    }
+
+    /// Fuel the guest consumed on its most recent completed call, or `None`
+    /// before the first one (FR-EXT-4's budget, read back).
+    ///
+    /// The number the **shipped** path charged - `fuel_per_call` minus the
+    /// store's remainder at check-in - so a test can assert what a real call
+    /// costs instead of binary-searching the limit until it traps. For a
+    /// streaming call it is the work done up to the point the store was parked
+    /// (each `next` re-arms nothing; the budget is per call), and a call that
+    /// trapped records nothing, because it never checks in.
+    pub fn last_call_fuel(&self) -> Option<u64> {
+        match self.inner.last_fuel.load(Ordering::Relaxed) {
+            NO_CALL_YET => None,
+            used => Some(used),
+        }
     }
 
     /// Execute one call (blocking; tests use this, the loop awaits

@@ -26,6 +26,9 @@ thiserror.workspace = true
 
 [dev-dependencies]
 lca-provider = { path = "../lca-provider" }
+# The golden digest of the shipped listing (gh #614). Already in the workspace
+# graph through `lca-registry`'s digest pin, so this adds no package.
+sha2.workspace = true
 conformance = { path = "../../extensions/conformance" }
 # gh #34: the shipped provider in both delivery modes - the native
 # handle and the committed component, driven from one test.

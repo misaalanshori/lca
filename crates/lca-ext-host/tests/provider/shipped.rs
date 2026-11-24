@@ -11,7 +11,7 @@
 use std::sync::{Arc, Mutex};
 
 use lca_ext_abi::{ExtensionDispatch, World};
-use lca_ext_host::{DEFAULT_FUEL_PER_CALL, ExtHost, ExtensionLimits};
+use lca_ext_host::{DEFAULT_FUEL_PER_CALL, ExtHost, ExtensionLimits, WasmExtension};
 use lca_ext_native::NativeRegistry;
 
 use super::support::Fixture;
@@ -258,6 +258,17 @@ const AG_MANIFEST: &str = include_str!("../../../../extensions/antigravity/exten
 /// credentials seeded: a live access token, far-future expiry, and the
 /// mock as its API base, plus a session 127.0.0.1 grant.
 fn antigravity_guest(name: &str, fuel: u64, api_base: &str) -> Arc<dyn ExtensionDispatch> {
+    antigravity_guest_measuring(name, fuel, api_base).0
+}
+
+/// [`antigravity_guest`] plus the loaded handle, so a row can read what the
+/// call charged (`last_call_fuel`, gh #614) instead of binary-searching the
+/// budget until the guest traps.
+fn antigravity_guest_measuring(
+    name: &str,
+    fuel: u64,
+    api_base: &str,
+) -> (Arc<dyn ExtensionDispatch>, WasmExtension) {
     let fixture = Fixture::new(name);
     {
         let mut store = fixture.store.lock().expect("store");
@@ -288,9 +299,47 @@ fn antigravity_guest(name: &str, fuel: u64, api_base: &str) -> Arc<dyn Extension
     );
     let handle = host.load(AG_FIXTURE, AG_MANIFEST).expect("load");
     let mut registry = NativeRegistry::new();
-    registry.register(Arc::new(handle));
+    registry.register(Arc::new(handle.clone()));
     let mut handles = registry.into_handles();
-    handles.pop().expect("handle")
+    (handles.pop().expect("handle"), handle)
+}
+
+/// The same catalog the 4x row pins, at `count` models: the realistic 32 plus
+/// `count - 32` clones under fresh ids (the shape a growing vendor catalog
+/// takes: one canonical family per model, so grouping has one group per id).
+fn catalog_with(count: usize) -> String {
+    let catalog = realistic_catalog();
+    let mut value: serde_json::Value = serde_json::from_str(&catalog).expect("json");
+    let models = value
+        .get("models")
+        .expect("models")
+        .as_object()
+        .expect("obj")
+        .clone();
+    let mut merged = models.clone();
+    for i in 0..count.saturating_sub(models.len()) {
+        let (key, entry) = models.iter().nth(i % models.len()).expect("entry");
+        merged.insert(format!("{key}-b{i}"), entry.clone());
+    }
+    value["models"] = serde_json::Value::Object(merged);
+    value.to_string()
+}
+
+/// One rendered listing row: what `ModelInfo` says, in a stable text form.
+fn rendered(model: &lca_protocol::ModelInfo) -> String {
+    let extras: Vec<String> = model
+        .extras
+        .iter()
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect();
+    format!(
+        "{}|{}|{}|{}|{}",
+        model.id,
+        model.name,
+        model.context_window,
+        model.max_tokens,
+        extras.join(",")
+    )
 }
 
 // Verifies: gh #236 - a real-size catalog lists through the shipped
@@ -328,48 +377,107 @@ async fn antigravity_lists_a_realistic_catalog_within_production_fuel() {
     );
 }
 
-// Verifies: gh #236 - a 4x catalog (128 models, ~49 KiB) lists within the
-// **production** fuel budget.
+// Verifies: gh #236 - a 4x catalog (128 models, ~49 KiB) lists within **half**
+// the production fuel budget.
 //
-// **Rebaselined by gh #407's line move, with the measurement.** This row used to
-// assert the listing fit in *half* the budget, on gh #236's measured ~6M floor.
-// The committed component was three source commits stale (`#390`, `#577`,
-// `#578`) and `scripts/wasm-check.sh` compares interfaces only, so nothing
-// noticed that the current source costs ~2.8x more: measured on the 0.7 rebuild
-// (2026-11-23), 16.5M fuel fails and 17.0M lists all 128 models, against
-// `DEFAULT_FUEL_PER_CALL` = 25M. The half-budget margin is therefore **gone**
-// and restoring it is tracked separately; what this row can still honestly pin
-// is the product's own promise - a real-size catalog lists inside the production
-// budget - so that is what it asserts, and the floor is written down here so the
-// next reader does not have to re-measure it to learn that the margin is thin.
+// **Re-measured by gh #614, and the margin is back.** The 0.7 line's fixture
+// rebuild showed this listing at 16.9M (16.5M fails, 17.0M lists), and the
+// half-budget assertion had been rebaselined to the production promise because
+// the margin was gone. The cause was not the three commits the fixture lagged:
+// it was gh #241's catalog grouping, which landed after gh #236's measurement -
+// and inside it, a `sort_by` that lowercased and re-parsed both ids on every
+// comparison, and a linear group lookup, both quadratic in the group count.
+// Fixed, the same listing costs **10.2M**: half of `DEFAULT_FUEL_PER_CALL` is
+// 12.5M, so the margin this row was written for holds again (1.22x on half,
+// 2.45x on the whole budget). Measured 2026-11-24 on a 4-core x86_64 box, warm
+// guest; the numbers live in `DEFAULT_FUEL_PER_CALL`'s comment.
 #[tokio::test]
 async fn a_four_times_catalog_lists_within_the_production_fuel_budget() {
-    let catalog = realistic_catalog();
-    let mut value: serde_json::Value = serde_json::from_str(&catalog).expect("json");
-    let models = value
-        .get("models")
-        .expect("models")
-        .as_object()
-        .expect("obj")
-        .clone();
-    let mut merged = models.clone();
-    for i in 0..96 {
-        let (key, entry) = models.iter().nth(i % models.len()).expect("entry");
-        merged.insert(format!("{key}-b{i}"), entry.clone());
-    }
-    value["models"] = serde_json::Value::Object(merged);
-    let big = value.to_string();
+    let big = catalog_with(128);
     assert!(
         big.len() >= 45_000,
         "the margin probe must stay big: {}",
         big.len()
     );
     let (base, _) = catalog_mock(big);
-    let guest = antigravity_guest("ag-margin", DEFAULT_FUEL_PER_CALL, &base);
+    let guest = antigravity_guest("ag-margin", DEFAULT_FUEL_PER_CALL / 2, &base);
     let models = guest
         .provider_models(&[])
-        .expect("the production budget lists it");
+        .expect("half the production budget lists it");
     assert_eq!(models.len(), 128, "every model lists");
+}
+
+// Verifies: gh #614 - **the claim a budget can be reasoned about from**: the
+// listing's cost scales with the catalog, not with its square.
+//
+// Fuel per model at 4x the catalog must not grow past `1.25x`. Linear work and a
+// per-model constant both sit at ~1.0; a per-model scan of the whole catalog - the
+// shape `group_at` and the sort had - grows the *per-model* cost with the size,
+// so 4x the models reads as ~4x. Measured 2026-11-24: 75.2k per model at 32,
+// 79.8k at 128 (ratio **1.06**), so 1.25 leaves an 18% guard while a quadratic
+// regression fails by 3x. This cannot be satisfied by raising the budget.
+#[tokio::test]
+async fn the_listing_cost_per_model_does_not_grow_with_the_catalog() {
+    // The first call on a fresh guest pays instantiation too; the second is the
+    // per-call cost the budget has to cover, and it is what this row compares.
+    async fn per_model(count: usize) -> f64 {
+        let (base, _) = catalog_mock(catalog_with(count));
+        let (guest, handle) = antigravity_guest_measuring(
+            &format!("ag-per-model-{count}"),
+            DEFAULT_FUEL_PER_CALL,
+            &base,
+        );
+        let models = guest.provider_models(&[]).expect("first listing");
+        assert_eq!(models.len(), count, "every model lists");
+        let models = guest.provider_models(&[]).expect("warm listing");
+        assert_eq!(models.len(), count, "every model lists again");
+        let used = handle.last_call_fuel().expect("the call recorded its fuel");
+        used as f64 / count as f64
+    }
+    let small = per_model(32).await;
+    let big = per_model(128).await;
+    assert!(
+        big <= small * 1.25,
+        "per-model fuel must stay flat: {small:.0} at 32 models, {big:.0} at 128 \
+         (ratio {:.2}, bound 1.25)",
+        big / small
+    );
+}
+
+// Verifies: gh #614 - the fuel work changed how the rows are *built*, never what
+// they say.
+//
+// The golden is the sha256 of the rendered 128-model listing (one
+// `id|name|context|max|extras` line per model, in listing order). Any drift in
+// the grouping, the display names, the windows, the thinking levels or the rank
+// moves it. On a mismatch the row prints the rows and the digest to pin; because
+// the digest is a digest, the readable pins beside it are the first and the last
+// two rows, so a reader can see the shape the hash is guarding.
+#[tokio::test]
+async fn ninety_six_extra_models_render_the_golden_rows() {
+    let (base, _) = catalog_mock(catalog_with(128));
+    let guest = antigravity_guest("ag-golden", DEFAULT_FUEL_PER_CALL, &base);
+    let models = guest.provider_models(&[]).expect("listing");
+    assert_eq!(models.len(), 128);
+    let rows: Vec<String> = models.iter().map(rendered).collect();
+    let first =
+        "gemini-3.8-flash|Gemini 3.8 Flash (antigravity) (Antigravity)|0|0|thinking_levels=high";
+    let last = "gpt-oss-120b-exp-23-b95|Gpt Oss 120b (antigravity) (Antigravity)|0|0|";
+    assert_eq!(rows[0], first, "the first row is the flash family");
+    assert_eq!(rows[127], last, "the last row is the gpt-oss family");
+    let digest = sha256_of(&rows.join("\n"));
+    assert_eq!(
+        digest,
+        "0133aca4aca76ee11771546f1dda4d8f971ead243bc274ddc304f2bfbe88daff",
+        "the 128-model listing is unchanged; rendered rows:\n{}",
+        rows.join("\n")
+    );
+}
+
+/// `sha256` of a listing rendering: the golden's digest.
+fn sha256_of(text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(text.as_bytes()))
 }
 
 // ---------------------------------------------------------------------------

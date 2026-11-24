@@ -39,9 +39,13 @@ const RUNTIME_ALIASES: &[(&str, &str, &str)] = &[
 const LEVEL_ORDER: &[&str] = &["minimal", "low", "medium", "high", "xhigh"];
 
 /// Whether a discovered id may list (pi-antigravity
-/// `isSelectableRuntimeModelId`).
-fn is_selectable(id: &str) -> bool {
-    let lower = id.to_ascii_lowercase();
+/// `isSelectableRuntimeModelId`), over an id whose lowercase the caller
+/// already has.
+///
+/// The lowercase is an argument because the catalog loop lowercases each id
+/// once for the suffix rules as well, and a second `String` per model is fuel
+/// nobody needs to spend (gh #614). The unit rows below pass both.
+fn is_selectable(id: &str, lower: &str) -> bool {
     if !(lower.starts_with("gemini-")
         || lower.starts_with("claude-")
         || lower.starts_with("gpt-oss-"))
@@ -51,7 +55,6 @@ fn is_selectable(id: &str) -> bool {
     if id.contains(char::is_whitespace) || id.starts_with("MODEL_") {
         return false;
     }
-    let lower = lower.as_str();
     if lower.starts_with("chat_") || lower.starts_with("tab_") {
         return false;
     }
@@ -73,12 +76,40 @@ fn display_name(entry: &serde_json::Value) -> Option<&str> {
 
 /// The level a display name declares (`Gemini 3.8 Flash (High)`),
 /// if any.
+///
+/// Case-insensitive without lowercasing the name first: this runs for every
+/// catalog entry, and a `String` per model was most of `virtualize_catalog`'s
+/// fuel bill (gh #614).
 fn display_level(name: &str) -> Option<&'static str> {
-    let lower = name.to_ascii_lowercase();
     DISPLAY_LEVELS
         .iter()
-        .find(|(pattern, _)| lower.contains(pattern))
+        .find(|(pattern, _)| contains_ignore_ascii_case(name, pattern))
         .map(|(_, level)| *level)
+}
+
+/// `haystack.contains(needle)`, ASCII-case-insensitively, allocating nothing.
+fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
+    let needle = needle.as_bytes();
+    if needle.is_empty() {
+        return true;
+    }
+    haystack
+        .as_bytes()
+        .windows(needle.len())
+        .any(|window| window.eq_ignore_ascii_case(needle))
+}
+
+/// Whether `lower` (an id already lowercased) ends with `-<suffix>`, and where
+/// the base id ends if so.
+///
+/// The `-` is checked as a byte rather than by formatting `-{suffix}`: the old
+/// form allocated a `String` per suffix per model - seven of them for an id
+/// that matches none - which is the single largest line in the listing's fuel
+/// bill (gh #614).
+fn strip_dash_suffix<'a>(lower: &str, id: &'a str, suffix: &str) -> Option<&'a str> {
+    let boundary = lower.len().checked_sub(suffix.len() + 1)?;
+    let dash = lower.as_bytes().get(boundary)?;
+    (lower.ends_with(suffix) && *dash == b'-').then(|| &id[..boundary])
 }
 
 /// Fold a catalog `supportsThinking` flag into the group (later
@@ -148,8 +179,11 @@ fn merge_agent_singletons(groups: &mut Vec<(String, RuntimeGroup)>) {
 /// parenthetical, lowercased (pi-antigravity `displayFamily`).
 fn display_family(name: &str) -> String {
     let mut family = name.trim().to_string();
+    // The lowercase is computed once: the loop used to allocate a fresh
+    // `String` per pattern (seven per family) to ask an `ends_with` (gh #614).
+    let lower = family.to_ascii_lowercase();
     for (pattern, _) in DISPLAY_LEVELS {
-        if family.to_ascii_lowercase().ends_with(pattern) {
+        if lower.ends_with(pattern) {
             family.truncate(family.len() - pattern.len());
             break;
         }
@@ -246,48 +280,82 @@ fn title_case(family: String) -> String {
 /// Rank canonical ids newest-flash-first (pi-antigravity
 /// `comparePublicModels`): flash by descending version, then opus,
 /// sonnet, claude, pro, gemini, gpt-oss, everything else.
-fn compare_public_models(a: &str, b: &str) -> std::cmp::Ordering {
-    fn version(id: &str) -> u64 {
-        let rest = id.strip_prefix("gemini-").unwrap_or("");
-        let mut parts = rest.split(['.', '-']);
-        let major: u64 = parts.next().unwrap_or("").parse().unwrap_or(0);
-        let minor: u64 = parts
-            .next()
-            .unwrap_or("")
-            .chars()
-            .take_while(|c| c.is_ascii_digit())
-            .collect::<String>()
-            .parse()
-            .unwrap_or(0);
-        major * 1000 + minor
+///
+/// [`model_rank`] is the comparable form of the comparator: the sort used to
+/// call the comparator `n log n` times, and every call lowercased both ids and
+/// re-parsed both versions - ~40,000 fuel per model at 128 groups, the largest
+/// line in the listing's bill (gh #614). The rank is computed once per model
+/// and the tie-break (the id bytes) is the caller's, so the order is identical.
+fn model_rank(id: &str) -> (u64, i64) {
+    if starts_with_ignore_ascii_case(id, "gemini-")
+        && contains_ignore_ascii_case(id, "flash")
+        && !contains_ignore_ascii_case(id, "pro")
+    {
+        return (0, -(version_of(id) as i64));
     }
-    fn rank(id: &str) -> (u64, i64) {
-        let lower = id.to_ascii_lowercase();
-        if lower.starts_with("gemini-") && lower.contains("flash") && !lower.contains("pro") {
-            return (0, -(version(id) as i64));
-        }
-        if lower.starts_with("claude-opus") {
-            return (1, 0);
-        }
-        if lower.starts_with("claude-sonnet") {
-            return (2, 0);
-        }
-        if lower.starts_with("claude-") {
-            return (3, 0);
-        }
-        if lower.starts_with("gemini-") && lower.contains("pro") {
-            return (4, -(version(id) as i64));
-        }
-        if lower.starts_with("gemini-") {
-            return (5, -(version(id) as i64));
-        }
-        if lower.starts_with("gpt-oss") {
-            return (6, 0);
-        }
-        (7, 0)
+    if starts_with_ignore_ascii_case(id, "claude-opus") {
+        return (1, 0);
     }
-    rank(a).cmp(&rank(b)).then_with(|| a.cmp(b))
+    if starts_with_ignore_ascii_case(id, "claude-sonnet") {
+        return (2, 0);
+    }
+    if starts_with_ignore_ascii_case(id, "claude-") {
+        return (3, 0);
+    }
+    if starts_with_ignore_ascii_case(id, "gemini-") && contains_ignore_ascii_case(id, "pro") {
+        return (4, -(version_of(id) as i64));
+    }
+    if starts_with_ignore_ascii_case(id, "gemini-") {
+        return (5, -(version_of(id) as i64));
+    }
+    if starts_with_ignore_ascii_case(id, "gpt-oss") {
+        return (6, 0);
+    }
+    (7, 0)
 }
+
+/// `haystack.starts_with(needle)`, ASCII-case-insensitively.
+fn starts_with_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
+    haystack
+        .as_bytes()
+        .get(..needle.len())
+        .is_some_and(|head| head.eq_ignore_ascii_case(needle.as_bytes()))
+}
+
+/// The `major * 1000 + minor` version in a gemini id, 0 when it has none.
+/// Byte-wise and `checked_*`, so no allocation and the same `unwrap_or(0)`
+/// the old `parse` chain produced for a short or overflowing number.
+fn version_of(id: &str) -> u64 {
+    let rest = id.strip_prefix("gemini-").unwrap_or("");
+    let mut parts = rest.split(['.', '-']);
+    let major = u64_or_zero(parts.next().unwrap_or(""));
+    let run = parts.next().unwrap_or("");
+    let digits = &run[..run.bytes().take_while(u8::is_ascii_digit).count()];
+    let minor = u64_or_zero(digits);
+    major * 1000 + minor
+}
+
+/// [`str::parse::<u64>`]'s value, or 0 for anything that would not parse.
+fn u64_or_zero(text: &str) -> u64 {
+    if text.is_empty() {
+        return 0;
+    }
+    let mut value: u64 = 0;
+    for byte in text.bytes() {
+        let Some(digit) = char::from(byte).to_digit(10) else {
+            return 0;
+        };
+        value = match value
+            .checked_mul(10)
+            .and_then(|scaled| scaled.checked_add(u64::from(digit)))
+        {
+            Some(next) => next,
+            None => return 0,
+        };
+    }
+    value
+}
+
 fn humanize_public_id(id: &str) -> String {
     let tokens: Vec<&str> = id.split('-').collect();
     let mut words = Vec::new();
@@ -324,13 +392,32 @@ fn humanize_public_id(id: &str) -> String {
     words.join(" ")
 }
 
-/// Find a family's group, creating it first.
-fn group_at(groups: &mut Vec<(String, RuntimeGroup)>, public: &str) -> usize {
-    if let Some(at) = groups.iter().position(|(id, _)| id == public) {
-        return at;
+/// The groups under construction, with an index beside the ordered vector.
+///
+/// [`at`](Groups::at) used to be a linear scan of the vector, which is
+/// O(groups) per model and so O(n^2) over a catalog whose ids do not collapse
+/// into families - and pi-antigravity's own catalog is ~one group per model
+/// until the thinking levels fold. The vector keeps the emission order (the
+/// only order anything reads); the map is lookup only, and dies with the
+/// function (gh #614).
+#[derive(Default)]
+struct Groups {
+    order: Vec<(String, RuntimeGroup)>,
+    index: std::collections::HashMap<String, usize>,
+}
+
+impl Groups {
+    /// The group's position, creating the group first.
+    fn at(&mut self, public: &str) -> usize {
+        if let Some(at) = self.index.get(public) {
+            return *at;
+        }
+        let at = self.order.len();
+        self.order
+            .push((public.to_string(), RuntimeGroup::default()));
+        self.index.insert(public.to_string(), at);
+        at
     }
-    groups.push((public.to_string(), RuntimeGroup::default()));
-    groups.len() - 1
 }
 
 /// One canonical family under construction.
@@ -357,9 +444,13 @@ struct RuntimeGroup {
 pub fn virtualize_catalog(
     models: &serde_json::Map<String, serde_json::Value>,
 ) -> Vec<lca_protocol::ModelInfo> {
-    let mut groups: Vec<(String, RuntimeGroup)> = Vec::new();
+    let mut groups = Groups::default();
     for (runtime, entry) in models {
-        if !is_selectable(runtime) {
+        // Gh #614: one lowercase per id, reused by the selectable check, the
+        // suffix rules, and the alias match below - the old shape lowercased
+        // the id up to three times and formatted a `-{suffix}` probe seven.
+        let lower = runtime.to_ascii_lowercase();
+        if !is_selectable(runtime, &lower) {
             continue;
         }
         if entry.get("isInternal").and_then(|v| v.as_bool()) == Some(true) {
@@ -367,8 +458,8 @@ pub fn virtualize_catalog(
         }
         let name = display_name(entry);
         if let Some(base) = runtime.strip_suffix("-tiered") {
-            let at = group_at(&mut groups, base);
-            let group = &mut groups[at].1;
+            let at = groups.at(base);
+            let group = &mut groups.order[at].1;
             if let Some(name) = name {
                 group.display_names.push(name.to_string());
             }
@@ -388,33 +479,25 @@ pub fn virtualize_catalog(
         } else {
             // Ground-truth precedence: explicit display parentheticals
             // beat suffix parsing (a `-low` id advertised as "(High)"
-            // serves high).
+            // serves high) - so a display level wins, but the id still
+            // groups under the base its suffix names.
+            let stripped = THINKING_SUFFIXES.iter().find_map(|(suffix, suffix_level)| {
+                strip_dash_suffix(&lower, runtime, suffix).map(|base| (base, *suffix_level))
+            });
             level = name.and_then(display_level);
-            if level.is_none() {
-                let lower = runtime.to_ascii_lowercase();
-                for (suffix, suffix_level) in THINKING_SUFFIXES {
-                    if lower.ends_with(&format!("-{suffix}")) {
-                        public = &runtime[..runtime.len() - suffix.len() - 1];
-                        level = Some(suffix_level);
-                        break;
-                    }
+            match (level, stripped) {
+                (Some(_), Some((base, _))) => public = base,
+                (None, Some((base, suffix_level))) => {
+                    public = base;
+                    level = Some(suffix_level);
                 }
-            } else {
-                // A display-leveled id still groups under its base.
-                let lower = runtime.to_ascii_lowercase();
-                for (suffix, _) in THINKING_SUFFIXES {
-                    if lower.ends_with(&format!("-{suffix}")) {
-                        public = &runtime[..runtime.len() - suffix.len() - 1];
-                        break;
-                    }
-                }
+                _ => {}
             }
         }
         // Slicing a borrowed map key: re-own the public id before
         // the mutable group borrow below.
-        let public = public.to_string();
-        let at = group_at(&mut groups, &public);
-        let group = &mut groups[at].1;
+        let at = groups.at(public);
+        let group = &mut groups.order[at].1;
         if let Some(name) = name {
             group.display_names.push(name.to_string());
         }
@@ -428,15 +511,18 @@ pub fn virtualize_catalog(
             }
         }
     }
-    merge_agent_singletons(&mut groups);
-    if groups.is_empty() {
+    merge_agent_singletons(&mut groups.order);
+    if groups.order.is_empty() {
         return Vec::new();
     }
     let mut out = Vec::new();
-    for (public, group) in &groups {
+    for (public, group) in &groups.order {
         out.push(emit_group(public, group, models));
     }
-    out.sort_by(|a, b| compare_public_models(&a.id, &b.id));
+    // Rank once per model, then sort on (rank, id): the comparator's own
+    // allocation per comparison is what gh #614 measured, and `sort_by` on the
+    // pair keeps the order the comparator defined (rank first, then the bytes).
+    out.sort_by_cached_key(|model| (model_rank(&model.id), model.id.clone()));
     out
 }
 
@@ -458,11 +544,15 @@ mod tests {
     // with the description.
     #[test]
     fn an_image_model_is_not_selectable() {
-        assert!(!is_selectable("gemini-3.1-flash-image"));
-        assert!(!is_selectable("gemini-2.5-flash-image-preview"));
-        assert!(!is_selectable("claude-image-agent"));
-        // Case-insensitively, like pi's `/image/i`.
-        assert!(!is_selectable("Gemini-3.1-Flash-IMAGE"));
+        for id in [
+            "gemini-3.1-flash-image",
+            "gemini-2.5-flash-image-preview",
+            "claude-image-agent",
+            // Case-insensitively, like pi's `/image/i`.
+            "Gemini-3.1-Flash-IMAGE",
+        ] {
+            assert!(!is_selectable(id, &id.to_ascii_lowercase()), "{id}");
+        }
     }
 
     // Verifies: gh #279 - and refusing image ids did not come at the cost of the
@@ -479,7 +569,10 @@ mod tests {
             "claude-sonnet-4-5",
             "gpt-oss-120b-medium",
         ] {
-            assert!(is_selectable(id), "{id} must stay selectable");
+            assert!(
+                is_selectable(id, &id.to_ascii_lowercase()),
+                "{id} must stay selectable"
+            );
         }
     }
 
@@ -487,13 +580,17 @@ mod tests {
     // decision did not disturb its neighbours.
     #[test]
     fn the_other_refusals_are_unchanged() {
-        // Internal/runtime noise pi also filters.
-        assert!(!is_selectable("MODEL_gemini-3.6-flash"));
-        assert!(!is_selectable("chat_editor"));
-        assert!(!is_selectable("tab_completion"));
-        // Whitespace in an id is never a real model.
-        assert!(!is_selectable("gemini-3.6 flash"));
-        // A family outside the three advertised ones.
-        assert!(!is_selectable("llama-3-70b"));
+        for id in [
+            // Internal/runtime noise pi also filters.
+            "MODEL_gemini-3.6-flash",
+            "chat_editor",
+            "tab_completion",
+            // Whitespace in an id is never a real model.
+            "gemini-3.6 flash",
+            // A family outside the three advertised ones.
+            "llama-3-70b",
+        ] {
+            assert!(!is_selectable(id, &id.to_ascii_lowercase()), "{id}");
+        }
     }
 }
