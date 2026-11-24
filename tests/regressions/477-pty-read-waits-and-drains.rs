@@ -53,25 +53,90 @@ fn scratch(name: &str) -> PathBuf {
     dir
 }
 
+/// What one read-to-end run measured, per call as well as in total.
+///
+/// Gh #612: the cycle that restated the no-spin row needed the *distribution*,
+/// not the rate, because the two readings of a fast loop ("the box is loaded" and
+/// "the loop is spinning") differ in the shape of the calls, not in their count:
+/// a waiting call answers empty after its readiness window (8 ms, more under
+/// load), a spinning call answers empty in microseconds. So the run records how
+/// many empty answers came back **too fast to have waited**, and that counter -
+/// not the rate - is the row's primary assertion.
+#[cfg(unix)]
+struct Reading {
+    out: Vec<u8>,
+    /// Every `read` the guest-shaped loop made.
+    calls: usize,
+    /// Answers that carried no bytes (`Some(empty)`), i.e. "nothing yet".
+    empty: usize,
+    /// ...of those, the ones that returned in under a millisecond. A call that
+    /// waited cannot land here: the shortest wait is a poll with a millisecond
+    /// timeout.
+    fast_empty: usize,
+    /// The slowest empty answer, so a failure can show how far apart the two
+    /// shapes were.
+    empty_max: Duration,
+    elapsed: Duration,
+    /// The session's drain facts, when the loop reached the end (gh #606).
+    drain: Option<lca_tools::DrainDiagnostic>,
+}
+
+#[cfg(unix)]
+impl Reading {
+    /// One line a future red run can be read from, without re-instrumenting.
+    fn describe(&self) -> String {
+        let per_second = self.calls as f64 / self.elapsed.as_secs_f64();
+        format!(
+            "{} calls in {:?} ({per_second:.0} calls/s): {} empty answers, {} of them \
+             faster than 1 ms (the shortest waited {:?}); drain was {:?}",
+            self.calls, self.elapsed, self.empty, self.fast_empty, self.empty_max, self.drain
+        )
+    }
+}
+
 /// Read until the session ends, the way the conformance guest does.
 ///
 /// This is deliberately the *guest's* shape - loop until `None` - because that
 /// is the caller the defect was found in. If the host's contract is right, a
 /// caller written this naively must still get the whole output.
 #[cfg(unix)]
-fn read_to_end(pty: &mut PtyChild, budget: Duration) -> (Vec<u8>, usize, Duration) {
+fn read_to_end(pty: &mut PtyChild, budget: Duration) -> Reading {
     let mut out = Vec::new();
     let mut calls = 0usize;
+    let mut empty = 0usize;
+    let mut fast_empty = 0usize;
+    let mut empty_max = Duration::ZERO;
     let start = Instant::now();
     while start.elapsed() < budget {
         calls += 1;
+        let call_started = Instant::now();
         match pty.read(4096).expect("read") {
-            Some(chunk) => out.extend_from_slice(&chunk),
+            Some(chunk) => {
+                if chunk.is_empty() {
+                    empty += 1;
+                    let cost = call_started.elapsed();
+                    empty_max = empty_max.max(cost);
+                    if cost < Duration::from_millis(1) {
+                        fast_empty += 1;
+                    }
+                } else {
+                    out.extend_from_slice(&chunk);
+                }
+            }
             None => break,
         }
     }
     let elapsed = start.elapsed();
-    (out, calls, elapsed)
+    let drain = pty.drain_diagnostic();
+    Reading {
+        out,
+        calls,
+        empty,
+        fast_empty,
+        empty_max,
+        elapsed,
+        drain,
+    }
 }
 
 // Verifies: gh #477's `exit 0 ` failure - a command that writes and exits
@@ -93,7 +158,7 @@ fn a_fast_exiting_command_delivers_its_output_every_time() {
             &[],
         )
         .expect("spawn");
-        let (out, _calls, _elapsed) = read_to_end(&mut pty, Duration::from_secs(10));
+        let out = read_to_end(&mut pty, Duration::from_secs(10)).out;
         let code = pty.wait().expect("wait");
         pty.kill();
         let text = String::from_utf8_lossy(&out).to_string();
@@ -112,15 +177,26 @@ fn a_fast_exiting_command_delivers_its_output_every_time() {
 // throughput measurement: a read that has nothing to return must **wait**
 // rather than return an empty chunk immediately.
 //
-// The assertion is calls per second of *observed* elapsed time, not a raw
-// count. A raw count is not the property - it scales with how long the child
-// took to start, and under a heavily loaded runner that alone ran the clock to
-// nine seconds and made 1,122 waiting calls look like a failure. Rate is
-// immune to that: a path that waits makes ~125 calls/second (one per 8 ms
-// readiness window) and a busy-spin made **614,104/second** measured on this
-// box, so the two are four thousand times apart and no amount of load bridges
-// the gap in the wrong direction - load makes a spinner look *slower*, never a
-// waiter look like a spinner.
+// **Gh #612 restated which assertion carries the claim.** The rate was the
+// primary one from gh #477 to #612, and it went red once in a full workspace run:
+// 1,594 calls in 635 ms (2,508/s) against a 2,000/s bound, on a box carrying
+// every suite at once. That was not the box lying - it was a **real spin**, and
+// the distribution said so before the mechanism did: 214 of the empty answers
+// came back in **4-18 microseconds**, where a call that waits cannot come back in
+// less than its poll's millisecond timeout. The product path was `EIO` from the
+// master (the kernel naming the end) while the child had not been reaped yet:
+// `poll` answered `POLLHUP` with no `POLLIN`, `read_upstream` had nothing, and the
+// loop returned "nothing yet" at syscall speed - 203 such polls in one 500 ms
+// window. Fixed in `crates/lca-tools/src/pty.rs`: a conclusive end now enters the
+// drain window instead of waiting for `try_wait`, so the call costs one window
+// and the session ends.
+//
+// So the row asserts the **shape of the calls**, which load cannot fake: no empty
+// answer may return in under a millisecond, because the only way to answer empty
+// is to have waited out a poll window. A loaded box makes a waiter *slower*
+// (measured: 125/s idle, 38-110/s under twelve CPU hogs); only a spin makes it
+// faster, and a spin is exactly what this row exists for. The rate is kept as a
+// coarse second opinion with the measured numbers on both sides named.
 #[cfg(unix)]
 #[test]
 fn a_silent_pty_does_not_busy_spin() {
@@ -135,21 +211,38 @@ fn a_silent_pty_does_not_busy_spin() {
         &[],
     )
     .expect("spawn");
-    let (out, calls, elapsed) = read_to_end(&mut pty, Duration::from_secs(30));
+    let reading = read_to_end(&mut pty, Duration::from_secs(30));
     let code = pty.wait().expect("wait");
     pty.kill();
-    assert!(String::from_utf8_lossy(&out).contains("done"), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&reading.out).contains("done"),
+        "{:?}",
+        reading.out
+    );
     assert_eq!(code, 0);
     assert!(
-        elapsed >= Duration::from_millis(400),
+        reading.elapsed >= Duration::from_millis(400),
         "the read returned before the child had written anything, so it did not wait \
-         (elapsed {elapsed:?})"
+         (elapsed {:?})",
+        reading.elapsed
     );
-    let per_second = calls as f64 / elapsed.as_secs_f64();
+    // The primary assertion: a call that waits takes at least its poll timeout,
+    // so an empty answer in under a millisecond is a call that did not wait.
+    assert_eq!(
+        reading.fast_empty,
+        0,
+        "the read loop answered \"nothing yet\" without waiting (gh #612's spin shape); {}",
+        reading.describe()
+    );
+    // The coarse one, kept for the numbers it names: a waiter is ~125/s idle and
+    // ~40-110/s under twelve hogs, the pre-#477 spin was 614,104/s, and the #612
+    // spin measured 2,508-2,989/s. Load only ever moves this down.
+    let per_second = reading.calls as f64 / reading.elapsed.as_secs_f64();
     assert!(
         per_second < 2_000.0,
-        "the read loop made {calls} calls in {elapsed:?} ({per_second:.0} calls/s); \
-         a path that waits makes ~125/s and the busy-spin made 614,104/s"
+        "the read loop ran at {per_second:.0} calls/s, which a waiting read cannot do \
+         (measured: ~125/s idle, 38-110/s under load); {}",
+        reading.describe()
     );
 }
 
@@ -173,7 +266,8 @@ fn a_child_that_never_exits_returns_at_the_deadline_with_what_arrived() {
         &[],
     )
     .expect("spawn");
-    let (out, _calls, elapsed) = read_to_end(&mut pty, Duration::from_millis(600));
+    let reading = read_to_end(&mut pty, Duration::from_millis(600));
+    let (out, elapsed) = (reading.out, reading.elapsed);
     pty.kill();
     assert!(
         String::from_utf8_lossy(&out).contains("early"),
@@ -207,7 +301,7 @@ fn a_chatty_child_still_reads_every_byte() {
         &[],
     )
     .expect("spawn");
-    let (out, _calls, _elapsed) = read_to_end(&mut pty, Duration::from_secs(30));
+    let out = read_to_end(&mut pty, Duration::from_secs(30)).out;
     let code = pty.wait().expect("wait");
     pty.kill();
     let text = String::from_utf8_lossy(&out);

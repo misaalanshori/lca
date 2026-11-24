@@ -414,9 +414,29 @@ mod tests {
         );
     }
 
+    /// How long the hanging stub below sleeps. The row's bound is derived from it,
+    /// because the defect it guards against is "the launch waits for this".
+    const STUB_SLEEP: Duration = Duration::from_secs(30);
+
     // Verifies: gh #400 gap 4 - **a failed probe is silent, and bounded.** A
     // missing binary, a refusal, and a hang all have to leave the launch
     // unaffected; "could not check tmux" is not news worth a row.
+    //
+    // **Gh #613 restated the bound.** It used to be `elapsed < PROBE_BUDGET * 3`
+    // (1.2 s), which was a claim about *this machine's spawn cost* dressed as the
+    // claim about the product: two probes with a 400 ms deadline are 0.8 s of
+    // intended waiting, and the remaining 0.4 s had to absorb two `sh` starts, two
+    // `sleep` execs and two kills. Measured: 0.85 s idle, **1.86 s** in a full
+    // workspace run on four cores - red, with the product correct. The promise the
+    // row exists for is that the launch does not wait for a wedged server, so the
+    // comparison is against what the stall *would* cost: the stub's own
+    // [`STUB_SLEEP`], with a 10x margin. What the bound must separate is
+    // therefore "bounded by the probe budget" (0.8 s of waiting plus however long
+    // the box takes to fork) from "blocked until the stub finishes" (30 s), and
+    // 3 s sits in the middle of a 30x gap instead of splitting two numbers that
+    // were never the claim. A genuine stall cannot pass it, and no amount of load
+    // on a correct product can fail it: the only way to exceed 3 s is for a probe
+    // to stop being bounded at all.
     #[test]
     #[cfg(unix)] // `stub_tmux` is a shell script; see its doc.
     fn a_failed_or_hanging_probe_is_silent_and_cannot_stall_the_launch() {
@@ -438,17 +458,27 @@ mod tests {
         );
 
         // **The bounded call.** A tmux that never answers must return, which is
-        // the whole reason the deadline exists. `PROBE_BUDGET` is the measurement:
-        // the assertion is that two hanging probes finish inside a small multiple
-        // of it rather than hanging the launch forever.
-        let hanging = stub_tmux("#!/bin/sh\nsleep 30\n", "hang");
+        // the whole reason the deadline exists. The bound is the stub's own sleep
+        // divided by ten: two probes that honour [`PROBE_BUDGET`] finish in about
+        // two budgets plus this box's fork cost, and a probe that stopped being
+        // bounded waits the whole `sleep` - so the row fails only for the defect.
+        let hanging = stub_tmux(
+            &format!("#!/bin/sh\nsleep {}\n", STUB_SLEEP.as_secs()),
+            "hang",
+        );
         let started = Instant::now();
         let doctor = examine_with(&inside, hanging.to_str().expect("utf8 path"));
         let elapsed = started.elapsed();
-        assert_eq!(doctor, Doctor::Silent, "a hang is silent");
+        assert_eq!(
+            doctor,
+            Doctor::Silent,
+            "a hang is silent: the launch got its answer instead of an error"
+        );
         assert!(
-            elapsed < PROBE_BUDGET * 3,
-            "two bounded probes cost about two budgets, not the sleep: took {elapsed:?}"
+            elapsed < STUB_SLEEP / 10,
+            "an unbounded probe would have waited the stub's {STUB_SLEEP:?}; two bounded ones \
+             cost about two {PROBE_BUDGET:?} budgets plus fork time (measured: 0.85 s idle, \
+             1.86 s in a loaded full-workspace run), and this took {elapsed:?}"
         );
     }
 

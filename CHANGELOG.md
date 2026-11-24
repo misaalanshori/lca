@@ -7,6 +7,16 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **A pty read no longer polls at syscall speed while a finished child is not yet
+  reaped** (gh #612). When the kernel names the end of a pty master (`EIO`, every
+  slave descriptor gone) before the child has been reaped, the read path answered
+  "nothing yet" immediately instead of spending its readiness window: measured
+  **2,508-2,989 calls/s** on a loaded four-core box, each call about 4 µs, where a
+  waiting read makes ~125/s. A conclusive end now enters the drain window (bounded,
+  and the same window that gives a late tail its 100 ms) instead of waiting for the
+  process to be reaped, so the session ends in one call. The behaviour a caller sees
+  is unchanged - "nothing yet" is still an honest answer before the end - it just
+  costs a wait instead of burning the CPU the writer needs.
 - **A missing extension tag says what to do, and an unstable build installs from its own
   channel** (gh #615). `lca ext install openai-compatible` on the 0.7 line failed with
   `fetch failed: ...: HTTP401 and the token endpoint answered 403 Forbidden`: two registry

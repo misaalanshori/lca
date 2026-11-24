@@ -492,7 +492,18 @@ fn read_impl(inner: &mut Inner, max: usize) -> std::io::Result<Option<Vec<u8>>> 
                 return Ok(None);
             }
             // Not the end while the child is still alive: it may write again.
-            if !child_exited(inner)? {
+            //
+            // Gh #612: **unless the kernel has already named the end.** `EIO` on the
+            // master means every slave descriptor is gone, so no process can write
+            // another byte - and waiting for `try_wait` to notice a child that has
+            // not been reaped yet is what made this answer "nothing yet" thousands of
+            // times: the poll below reports `POLLHUP` with no `POLLIN`, the read
+            // returned `EIO`, and each call cost ~4 µs - measured **2,508 calls/s**
+            // (the gh #477 row's own bound) on a loaded box, 203 such polls in one
+            // 500 ms window. The drain window below is the right place to spend that
+            // time: it is bounded, it gives a late tail its 100 ms, and the kernel's
+            // answer ends it on the first attempt where nothing can still arrive.
+            if !child_exited(inner)? && !inner.slave_closed {
                 // fall through to the wait below and look again
             } else if inner.drain_attempts >= DRAIN_ATTEMPTS {
                 // Child gone, drain phase spent: the buffer is genuinely empty.
@@ -554,6 +565,18 @@ fn read_impl(inner: &mut Inner, max: usize) -> std::io::Result<Option<Vec<u8>>> 
             // is an honest answer: the session is open (a confirmed end would
             // have returned above), and a caller with a frame to draw must not
             // be blocked for output that may never come.
+            //
+            // Gh #612: an *event that is not readability* (poll answering
+            // `POLLHUP`/`POLLERR` while a read still has nothing) is not the same
+            // answer as an expired window, and returning on it immediately is the
+            // spin shape. It is reachable only when the end has been seen but the
+            // child is not reaped - a case the drain branch above now takes - so
+            // this is the belt: a call that started *after* an end was seen waits
+            // one step rather than answering at syscall speed.
+            if inner.slave_closed || remaining == 0 {
+                return Ok(Some(Vec::new()));
+            }
+            std::thread::sleep(DRAIN_STEP);
             return Ok(Some(Vec::new()));
         }
     }
