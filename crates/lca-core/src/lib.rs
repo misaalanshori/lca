@@ -462,12 +462,25 @@ impl<'a> Agent<'a> {
         // reachable from the canceller. The guard is what unregisters: it
         // lives to the end of this function, so a turn that ended normally
         // leaves no callback behind for the next turn's cancel to trip.
-        let _interrupt_guard = (!handles.is_empty()).then(|| {
-            cancel.on_cancel(move || {
-                for handle in &handles {
-                    handle.interrupt();
-                }
-            })
+        //
+        // Gh #610: the guard is registered **unconditionally**, and the handles it
+        // interrupts are resolved **when it fires** rather than captured here. The
+        // snapshot this replaced (`handles`, computed a few lines up) is the right
+        // set for the boundary resets - those are about the turn that is starting -
+        // but it is the wrong set for a cancel: an extension that becomes available
+        // *during* the turn (a registry change, a platform that materialises a
+        // handle later than the turn's first line) would then never be interrupted,
+        // which is a spinning guest nobody can stop. Resolving at fire time makes
+        // the guard's promise "the turn's extensions are interrupted", not "the
+        // extensions that existed at line N"; it is one cheap registry read on a
+        // path that runs once per cancel, and it is why the guard no longer has an
+        // `is_empty` condition to skip registration with (a turn with no extensions
+        // registers one callback that iterates nothing).
+        let extensions = std::sync::Arc::clone(&self.config.extensions);
+        let _interrupt_guard = cancel.on_cancel(move || {
+            for handle in extensions.enabled() {
+                handle.interrupt();
+            }
         });
         // Gh #258: the turn's envelope (lengths, never content).
         lca_debug::core::event(

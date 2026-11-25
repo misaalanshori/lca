@@ -7,6 +7,18 @@ Dates are UTC.
 ## [Unreleased]
 
 ### Fixed
+- **A cancel that lands at the instant a turn ends now always interrupts the
+  turn's extensions** (gh #610). `CancelFlag::cancel` published the cancelled flag
+  before it took the list of registered callbacks, so a turn woken by that flag -
+  which returns `Cancelled` immediately - could drop its own listener in the gap,
+  and the callback that interrupts every extension was removed before the drain
+  reached it: the cancel interrupted nothing, silently, roughly one run in thirty
+  on a loaded four-core box and more often on a hosted runner. The list is now
+  taken and the flag published under one lock, so a cancel either runs the
+  callbacks it took or the work it guarded was already over. The turn's cancel
+  callback also resolves the extension set when it fires instead of capturing a
+  snapshot at turn start, so an extension that becomes available *during* a turn
+  is interrupted too rather than being left unresponsive.
 - **A pty read no longer polls at syscall speed while a finished child is not yet
   reaped** (gh #612). When the kernel names the end of a pty master (`EIO`, every
   slave descriptor gone) before the child has been reaped, the read path answered

@@ -79,6 +79,13 @@ impl CancelFlag {
     /// call and hoping. That row's three hosted-Windows firings are why the
     /// guarantee is written here, in the artefact that owns it.
     ///
+    /// **What the guarantee covers is the callbacks this call took** (gh #610).
+    /// A listener that is dropped *before* the cancel takes the list is not run -
+    /// that is right, a finished turn owes nothing - and the take happens under
+    /// the same lock as [`CancelListener::drop`], so a listener cannot be removed
+    /// after this call has decided to run it. The window between the two used to
+    /// exist, and a cancel that lost that race interrupted nothing.
+    ///
     /// The callbacks run **outside** the registry lock, so a callback that
     /// cancels again, or registers another listener, cannot deadlock. A
     /// callback that panics is caught and the remaining callbacks still run:
@@ -88,17 +95,48 @@ impl CancelFlag {
     /// prints before it fires - are why the guarantee is stated as "the rest
     /// still run" and not as "the panic disappears".
     pub fn cancel(&self) {
-        self.inner.cancelled.store(true, Ordering::SeqCst);
+        // **The list is taken and the flag published under one lock** (gh #610).
+        // The order here used to be the reverse - store, notify, then take - and
+        // that let a guard win the race: a turn whose `select!` sees the flag
+        // return and drops its `CancelListener`, whose `Drop` retains the list,
+        // *between* the store and the take. The turn's own fan-out callback was
+        // then removed before it could run, so the cancel interrupted nothing at
+        // all - measured as `interrupts == 0` with two listeners registered
+        // (`crates/lca-core/tests/turn_boundary.rs`, roughly 1 in 30 runs on a
+        // loaded four-core box, and the hosted-Windows firing this issue was
+        // filed for). Taking the list under the same lock the guard's `retain`
+        // takes makes the outcome two-sided: either the guard drops first, in
+        // which case the turn was already over and owes nothing, or this takes
+        // the callback and runs it whatever the turn does next.
+        let drained = {
+            let mut listeners = self.inner.listeners();
+            self.inner.cancelled.store(true, Ordering::SeqCst);
+            // The whole list: these callbacks are consumed, and a second
+            // `cancel()` must not fire them again.
+            std::mem::take(&mut *listeners)
+        };
         self.inner.notify.notify_waiters();
-        // Take the whole list: these callbacks are consumed, and a second
-        // `cancel()` must not fire them again.
-        let drained = std::mem::take(&mut *self.inner.listeners());
         for (_, listener) in drained {
             if catch_unwind(AssertUnwindSafe(listener)).is_err() {
                 // Swallowed deliberately: the cancelling thread keeps going, the
                 // way any teardown's `let _ =` does. See the doc comment.
             }
         }
+    }
+
+    /// How many callbacks are registered right now.
+    ///
+    /// The registry is otherwise invisible, and a caller that has to *prove* an
+    /// ordering claim about it needs one number to read: the turn-boundary row
+    /// (gh #604) asserts that the turn's fan-out was registered by the time the
+    /// row registered its own, because "my callback ran first" and "the turn's
+    /// callback was never there" are different defects with different fixes - and
+    /// the row's message blamed the second on the first for a cycle (gh #610).
+    ///
+    /// A count, not the callbacks: the closures are `FnOnce` and consumed by
+    /// [`CancelFlag::cancel`], so handing one out would be a second way to fire it.
+    pub fn listener_count(&self) -> usize {
+        self.inner.listeners().len()
     }
 
     /// Whether cancellation has been triggered.
@@ -361,6 +399,59 @@ mod tests {
         // And the property is not "the second ran first": registration order is
         // the assertion, not a coincidence of the scheduler.
         assert!(flag.is_cancelled());
+    }
+
+    // Verifies: gh #610 - **a guard cannot steal the interrupt it is guarded
+    // by.** This is the race the turn-boundary row lost on a loaded box (~1 in 30
+    // runs) and on hosted Windows: `cancel()` used to publish the flag *before* it
+    // took the listener list, so a task that woke on the flag - the turn itself,
+    // returning `Cancelled` - dropped its `CancelListener` in the window between
+    // the two, and the fan-out callback was removed before the drain reached it.
+    // The cancel then interrupted nothing, with no error anywhere.
+    //
+    // Deterministic rather than lucky: the dropper busy-waits for the flag, so it
+    // reacts at the first instant the flag is set - the worst case the fix must
+    // survive. With the take under the lock that publishes the flag, the dropper
+    // can only ever find its listener already gone from the list (or already
+    // taken), and the callback runs either way.
+    #[test]
+    fn a_guard_dropped_by_a_task_that_sees_the_cancel_cannot_steal_its_own_interrupt() {
+        // Repeated, because the loser's window is a few instructions wide: one
+        // iteration is a coin toss on an unloaded box, and a race row that passes
+        // once proves nothing. The loop is bounded and cheap (~0.1 ms each); a
+        // single lost iteration fails the row.
+        for attempt in 0..2_000 {
+            a_guard_cannot_steal_its_own_interrupt(attempt);
+        }
+    }
+
+    fn a_guard_cannot_steal_its_own_interrupt(attempt: usize) {
+        let flag = CancelFlag::new();
+        let ran = Arc::new(AtomicBool::new(false));
+        let seen = Arc::clone(&ran);
+        let listener = flag.on_cancel(move || {
+            seen.store(true, Ordering::SeqCst);
+        });
+        let dropper = {
+            let flag = flag.clone();
+            std::thread::spawn(move || {
+                // The turn's shape: it is woken by the cancellation and returns,
+                // which drops its guard.
+                while !flag.is_cancelled() {
+                    std::hint::spin_loop();
+                }
+                drop(listener);
+            })
+        };
+        flag.cancel();
+        dropper.join().expect("dropper");
+        assert!(
+            ran.load(Ordering::SeqCst),
+            "attempt {attempt}: the callback this cancel took must run even though the \
+             work that registered it ended in the same instant: the flag is published \
+             after the list is taken, so a guard dropped on seeing it cannot remove a \
+             listener the drain is about to call (gh #610)"
+        );
     }
 
     // Verifies: gh #547 - a hundred-turn session accumulates nothing.

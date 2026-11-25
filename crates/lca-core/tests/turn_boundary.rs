@@ -124,6 +124,8 @@ impl Probe {
 /// behavior is `interrupt`. `turn_started` keeps its no-op default, so
 /// only a host-side reset can keep the next turn clean.
 struct InterruptOnly {
+    /// The registry name (gh #610: the late-enable row holds two of these).
+    name: String,
     cap: Arc<lca_tools::Capabilities>,
     /// Set by the cancel-synchrony row (gh #604); the other rows ignore it, so
     /// one double serves all three rather than three near-copies drifting.
@@ -131,8 +133,9 @@ struct InterruptOnly {
 }
 
 impl InterruptOnly {
-    fn new(cap: Arc<lca_tools::Capabilities>) -> InterruptOnly {
+    fn new(name: &str, cap: Arc<lca_tools::Capabilities>) -> InterruptOnly {
         InterruptOnly {
+            name: name.to_string(),
             cap,
             probe: Probe::default(),
         }
@@ -141,7 +144,7 @@ impl InterruptOnly {
 
 impl ExtensionDispatch for InterruptOnly {
     fn name(&self) -> &str {
-        "interrupt-only"
+        &self.name
     }
     fn delivery(&self) -> DeliveryMode {
         DeliveryMode::Native
@@ -151,7 +154,7 @@ impl ExtensionDispatch for InterruptOnly {
     }
     fn tool_specs(&self) -> Result<Vec<ToolSpec>, DispatchError> {
         Err(DispatchError::MissingWorld {
-            extension: "interrupt-only".to_string(),
+            extension: self.name.clone(),
             world: "tool",
         })
     }
@@ -160,19 +163,19 @@ impl ExtensionDispatch for InterruptOnly {
         _call: &'a ToolCall,
     ) -> DispatchFuture<'a, Result<ToolResult, DispatchError>> {
         Box::pin(std::future::ready(Err(DispatchError::MissingWorld {
-            extension: "interrupt-only".to_string(),
+            extension: self.name.clone(),
             world: "tool",
         })))
     }
     fn command_specs(&self) -> Result<Vec<CommandSpec>, DispatchError> {
         Err(DispatchError::MissingWorld {
-            extension: "interrupt-only".to_string(),
+            extension: self.name.clone(),
             world: "command",
         })
     }
     fn invoke_command(&self, _name: &str, _argument: &str) -> Result<CommandEffect, DispatchError> {
         Err(DispatchError::MissingWorld {
-            extension: "interrupt-only".to_string(),
+            extension: self.name.clone(),
             world: "command",
         })
     }
@@ -277,7 +280,7 @@ async fn an_interrupt_only_extension_cannot_latch_cancellation() {
         project.clone(),
         None,
     ));
-    let double: Arc<InterruptOnly> = Arc::new(InterruptOnly::new(cap.clone()));
+    let double: Arc<InterruptOnly> = Arc::new(InterruptOnly::new("interrupt-only", cap.clone()));
     let mut registry = ExtensionRegistry::new();
     registry.register(Arc::clone(&double) as Arc<dyn ExtensionDispatch>);
     // The host knows this handle's engine (gh #97's host-side reset):
@@ -414,7 +417,7 @@ async fn a_cancel_interrupts_the_extension_before_cancel_returns() {
         project.clone(),
         None,
     ));
-    let double: Arc<InterruptOnly> = Arc::new(InterruptOnly::new(cap.clone()));
+    let double: Arc<InterruptOnly> = Arc::new(InterruptOnly::new("interrupt-only", cap.clone()));
     let mut registry = ExtensionRegistry::new();
     registry.register(Arc::clone(&double) as Arc<dyn ExtensionDispatch>);
     registry.note_engine("interrupt-only", &cap);
@@ -454,11 +457,19 @@ async fn a_cancel_interrupts_the_extension_before_cancel_returns() {
     // What the row's **own** callback saw, on the thread that ran `cancel()`.
     let seen_interrupts = Arc::new(std::sync::atomic::AtomicUsize::new(usize::MAX));
     let seen_engine_latched = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // Gh #610: how many callbacks were registered at the two moments that decide
+    // whether this row's ordering claim can even be tested - before the row adds
+    // its own, and just before the cancel drains them. `usize::MAX` is "the thread
+    // never got there".
+    let seen_listeners_before = Arc::new(std::sync::atomic::AtomicUsize::new(usize::MAX));
+    let seen_listeners_at_cancel = Arc::new(std::sync::atomic::AtomicUsize::new(usize::MAX));
     let canceller = {
         let flag = cancel.clone();
         let double = Arc::clone(&double);
         let observed = Arc::clone(&seen_interrupts);
         let latched = Arc::clone(&seen_engine_latched);
+        let listeners_before = Arc::clone(&seen_listeners_before);
+        let listeners_at_cancel = Arc::clone(&seen_listeners_at_cancel);
         let started = started.clone();
         std::thread::spawn(move || {
             // Wait for the turn's first delta, not for a duration: the boundary
@@ -479,6 +490,7 @@ async fn a_cancel_interrupts_the_extension_before_cancel_returns() {
             // Registering earlier would race the turn's registration and could
             // run *first*, which would make the counter observation read 0 for a
             // healthy tree - the shape a row must not have.
+            listeners_before.store(flag.listener_count(), std::sync::atomic::Ordering::SeqCst);
             let _mine = flag.on_cancel(move || {
                 observed.store(
                     double.probe.interrupts(),
@@ -489,6 +501,7 @@ async fn a_cancel_interrupts_the_extension_before_cancel_returns() {
                     std::sync::atomic::Ordering::SeqCst,
                 );
             });
+            listeners_at_cancel.store(flag.listener_count(), std::sync::atomic::Ordering::SeqCst);
             flag.cancel();
         })
     };
@@ -516,20 +529,41 @@ async fn a_cancel_interrupts_the_extension_before_cancel_returns() {
     canceller.join().expect("canceller");
 
     let interrupts = seen_interrupts.load(std::sync::atomic::Ordering::SeqCst);
+    let listeners_before = seen_listeners_before.load(std::sync::atomic::Ordering::SeqCst);
+    let listeners_at_cancel = seen_listeners_at_cancel.load(std::sync::atomic::Ordering::SeqCst);
     assert_ne!(
         interrupts,
         usize::MAX,
         "the row's own callback never ran: `cancel()` returned without draining the \
          registrations (gh #547) - the fan-out is deferred, not synchronous"
     );
+    // Gh #610: **the precondition of the ordering claim, asserted before the
+    // claim.** The row's whole premise is that the turn's fan-out is already in
+    // the list when the row adds its own, so registration order puts the turn
+    // first. When hosted Windows fired with `interrupts == 0` the message blamed
+    // the ordering, but the other explanation - the turn registered *nothing* -
+    // produces the same number and a different fix. These two counts separate
+    // them: one listener before this row's, two at the cancel.
+    assert_eq!(
+        listeners_before, 1,
+        "the turn's fan-out was not registered when the row registered its own: there \
+         were {listeners_before} listeners. A turn whose extension set is empty at its \
+         first line registers nothing (the pre-#610 shape), and then no cancel can ever \
+         interrupt it - which is a product defect, not an ordering one"
+    );
+    assert_eq!(
+        listeners_at_cancel, 2,
+        "at the cancel the row expected its own listener beside the turn's, and saw \
+         {listeners_at_cancel}"
+    );
     assert!(
         interrupts >= 1,
         "the turn's listener had already run when the row's own callback ran: it saw \
-         {interrupts} `interrupt()` calls. Callbacks run in registration order on the \
-         cancelling thread, so a deferred fan-out (the pre-#547 poller shape) leaves \
-         this at 0 - which is exactly what CI `43774970823` (hosted Windows, head \
-         `3f25c83e`) could no longer guarantee when the row read another object's flag \
-         one line after `cancel()`"
+         {interrupts} `interrupt()` calls, with {listeners_at_cancel} listeners \
+         registered. Callbacks run in registration order on the cancelling thread, so a \
+         deferred fan-out (the pre-#547 poller shape) leaves this at 0 - which is exactly \
+         what CI `43774970823` (hosted Windows, head `3f25c83e`) could no longer guarantee \
+         when the row read another object's flag one line after `cancel()`"
     );
     assert!(
         seen_engine_latched.load(std::sync::atomic::Ordering::SeqCst),
@@ -541,6 +575,149 @@ async fn a_cancel_interrupts_the_extension_before_cancel_returns() {
         StopReason::Cancelled,
         "and the turn still reports the cancellation"
     );
+}
+
+// Verifies: gh #610 - **a cancel reaches an extension that became available
+// after the turn started.**
+//
+// The guard's promise is "the turn's extensions are interrupted", not "the
+// extensions the registry held at `run_turn`'s first line". The snapshot shape
+// (a `Vec` captured once, with registration skipped entirely when the snapshot
+// was empty) fails this row deterministically: the late handle is enabled after
+// the turn is already streaming, so the cancel must still reach it - a spinning
+// guest cannot be left uninterruptible because it was switched on a millisecond
+// late. The cancel callback resolves the registry when it fires, which is what
+// makes the row pass; it is the class the issue described as "the turn
+// registered no callback at all", closed structurally rather than by hoping
+// every extension exists by line N.
+#[tokio::test]
+async fn a_cancel_reaches_an_extension_enabled_after_the_turn_started() {
+    let root = scratch("cancel-late");
+    let project = root.join("project");
+    let cap = Arc::new(lca_tools::Capabilities::new(
+        "interrupt-only",
+        lca_tools::CapabilityGrants::default(),
+        ScopeRoots {
+            workspace: project.clone(),
+            private: root.join("private"),
+            home_config: root.join("config"),
+            temp: root.join("tmp"),
+            state_dir: root.join("data"),
+        },
+        Arc::new(Mutex::new(Allow)),
+        Arc::new(Mutex::new(
+            GrantStore::open(&root.join("grants.json")).expect("store"),
+        )),
+        project.clone(),
+        None,
+    ));
+    let early: Arc<InterruptOnly> = Arc::new(InterruptOnly::new("interrupt-only", cap.clone()));
+    let late: Arc<InterruptOnly> = Arc::new(InterruptOnly::new("late-arrival", cap.clone()));
+    let mut registry = ExtensionRegistry::new();
+    registry.register(Arc::clone(&early) as Arc<dyn ExtensionDispatch>);
+    registry.register(Arc::clone(&late) as Arc<dyn ExtensionDispatch>);
+    // Off at the turn's first line, on once the turn is streaming: the exact
+    // state a snapshot cannot carry.
+    registry.set_enabled("late-arrival", false);
+    registry.note_engine("interrupt-only", &cap);
+    let registry = Arc::new(registry);
+
+    let store = lca_session::SessionStore::new(root.join("data"));
+    let session = store.create_session(&project, "test").expect("session");
+    let grants = Arc::new(Mutex::new(
+        GrantStore::open(&root.join("grants.json")).expect("grants"),
+    ));
+    let mut tools = lca_tools::ToolExecutor::new(
+        Arc::new(lca_tools::NativeOps::default()),
+        project.clone(),
+        project.clone(),
+        65536,
+        Some(std::time::Duration::from_secs(30)),
+    );
+    let config = AgentConfig {
+        provider: "fake".to_string(),
+        model: "faux-1".to_string(),
+        retry_base_delay: std::time::Duration::ZERO,
+        extensions: Arc::clone(&registry),
+        ..AgentConfig::default()
+    };
+    let provider = FakeProvider::builder()
+        .turn(|t| {
+            t.text("starting")
+                .pause(400)
+                .text("done")
+                .usage(fake_usage(10, 5, 0, 0))
+        })
+        .build();
+
+    let cancel = lca_tools::CancelFlag::new();
+    let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let seen_early = Arc::new(std::sync::atomic::AtomicUsize::new(usize::MAX));
+    let seen_late = Arc::new(std::sync::atomic::AtomicUsize::new(usize::MAX));
+    let canceller = {
+        let flag = cancel.clone();
+        let early = Arc::clone(&early);
+        let late = Arc::clone(&late);
+        let observed_early = Arc::clone(&seen_early);
+        let observed_late = Arc::clone(&seen_late);
+        let started = started.clone();
+        let registry = Arc::clone(&registry);
+        std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while !started.load(std::sync::atomic::Ordering::SeqCst) {
+                if std::time::Instant::now() >= deadline {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            // The turn is running; now the second extension becomes available.
+            registry.set_enabled("late-arrival", true);
+            let _mine = flag.on_cancel(move || {
+                observed_early.store(
+                    early.probe.interrupts(),
+                    std::sync::atomic::Ordering::SeqCst,
+                );
+                observed_late.store(late.probe.interrupts(), std::sync::atomic::Ordering::SeqCst);
+            });
+            flag.cancel();
+        })
+    };
+    let mut sink = StartedSink {
+        inner: CollectingSink::default(),
+        started: started.clone(),
+    };
+    let mut prompt = Allow;
+    let mut agent = Agent::new(
+        &store,
+        &session,
+        &provider,
+        &mut tools,
+        grants,
+        &mut prompt,
+        None,
+        config,
+    );
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        agent.run_turn("spin", &mut sink, &cancel),
+    )
+    .await
+    .expect("the turn returns");
+    canceller.join().expect("canceller");
+
+    assert_eq!(
+        seen_early.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the extension the turn started with was interrupted once"
+    );
+    assert_eq!(
+        seen_late.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "and so was the one enabled after the turn started - a snapshot taken at \
+         `run_turn`'s first line would have missed it, which is a guest nobody can \
+         interrupt (gh #610)"
+    );
+    assert_eq!(outcome.stop_reason, StopReason::Cancelled);
 }
 
 // Verifies: gh #547 - a turn that ended normally left nothing registered.
@@ -571,7 +748,7 @@ async fn a_cancel_after_a_finished_turn_does_not_reach_the_extension() {
         project.clone(),
         None,
     ));
-    let double: Arc<InterruptOnly> = Arc::new(InterruptOnly::new(cap.clone()));
+    let double: Arc<InterruptOnly> = Arc::new(InterruptOnly::new("interrupt-only", cap.clone()));
     let mut registry = ExtensionRegistry::new();
     registry.register(Arc::clone(&double) as Arc<dyn ExtensionDispatch>);
     registry.note_engine("interrupt-only", &cap);

@@ -209,6 +209,46 @@ A guest observes a cancellation from inside a **blocked host call** (the `net`/`
 waits poll the same engine), so the assertion was replaced by the same fact at the same instant,
 taken on the fan-out's own thread.
 
+**The `a_cancel_interrupts_the_extension_before_cancel_returns` firing was a real race in
+`cancel()`, not a platform quirk (gh #610, 2026-11-25).** Hosted Windows fired it once
+(`interrupts == 0`, the row's own callback having run) and the rerun passed, so the issue carried two
+candidates: the turn registered no callback because `handles` was empty at its first line, or the
+row's ordering premise was wrong. **Neither was it.** Instrumenting `on_cancel` (registration key and
+list), `cancel()` (the keys it drained, in order) and `run_turn` (the outcome it returned) produced
+the deciding sequence:
+
+```
+on_cancel key=0                       (the turn's fan-out)
+on_cancel key=1                       (the row's)
+turn returning status=Ok stop=Cancelled listeners=2
+cancel draining keys=[1]              ← the turn's callback is gone
+```
+
+The turn's listener was registered, and it was **removed between the row's read of the count (2) and
+the drain's take (1)** - by the turn itself: `cancel()` used to publish the flag *before* it took the
+listener list, so a task woken by that flag (the turn, returning `Cancelled` the instant the cancel
+lands) ran its `CancelListener::drop`, whose `retain` removed the fan-out callback before the drain
+reached it. The cancel then interrupted **nothing**, with no error anywhere. On Linux the window is a
+few instructions and the drain usually wins (~1 in 30-45 runs on a loaded four-core box, reproduced
+here 2/40, 1/45 and 1/16 under twelve hogs); a hosted Windows runner's scheduling quantum loses it
+more often, which is the CI firing.
+
+**Fixed in the artefact that owns the contract:** `cancel()` now takes the list and publishes the
+flag **under one lock**, the same lock `CancelListener::drop` takes. The outcome is two-sided and
+both sides are right: a guard that drops first means the work it guarded was already over and owes no
+interrupt; a cancel that takes the callback first runs it whatever the work does next. Post-fix:
+**100/100** loaded runs of the row (`loadavg` 18 → 31), 20/20 idle; the reverted ordering fails
+5/60 loaded.
+
+Two things this also settled. The issue's first candidate is **not** reachable in this row - the
+registry enables a handle at registration, so `handles` is non-empty - but the class it described is
+real in principle, so the guard now resolves the registry **when it fires** rather than capturing a
+snapshot, and `a_cancel_reaches_an_extension_enabled_after_the_turn_started` pins it deterministically
+(the late-enabled handle is interrupted; the snapshot shape reds). And the row now asserts the
+**precondition** of its ordering claim (`CancelFlag::listener_count`: one listener before it registers
+its own, two at the cancel), so a future red says "the turn registered nothing" instead of blaming the
+ordering for a missing registration.
+
 **A fourth `pty_spawn_delivers_terminal_output` firing (2026-11-16, gh #535's row).** CI
 `43796693310` (head `08c22855`) failed `test (macos-latest, engines)` on this row with exactly
 the shape gh #535 fixed for - `content: "exit 0 "` with an empty payload, `duration_ms 1129`,
